@@ -453,6 +453,41 @@
     return false;
   }
 
+  function parseProtobufTopFields(bytes) {
+    const fields = new Map();
+    if (!bytes || bytes.length < 2) return fields;
+    let pos = 0;
+    while (pos < bytes.length) {
+      const tagRes = readVarint(bytes, pos);
+      if (!tagRes || tagRes.val <= 0) break;
+      pos = tagRes.pos;
+      const wireType = tagRes.val & 7;
+      const fieldNum = Math.floor(tagRes.val / 8);
+      if (fieldNum <= 0 || fieldNum > 5000) break;
+
+      if (wireType === 0) {
+        const v = readVarint(bytes, pos);
+        if (!v) break;
+        pos = v.pos;
+      } else if (wireType === 1) {
+        pos += 8;
+        if (pos > bytes.length) break;
+      } else if (wireType === 5) {
+        pos += 4;
+        if (pos > bytes.length) break;
+      } else if (wireType === 2) {
+        const lenRes = readVarint(bytes, pos);
+        if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > bytes.length) break;
+        const sub = bytes.subarray(lenRes.pos, lenRes.pos + lenRes.val);
+        pos = lenRes.pos + lenRes.val;
+        fields.set(fieldNum, sub);
+      } else {
+        break;
+      }
+    }
+    return fields;
+  }
+
   function extractProtobufStrings(bytes, depth = 0, isMedia = false) {
     if (depth > 5 || !bytes || bytes.length === 0) return [];
     // Descartar bloques binarios JPEG crudos (miniaturas jpegThumbnail: FF D8 FF)
@@ -494,9 +529,31 @@
           if (fieldNum === 17) {
             continue;
           }
-          // 1. Intentar decodificar como UTF-8 estricto
+          // En MsgRowOpaqueData en profundidad 0, el campo 2 es quotedMsg (el mensaje citado). Debe ignorarse como cuerpo del mensaje actual
+          if (depth === 0 && fieldNum === 2) {
+            continue;
+          }
+
+          // Si sub parece ser un submensaje Protobuf anidado (ej. empieza con tag wireType 2 y longitud que abarca el resto de sub),
+          // no decodificar sub directamente como string crudo para evitar que el tag (0x0A='\n') y el byte de longitud (ej. 0x42='B')
+          // se interpreten como caracteres ASCII pegados al texto.
+          let isSubMessage = false;
+          if (sub.length >= 2) {
+            const subWire = sub[0] & 7;
+            const subField = sub[0] >> 3;
+            if (subField >= 1 && subField <= 50 && (subWire === 0 || subWire === 2)) {
+              if (subWire === 2) {
+                const subLen = readVarint(sub, 1);
+                if (subLen && subLen.val > 0 && (subLen.pos + subLen.val === sub.length || subLen.pos + subLen.val <= sub.length - 2)) {
+                  isSubMessage = true;
+                }
+              }
+            }
+          }
+
+          // 1. Intentar decodificar como UTF-8 estricto si no es un submensaje contenedor
           const isAllowedMediaField = !isMedia || (fieldNum === 1 || fieldNum === 2 || fieldNum === 3 || fieldNum === 6 || fieldNum === 8 || fieldNum === 20);
-          if (isAllowedMediaField) {
+          if (!isSubMessage && isAllowedMediaField) {
             try {
               const str = new TextDecoder("utf-8", { fatal: true }).decode(sub);
               if (!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(str)) {
@@ -528,6 +585,13 @@
     if (!buffer) return null;
     const bytes = new Uint8Array(buffer);
     if (bytes.length < 3) return null;
+
+    // Si buffer es un MsgRowOpaqueData con campo 2 (quotedMsg), extraer el texto citado
+    const topFields = parseProtobufTopFields(bytes);
+    let topQuotedBody = "";
+    if (topFields.has(2)) {
+      topQuotedBody = extractTextFromBuffer(topFields.get(2), false);
+    }
 
     function findContextInfoBytes(subBytes, depth) {
       if (depth > 4 || !subBytes || subBytes.length < 3) return null;
@@ -568,7 +632,12 @@
     }
 
     const ctxBytes = findContextInfoBytes(bytes, 0);
-    if (!ctxBytes) return null;
+    if (!ctxBytes) {
+      if (topQuotedBody) {
+        return { stanzaId: null, participant: null, quotedBody: topQuotedBody };
+      }
+      return null;
+    }
 
     let stanzaId = null;
     let participant = null;
@@ -606,6 +675,10 @@
       } else {
         break;
       }
+    }
+
+    if (!quotedBody && topQuotedBody) {
+      quotedBody = topQuotedBody;
     }
 
     return { stanzaId, participant, quotedBody };
@@ -667,8 +740,14 @@
 
   function extractTextFromBuffer(buffer, isMedia = false) {
     if (!buffer) return "";
-    const bytes = new Uint8Array(buffer);
+    let bytes = new Uint8Array(buffer);
     if (bytes.length === 0) return "";
+
+    // Si buffer es un MsgRowOpaqueData con campo 1 (currentMsg), aislar el submensaje del mensaje actual
+    const topFields = parseProtobufTopFields(bytes);
+    if (topFields.has(1)) {
+      bytes = topFields.get(1);
+    }
 
     // 1. Primero usar el parser estructurado de Protobuf probando offsets 0..16
     for (let offset = 0; offset <= Math.min(16, bytes.length - 2); offset++) {
@@ -1123,20 +1202,33 @@
           if (m.msgRowOpaqueData) {
             const decBuf = await decryptOpaqueData(m.msgRowOpaqueData);
             if (decBuf) {
+              const opaqueBytes = new Uint8Array(decBuf);
+              const topFields = parseProtobufTopFields(opaqueBytes);
+              // MsgRowOpaqueData: Campo 1 = currentMsg (mensaje actual), Campo 2 = quotedMsg (mensaje citado)
+              const currentMsgBytes = topFields.get(1) || opaqueBytes;
+              const quotedMsgBytes = topFields.get(2) || null;
+
               if (!bodyText && canHaveEncryptedText) {
-                const decoded = extractTextFromBuffer(decBuf, isMedia);
+                const decoded = extractTextFromBuffer(currentMsgBytes, isMedia);
                 if (decoded && !isBinaryOrB64(decoded)) {
                   bodyText = decoded;
                 }
               }
               if (!isForwarded) {
-                const fwdInfo = extractForwardingFromBuffer(decBuf);
+                const fwdInfo = extractForwardingFromBuffer(currentMsgBytes);
                 if (fwdInfo.isForwarded) {
                   isForwarded = true;
                   forwardingScore = Math.max(forwardingScore, fwdInfo.forwardingScore || 1);
                 }
               }
               quotedInfoFromOpaque = extractContextInfoFromBuffer(decBuf);
+              if (quotedMsgBytes && (!quotedInfoFromOpaque || !quotedInfoFromOpaque.quotedBody)) {
+                const qBody = extractTextFromBuffer(quotedMsgBytes, false);
+                if (qBody) {
+                  if (!quotedInfoFromOpaque) quotedInfoFromOpaque = {};
+                  quotedInfoFromOpaque.quotedBody = qBody;
+                }
+              }
             }
           }
           if (isForwarded && forwardingScore < 1) {

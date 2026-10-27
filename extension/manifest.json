@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WAckup - Backup Local para WhatsApp Web",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "WAckup: Respaldo pasivo, seguro e incremental de WhatsApp Web a base de datos SQLite local",
   "background": {
     "service_worker": "background.js"

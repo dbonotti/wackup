@@ -399,7 +399,7 @@ def get_sync_status(db_path=DB_FILE, include_ids=False):
             SELECT msg_id FROM mensajes
             WHERE msg_id IS NOT NULL
               AND reenviado IS NOT NULL
-              AND NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = '') AND (quoted_body IS NULL OR quoted_body = ''))
+              AND NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = ''))
         """)
         result["synced_msg_ids"] = [r[0] for r in cur.fetchall()]
 
@@ -713,19 +713,25 @@ def save_incremental_sync(data, db_path=DB_FILE):
         if m_type in ("chat", "album", "unknown") and not body and not quoted_body and not has_media:
             continue
 
-        # Protección contra suplantación si el body recibido es idéntico al mensaje citado
+        # Protección contra suplantación si el body recibido es idéntico al mensaje citado (o con prefijo de longitud Protobuf)
         if quoted_msg_id and body:
             cur.execute("SELECT contenido FROM mensajes WHERE msg_id LIKE ? LIMIT 1", (f"%{quoted_msg_id}%",))
             q_row = cur.fetchone()
-            if q_row and q_row[0] and q_row[0] == body:
-                if not quoted_body:
-                    quoted_body = body
-                cur.execute("SELECT contenido FROM mensajes WHERE msg_id = ?", (mid,))
-                prev_row = cur.fetchone()
-                if prev_row and prev_row[0] and prev_row[0] != body:
-                    body = prev_row[0]
-                else:
-                    body = ""
+            if q_row and q_row[0]:
+                q_text = q_row[0]
+                is_duplicate_quote = (
+                    body == q_text or
+                    (len(body) == len(q_text) + 1 and body[1:] == q_text)
+                )
+                if is_duplicate_quote:
+                    if not quoted_body:
+                        quoted_body = q_text
+                    cur.execute("SELECT contenido FROM mensajes WHERE msg_id = ?", (mid,))
+                    prev_row = cur.fetchone()
+                    if prev_row and prev_row[0] and prev_row[0] != body and prev_row[0] != q_text and not (len(prev_row[0]) == len(q_text) + 1 and prev_row[0][1:] == q_text):
+                        body = prev_row[0]
+                    else:
+                        body = ""
 
         # Asegurar que el chat padre exista en la tabla chats (con nombre NULL si no se conoce aún)
         if chat_id:
