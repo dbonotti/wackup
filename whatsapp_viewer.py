@@ -2371,8 +2371,6 @@ def render_dashboard(url=None):
             "    [L]        Abrir ventana de logs de sincronización en vivo",
             "    [U]        Buscar y aplicar actualizaciones de GitHub",
             "    [Ctrl + C] Detener el servidor",
-            "",
-            r"  Archivo de logs:       data\logs\sync.log (o ejecuta ver_logs.bat)",
             "========================================================================",
             f"  Actualizaciones:       {_last_update_status_text}",
             "========================================================================",

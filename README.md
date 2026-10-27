@@ -63,6 +63,13 @@ La consola de `iniciar_visor.bat` funciona como un centro interactivo mientras e
 | **`[U]`** | **Buscar Actualizaciones** | Comprueba si hay mejoras en GitHub y permite aplicarlas interactivamente. |
 | **`Ctrl + C`** | **Detener Servidor** | Cierra de manera limpia y ordenada el servidor SQLite. |
 
+### 📋 Acceso y Monitoreo de Logs
+Puedes supervisar los registros detallados de sincronización de 4 formas sencillas:
+1. **Atajo en consola:** Presiona la tecla **`[L]`** en el panel de control para abrir la ventana de logs en vivo.
+2. **Acceso directo en Windows:** Haz doble clic en el archivo **`ver_logs.bat`** en la raíz del proyecto.
+3. **Archivo de texto continuo:** Los registros se guardan en tiempo real en **`data/logs/sync.log`**.
+4. **Desde el Visor Web:** Haz clic en la insignia de sincronización en la barra superior izquierda para ver el estado de lotes y descargas multimedia.
+
 ---
 
 ## 🔄 Cómo Actualizar el Código Según tu Caso
