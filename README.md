@@ -54,15 +54,22 @@ Haz doble clic en **`iniciar_visor.bat`**.
 
 ## ⌨️ Panel de Control y Atajos de Teclado
 
-La consola de `iniciar_visor.bat` funciona como un centro interactivo mientras el servidor está activo:
+La consola de `iniciar_visor.bat` funciona como un centro interactivo y amigable mientras el servidor está activo:
 
 | Atajo | Acción | Descripción |
 | :---: | :--- | :--- |
 | **`[V]`** | **Abrir Visor** | Abre o enfoca el visor web en tu navegador predeterminado. |
 | **`[L]`** | **Ver Logs en Vivo** | Abre una ventana independiente con el seguimiento de sincronización en tiempo real. |
-| **`[U]`** | **Buscar Actualizaciones** | Comprueba si hay mejoras en GitHub y las aplica automáticamente. |
-| **`[R]`** | **Reiniciar Visor** | Recarga el código de la aplicación en memoria sin cerrar la ventana. |
+| **`[U]`** | **Buscar Actualizaciones** | Comprueba si hay mejoras en GitHub, las aplica y reinicia automáticamente. |
+| **`[R]`** | **Reiniciar Visor** | Recarga el código de la aplicación en memoria en 1 segundo sin cerrar la ventana. |
 | **`Ctrl + C`** | **Detener Servidor** | Cierra de manera limpia y ordenada el servidor SQLite. |
+
+### 🟢 Estado en Tiempo Real y Animaciones Amigables
+La interfaz del panel sustituye los volcados técnicos complejos por un indicador claro con pulso visual continuo:
+* **🟡 Esperando a WhatsApp Web:** Muestra un pulso visual `[●]` / `[○]` y puntos dinámicos mientras aguarda la conexión desde el navegador.
+* **🔄 Sincronizando nuevos datos:** Activa un spinner interactivo `[/]` durante el guardado de cada nuevo lote de mensajes.
+* **🟢 Conectado y al día:** Informa en lenguaje humano cuándo se realizó el último respaldo (`hace 15 seg`, `hace 2 min`, etc.) manteniendo el pulso activo para dar certeza de que el sistema sigue operando.
+* **🛡️ Prevención de instancias duplicadas:** Si abres una consola teniendo el visor ya abierto, el sistema detecta que el puerto 8080 está en uso, te avisa y enfoca tu navegador sin crear procesos duplicados que compitan por los datos.
 
 ### 📋 Acceso y Monitoreo de Logs
 Puedes supervisar los registros detallados de sincronización de 4 formas sencillas:
