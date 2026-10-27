@@ -204,7 +204,6 @@ def init_db(db_path=DB_FILE):
 
     conn.commit()
     conn.close()
-    print("Base de datos inicializada y esquema verificado con éxito.")
 
 def resolve_lid_phone_numbers(cur):
     """Limpia números ficticios (LID) en contactos @lid y vincula su número real desde contactos @s.whatsapp.net / @c.us."""
