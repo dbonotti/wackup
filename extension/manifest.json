@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "WAckup - Backup Local para WhatsApp Web",
+  "version": "2.2.1",
+  "description": "WAckup: Respaldo pasivo, seguro e incremental de WhatsApp Web a base de datos SQLite local",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "http://127.0.0.1:8080/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

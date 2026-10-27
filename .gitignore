@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Directorio unificado de datos de usuario (base de datos, multimedia, backups, logs)
+data/
+
+# Archivos y carpetas heredados (privacidad de mensajes)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+media/
+backups/
+logs/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Entornos virtuales e IDEs
+.env
+.venv
+env/
+venv/
+.idea/
+.vscode/
+
+# Ignorar archivos JSON de dumps (pero mantener los de la extensión)
+*.json
+!extension/manifest.json
+
+# Capturas y archivos de depuración local
+Errores/
+
+# Exportaciones HTML de chats (evitar subir conversaciones exportadas por error)
+*.html
