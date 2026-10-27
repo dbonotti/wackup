@@ -2136,8 +2136,6 @@ HTML_UI = """<!DOCTYPE html>
         showToast('Error de conexión al generar backup');
       }
     }
-      }
-    }
 
     function openModal(src) {
       const modal = document.getElementById('image-modal');
