@@ -25,7 +25,7 @@ if %errorlevel% equ 0 (
         git init -b main >nul 2>&1
         git remote add origin https://github.com/dbonotti/wackup.git >nul 2>&1
         git fetch origin main --quiet >nul 2>&1
-        git reset --mixed origin/main >nul 2>&1
+        git reset --hard origin/main >nul 2>&1
     )
     if exist ".git" (
         echo Verificando si hay actualizaciones en GitHub...

@@ -2398,8 +2398,8 @@ def check_and_apply_update(url):
             run_git_cmd(["remote", "add", "origin", repo_url])
             res_init = run_git_cmd(["fetch", "origin", "main", "--quiet"], timeout=15)
             if res_init.returncode == 0:
-                run_git_cmd(["reset", "--mixed", "origin/main"])
-                _last_update_status_text = "[OK] Carpeta vinculada con éxito a GitHub."
+                run_git_cmd(["reset", "--hard", "origin/main"])
+                _last_update_status_text = "[OK] Carpeta vinculada y actualizada con éxito desde GitHub."
             else:
                 _last_update_status_text = "[Aviso] Carpeta ZIP. Conecta a internet para vincular."
                 _update_in_progress = False

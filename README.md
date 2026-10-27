@@ -89,7 +89,7 @@ Al descargar el código mediante *"Download ZIP"*, GitHub no incluye la carpeta 
     git init -b main
     git remote add origin https://github.com/dbonotti/wackup.git
     git fetch origin main
-    git reset --mixed origin/main
+    git reset --hard origin/main
     ```
 * **Si NO tienes Git instalado:**
   1. Descarga el nuevo archivo ZIP desde [https://github.com/dbonotti/wackup](https://github.com/dbonotti/wackup).
