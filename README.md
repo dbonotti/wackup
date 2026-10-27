@@ -65,14 +65,43 @@ La consola de `iniciar_visor.bat` funciona como un centro interactivo mientras e
 
 ---
 
-## 🔄 Actualizaciones Seguras en 1 Clic
+## 🔄 Cómo Actualizar el Código Según tu Caso
 
 El sistema está diseñado para que actualizar nunca ponga en riesgo tu información:
+* **Protección de Datos Garantizada:** Toda tu información (base de datos SQLite, archivos multimedia, respaldos y logs) reside exclusivamente en la carpeta unificada `data/` y está protegida por `.gitignore`. Nunca se sobrescribe ni se elimina al actualizar.
+* **Copia Preventiva Automática:** Antes de descargar cualquier actualización, se genera automáticamente una copia de respaldo consistente en `data/backups/`.
 
-* **Protección de Datos Garantizada:** Toda la información del usuario (base de datos, archivos multimedia, backups y logs) se almacena en la carpeta unificada `data/` y no forma parte de Git. Antes de descargar cualquier actualización, se genera automáticamente una copia de respaldo preventiva en `data/backups/`.
-* **Portabilidad Total:** Para mover todas tus conversaciones y archivos a otro equipo o hacer una copia de seguridad externa, basta con copiar la carpeta `data/`.
-* **Actualización del Servidor (`iniciar_visor.bat`):** Cada vez que inicias el visor, comprueba en ~1 segundo si hay versiones nuevas y te ofrece instalarlas.
-* **Actualización Asistida de la Extensión:** Si hay una versión más reciente de la extensión en disco, el widget en WhatsApp Web mostrará el botón `[🔄 Actualizar a v...]`. Al hacer clic, se recarga la extensión en memoria y la pestaña automáticamente, sin pasos manuales en la configuración del navegador.
+Elige el procedimiento según cómo obtuviste el proyecto en tu equipo:
+
+### 🔹 Caso 1: Si clonaste el repositorio con Git (Recomendado)
+Las actualizaciones son completamente automáticas y en 1 solo clic:
+* **Desde el Panel de Control:** Presiona la tecla **`[U]`** en cualquier momento mientras el servidor está activo para comprobar y aplicar mejoras interactivamente.
+* **Al iniciar el visor:** Cada vez que haces doble clic en `iniciar_visor.bat`, comprobará en ~1 segundo si hay versiones nuevas en GitHub y te ofrecerá aplicarlas con solo presionar `Enter` o `S`.
+* **Desde la terminal:** Puedes ejecutar `git pull origin main` dentro de la carpeta del proyecto en cualquier momento.
+
+### 🔹 Caso 2: Si descargaste el proyecto como archivo ZIP desde GitHub
+Al descargar el código mediante *"Download ZIP"*, GitHub no incluye la carpeta oculta `.git/` de control de versiones. Tienes dos formas de proceder:
+
+* **Si tienes Git instalado en tu equipo:**
+  * **Automático:** Simplemente presiona **`[U]`** en el panel de control o abre `iniciar_visor.bat`. WAckup detectará que la carpeta provino de un ZIP y la auto-vinculará de forma transparente con el repositorio de GitHub en 2 segundos, habilitando las actualizaciones en 1 clic.
+  * **Manual (opcional):** Abre una terminal (PowerShell o CMD) en la carpeta del proyecto y ejecuta:
+    ```bash
+    git init -b main
+    git remote add origin https://github.com/dbonotti/wackup.git
+    git fetch origin main
+    git reset --mixed origin/main
+    ```
+* **Si NO tienes Git instalado:**
+  1. Descarga el nuevo archivo ZIP desde [https://github.com/dbonotti/wackup](https://github.com/dbonotti/wackup).
+  2. Descomprímelo y copia los archivos nuevos sobre tu carpeta de trabajo, reemplazando los existentes.
+  3. Tu carpeta `data/` (donde están tus mensajes, multimedia y bases de datos) se conserva intacta y tus datos permanecen 100% seguros.
+
+---
+
+### 🧩 Actualización Asistida de la Extensión en el Navegador
+Si una actualización incluye mejoras en los archivos de la extensión (`extension/`):
+* El widget de **WAckup** en la esquina inferior izquierda de WhatsApp Web detectará la nueva versión en disco y mostrará automáticamente el botón **`[🔄 Actualizar a v...]`**.
+* Al hacer clic, la extensión se recarga en caliente en la memoria del navegador y refresca la pestaña al instante, sin necesidad de ir a la configuración de `chrome://extensions/`.
 
 ---
 
