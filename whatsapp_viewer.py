@@ -3086,7 +3086,18 @@ def run():
     media_manager.ensure_media_dirs()
     media_manager.trigger_media_processing()
 
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), BackupServerHandler)
+    ThreadingHTTPServer.allow_reuse_address = False
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", PORT), BackupServerHandler)
+    except OSError as e:
+        url = f"http://127.0.0.1:{PORT}"
+        print(f"\n========================================================================")
+        print(f"  [AVISO] Ya existe una instancia de WAckup activa en el puerto {PORT}.")
+        print(f"  Abriendo el visor en tu navegador: {url}")
+        print(f"========================================================================\n")
+        webbrowser.open(url)
+        return
+
     url = f"http://127.0.0.1:{PORT}"
 
     append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Servidor iniciado en {url}")
