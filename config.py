@@ -304,7 +304,8 @@ def get_default_db():
 def migrate_single_to_multi_account(account_id, name=None, phone=None):
     """
     Si existe un archivo data/whatsapp_backup.db previo y ninguna carpeta de cuenta,
-    lo migra automáticamente a data/<account_id>/ para no perder historial previo.
+    lo migra automáticamente a data/<account_id>/ para no perder historial previo
+    y limpia de forma segura el archivo redundante en data/.
     """
     if not account_id:
         return
@@ -312,37 +313,62 @@ def migrate_single_to_multi_account(account_id, name=None, phone=None):
     target_dir = get_account_dir(account_id)
     legacy_db = os.path.join(DATA_DIR, "whatsapp_backup.db")
 
-    # Solo migrar si legacy_db existe y target_dir aún no tiene base de datos
-    if os.path.isfile(legacy_db) and not os.path.exists(os.path.join(target_dir, "whatsapp_backup.db")):
-        ensure_account_dirs(account_id)
+    if not os.path.isfile(legacy_db):
+        return
+
+    ensure_account_dirs(account_id)
+    target_db = os.path.join(target_dir, "whatsapp_backup.db")
+
+    # 1. Si target_db no existe o está vacío (0 bytes), transferir el contenido de legacy_db
+    if not os.path.exists(target_db) or os.path.getsize(target_db) == 0:
         for ext in ["", "-wal", "-shm"]:
             fsrc = f"{legacy_db}{ext}"
             fdst = os.path.join(target_dir, f"whatsapp_backup.db{ext}")
-            if os.path.isfile(fsrc) and not os.path.exists(fdst):
+            if os.path.isfile(fsrc):
                 try:
-                    shutil.move(fsrc, fdst)
+                    shutil.copy2(fsrc, fdst)
+                    os.remove(fsrc)
                 except Exception:
-                    pass
+                    try:
+                        shutil.move(fsrc, fdst)
+                    except Exception:
+                        pass
+    else:
+        # 2. Si target_db ya tiene datos consistentes, eliminar el archivo redundante en data/
+        try:
+            if os.path.getsize(target_db) >= os.path.getsize(legacy_db):
+                for ext in ["", "-wal", "-shm"]:
+                    fsrc = f"{legacy_db}{ext}"
+                    if os.path.isfile(fsrc):
+                        try:
+                            os.remove(fsrc)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
-        # Mover media/ existente a target_dir/media/
-        legacy_media = os.path.join(DATA_DIR, "media")
-        target_media = os.path.join(target_dir, "media")
-        if os.path.isdir(legacy_media) and os.path.abspath(legacy_media) != os.path.abspath(target_media):
-            try:
-                for root, _, files in os.walk(legacy_media):
-                    rel = os.path.relpath(root, legacy_media)
-                    dst_folder = os.path.join(target_media, rel)
-                    os.makedirs(dst_folder, exist_ok=True)
-                    for f in files:
-                        s = os.path.join(root, f)
-                        d = os.path.join(dst_folder, f)
-                        if not os.path.exists(d):
+    # 3. Mover media/ existente a target_dir/media/
+    legacy_media = os.path.join(DATA_DIR, "media")
+    target_media = os.path.join(target_dir, "media")
+    if os.path.isdir(legacy_media) and os.path.abspath(legacy_media) != os.path.abspath(target_media):
+        try:
+            for root, _, files in os.walk(legacy_media):
+                rel = os.path.relpath(root, legacy_media)
+                dst_folder = os.path.join(target_media, rel)
+                os.makedirs(dst_folder, exist_ok=True)
+                for f in files:
+                    s = os.path.join(root, f)
+                    d = os.path.join(dst_folder, f)
+                    if not os.path.exists(d):
+                        try:
                             shutil.move(s, d)
-                shutil.rmtree(legacy_media, ignore_errors=True)
-            except Exception:
-                pass
+                        except Exception:
+                            shutil.copy2(s, d)
+            shutil.rmtree(legacy_media, ignore_errors=True)
+        except Exception:
+            pass
 
-        # Mover backups/ existentes
+    # 4. Mover backups/ existentes
         legacy_bak = os.path.join(DATA_DIR, "backups")
         target_bak = os.path.join(target_dir, "backups")
         if os.path.isdir(legacy_bak) and os.path.abspath(legacy_bak) != os.path.abspath(target_bak):

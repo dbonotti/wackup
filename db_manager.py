@@ -5,7 +5,7 @@ import html
 from datetime import datetime, timezone
 from config import DB_FILE, BACKUP_DIR, ensure_data_dirs
 
-def get_connection(db_path=DB_FILE):
+def get_connection(db_path=DB_FILE, check_init=True):
     ensure_data_dirs()
     if db_path:
         parent = os.path.dirname(os.path.abspath(db_path))
@@ -16,11 +16,16 @@ def get_connection(db_path=DB_FILE):
     # Activar WAL mode y timeout para alta concurrencia
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=60000;")
+    if check_init:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mensajes'")
+        if not cur.fetchone():
+            init_db(db_path)
     return conn
 
 def init_db(db_path=DB_FILE):
     """Inicializa la base de datos, aplica migraciones de columnas y configura FTS5."""
-    conn = get_connection(db_path)
+    conn = get_connection(db_path, check_init=False)
     cur = conn.cursor()
 
     # 1. Esquema base

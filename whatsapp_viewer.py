@@ -2663,6 +2663,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         account_id = None
         if params:
             account_id = params.get("account_id", [None])[0]
+        if account_id:
+            config.migrate_single_to_multi_account(account_id)
         db_path = config.get_account_db(account_id)
         backup_dir = config.get_account_backup_dir(account_id)
         return account_id, db_path, backup_dir
