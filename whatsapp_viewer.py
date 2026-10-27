@@ -2918,18 +2918,24 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             data_root = os.path.abspath(DATA_DIR)
             legacy_media_root = os.path.abspath(os.path.join(BASE_DIR, "media"))
 
-            # Fallback si se solicitó "/media/..." directamente
-            if not os.path.isfile(abs_file_path) and decoded_path.startswith("media/"):
-                sub_rel = decoded_path[len("media/"):]
-                cand = os.path.abspath(os.path.join(MEDIA_DIR, sub_rel))
-                if os.path.isfile(cand):
-                    abs_file_path = cand
-                else:
-                    for acc in config.list_accounts():
-                        acc_media = os.path.join(acc["dir"], "media", sub_rel)
-                        if os.path.isfile(acc_media):
-                            abs_file_path = os.path.abspath(acc_media)
-                            break
+            # Fallback si se solicitó "/media/..." o "/data/media/..." directamente
+            if not os.path.isfile(abs_file_path):
+                sub_rel = None
+                if decoded_path.startswith("media/"):
+                    sub_rel = decoded_path[len("media/"):]
+                elif decoded_path.startswith("data/media/"):
+                    sub_rel = decoded_path[len("data/media/"):]
+
+                if sub_rel:
+                    cand = os.path.abspath(os.path.join(MEDIA_DIR, sub_rel))
+                    if os.path.isfile(cand):
+                        abs_file_path = cand
+                    else:
+                        for acc in config.list_accounts():
+                            acc_media = os.path.join(acc["dir"], "media", sub_rel)
+                            if os.path.isfile(acc_media):
+                                abs_file_path = os.path.abspath(acc_media)
+                                break
 
             # Prevenir vulnerabilidad de Path Traversal
             is_valid = (
