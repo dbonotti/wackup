@@ -1071,8 +1071,9 @@ HTML_UI = """<!DOCTYPE html>
       }
 
       let activeAcc = availableAccounts.find(a => a.id === currentAccountId);
-      if (!activeAcc) {
-        activeAcc = availableAccounts[0];
+      if (!activeAcc || (activeAcc.id === 'default' && availableAccounts.some(a => a.id !== 'default'))) {
+        const realAcc = availableAccounts.find(a => a.id !== 'default') || availableAccounts[0];
+        activeAcc = realAcc;
         currentAccountId = activeAcc ? activeAcc.id : null;
         if (currentAccountId) {
           localStorage.setItem('wackup_selected_account', currentAccountId);
@@ -2675,8 +2676,13 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         account_id = None
         if params:
             account_id = params.get("account_id", [None])[0]
-        if account_id:
+        if account_id and account_id != config.DEFAULT_ACCOUNT_ID:
             config.migrate_single_to_multi_account(account_id)
+        elif not account_id or account_id == config.DEFAULT_ACCOUNT_ID:
+            accounts = config.list_accounts()
+            real_accounts = [a for a in accounts if a["id"] != config.DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+            if real_accounts:
+                account_id = real_accounts[0]["id"]
         db_path = config.get_account_db(account_id)
         backup_dir = config.get_account_backup_dir(account_id)
         return account_id, db_path, backup_dir

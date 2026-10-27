@@ -63,7 +63,11 @@ def get_account_dir(account_id=None):
 
 def get_account_db(account_id=None):
     """Devuelve la ruta al archivo SQLite de una cuenta específica."""
-    if not account_id:
+    if not account_id or account_id == DEFAULT_ACCOUNT_ID:
+        accounts = list_accounts()
+        real_accounts = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+        if real_accounts:
+            return real_accounts[0]["db_path"]
         return get_default_db()
     acc_dir = get_account_dir(account_id)
     return os.path.join(acc_dir, "whatsapp_backup.db")
@@ -235,6 +239,10 @@ def list_accounts():
             except Exception:
                 pass
 
+        # Si es la carpeta 'default' vacía (0 mensajes), no listarla como cuenta
+        if aid == DEFAULT_ACCOUNT_ID and total_msgs == 0:
+            continue
+
         accounts.append({
             "id": aid,
             "name": name,
@@ -246,6 +254,11 @@ def list_accounts():
             "last_timestamp": last_ts,
             "updated_at": meta.get("updated_at") or ""
         })
+
+    # Si hay cuentas reales identificadas y con mensajes, descartar 'default' huérfana
+    real_accounts = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+    if real_accounts:
+        accounts = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID]
 
     # 2. Si existe data/whatsapp_backup.db suelta y no hay cuentas creadas aún
     legacy_db = os.path.join(DATA_DIR, "whatsapp_backup.db")
@@ -301,86 +314,245 @@ def get_default_db():
     return DB_FILE
 
 
+def merge_account_databases(source_db, target_db, target_account_id):
+    """
+    Fusiona de forma consistente contactos, chats, mensajes y multimedia
+    desde una base de datos origen a una base de datos destino SQLite.
+    Actualiza FTS5 y normaliza rutas locales de multimedia.
+    """
+    if not os.path.isfile(source_db) or not os.path.isfile(target_db):
+        return False
+
+    try:
+        conn = sqlite3.connect(target_db, timeout=30.0)
+        cur = conn.cursor()
+        cur.execute("PRAGMA foreign_keys = OFF")
+        cur.execute("ATTACH DATABASE ? AS src", (source_db,))
+
+        # 1. Contactos
+        cur.execute("""
+            INSERT INTO contactos (contact_id, nombre, push_name, numero, foto)
+            SELECT contact_id, nombre, push_name, numero, foto FROM src.contactos
+            WHERE contact_id NOT IN (SELECT contact_id FROM contactos)
+        """)
+        cur.execute("""
+            UPDATE contactos SET
+                nombre = COALESCE(NULLIF(contactos.nombre, ''), (SELECT NULLIF(s.nombre, '') FROM src.contactos s WHERE s.contact_id = contactos.contact_id)),
+                push_name = COALESCE(NULLIF(contactos.push_name, ''), (SELECT NULLIF(s.push_name, '') FROM src.contactos s WHERE s.contact_id = contactos.contact_id)),
+                numero = COALESCE(NULLIF(contactos.numero, ''), (SELECT NULLIF(s.numero, '') FROM src.contactos s WHERE s.contact_id = contactos.contact_id)),
+                foto = COALESCE(NULLIF(contactos.foto, ''), (SELECT NULLIF(s.foto, '') FROM src.contactos s WHERE s.contact_id = contactos.contact_id))
+            WHERE contact_id IN (SELECT contact_id FROM src.contactos)
+        """)
+
+        # 2. Chats
+        cur.execute("""
+            INSERT INTO chats (chat_id, nombre, no_leidos, ultimo_timestamp)
+            SELECT chat_id, nombre, no_leidos, ultimo_timestamp FROM src.chats
+            WHERE chat_id NOT IN (SELECT chat_id FROM chats)
+        """)
+        cur.execute("""
+            UPDATE chats SET
+                ultimo_timestamp = MAX(COALESCE(ultimo_timestamp, 0), (SELECT COALESCE(s.ultimo_timestamp, 0) FROM src.chats s WHERE s.chat_id = chats.chat_id)),
+                nombre = COALESCE(NULLIF(chats.nombre, ''), (SELECT NULLIF(s.nombre, '') FROM src.chats s WHERE s.chat_id = chats.chat_id))
+            WHERE chat_id IN (SELECT chat_id FROM src.chats)
+        """)
+
+        # 3. Mensajes
+        cur.execute("""
+            INSERT OR IGNORE INTO mensajes (
+                msg_id, chat_id, remitente, es_mio, fecha_utc, timestamp, tipo, contenido,
+                archivo_local, mimetype, tamano, duracion, thumbnail, estado_multimedia,
+                quoted_msg_id, quoted_author, quoted_body, reenviado
+            )
+            SELECT 
+                msg_id, chat_id, remitente, es_mio, fecha_utc, timestamp, tipo, contenido,
+                archivo_local, mimetype, tamano, duracion, thumbnail, estado_multimedia,
+                quoted_msg_id, quoted_author, quoted_body, reenviado
+            FROM src.mensajes
+        """)
+        cur.execute("""
+            UPDATE mensajes SET
+                estado_multimedia = 'descargado',
+                archivo_local = (SELECT s.archivo_local FROM src.mensajes s WHERE s.msg_id = mensajes.msg_id),
+                tamano = (SELECT s.tamano FROM src.mensajes s WHERE s.msg_id = mensajes.msg_id)
+            WHERE msg_id IN (
+                SELECT s.msg_id FROM src.mensajes s WHERE s.estado_multimedia = 'descargado'
+            ) AND (estado_multimedia != 'descargado' OR archivo_local IS NULL OR archivo_local = '')
+        """)
+
+        # 4. Multimedia
+        cur.execute("""
+            INSERT OR IGNORE INTO multimedia (
+                msg_id, chat_id, tipo, mimetype, media_key, direct_path, enc_filehash, filehash,
+                tamano, duracion, nombre_archivo, archivo_local, estado, intentos, error_msg, fecha_registro
+            )
+            SELECT 
+                msg_id, chat_id, tipo, mimetype, media_key, direct_path, enc_filehash, filehash,
+                tamano, duracion, nombre_archivo, archivo_local, estado, intentos, error_msg, fecha_registro
+            FROM src.multimedia
+        """)
+        cur.execute("""
+            UPDATE multimedia SET
+                estado = 'descargado',
+                archivo_local = (SELECT s.archivo_local FROM src.multimedia s WHERE s.msg_id = multimedia.msg_id),
+                tamano = (SELECT s.tamano FROM src.multimedia s WHERE s.msg_id = multimedia.msg_id),
+                error_msg = NULL
+            WHERE msg_id IN (
+                SELECT s.msg_id FROM src.multimedia s WHERE s.estado = 'descargado'
+            ) AND (estado != 'descargado' OR archivo_local IS NULL OR archivo_local = '')
+        """)
+
+        # 5. Normalizar rutas de archivos locales en la cuenta de destino
+        target_prefix = f"data/{target_account_id}/"
+        cur.execute("UPDATE mensajes SET archivo_local = ? || archivo_local WHERE archivo_local LIKE 'media/%'", (target_prefix,))
+        cur.execute("UPDATE mensajes SET archivo_local = replace(archivo_local, 'data/default/media/', ?) WHERE archivo_local LIKE 'data/default/media/%'", (f"data/{target_account_id}/media/",))
+        cur.execute("UPDATE multimedia SET archivo_local = ? || archivo_local WHERE archivo_local LIKE 'media/%'", (target_prefix,))
+        cur.execute("UPDATE multimedia SET archivo_local = replace(archivo_local, 'data/default/media/', ?) WHERE archivo_local LIKE 'data/default/media/%'", (f"data/{target_account_id}/media/",))
+
+        # 6. Reconstruir FTS5 si la tabla existe
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mensajes_fts'")
+        if cur.fetchone():
+            cur.execute("DELETE FROM mensajes_fts")
+            cur.execute("""
+                INSERT INTO mensajes_fts (msg_id, chat_id, contenido, remitente_nombre)
+                SELECT 
+                    m.msg_id, 
+                    m.chat_id, 
+                    COALESCE(m.contenido, ''),
+                    COALESCE(c.nombre, c.push_name, m.remitente, '')
+                FROM mensajes m
+                LEFT JOIN contactos c ON m.remitente = c.contact_id
+                WHERE m.contenido IS NOT NULL AND length(m.contenido) > 0
+            """)
+
+        conn.commit()
+        try:
+            cur.execute("DETACH DATABASE src")
+        except Exception:
+            pass
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Error al fusionar bases de datos: {e}")
+        return False
+
+
 def migrate_single_to_multi_account(account_id, name=None, phone=None):
     """
-    Si existe un archivo data/whatsapp_backup.db previo y ninguna carpeta de cuenta,
-    lo migra automáticamente a data/<account_id>/ para no perder historial previo
-    y limpia de forma segura el archivo redundante en data/.
+    Migración y unificación integral a arquitectura multi-cuenta:
+    Si existe un archivo data/whatsapp_backup.db previo o una carpeta previa data/default/,
+    fusiona todo el historial (mensajes, contactos, multimedia, backups) hacia data/<account_id>/
+    sin perder ningún dato y archiva las carpetas redundantes de forma segura.
     """
-    if not account_id:
+    if not account_id or account_id == DEFAULT_ACCOUNT_ID:
         return
 
     target_dir = get_account_dir(account_id)
-    legacy_db = os.path.join(DATA_DIR, "whatsapp_backup.db")
-
-    if not os.path.isfile(legacy_db):
-        return
-
     ensure_account_dirs(account_id)
     target_db = os.path.join(target_dir, "whatsapp_backup.db")
 
-    # 1. Si target_db no existe o está vacío (0 bytes), transferir el contenido de legacy_db
-    if not os.path.exists(target_db) or os.path.getsize(target_db) == 0:
-        for ext in ["", "-wal", "-shm"]:
-            fsrc = f"{legacy_db}{ext}"
-            fdst = os.path.join(target_dir, f"whatsapp_backup.db{ext}")
-            if os.path.isfile(fsrc):
-                try:
-                    shutil.copy2(fsrc, fdst)
-                    os.remove(fsrc)
-                except Exception:
-                    try:
-                        shutil.move(fsrc, fdst)
-                    except Exception:
-                        pass
-    else:
-        # 2. Si target_db ya tiene datos consistentes, eliminar el archivo redundante en data/
+    def _transfer_media(src_media_dir, dst_media_dir):
+        if not os.path.isdir(src_media_dir) or os.path.abspath(src_media_dir) == os.path.abspath(dst_media_dir):
+            return
+        os.makedirs(dst_media_dir, exist_ok=True)
         try:
-            if os.path.getsize(target_db) >= os.path.getsize(legacy_db):
-                for ext in ["", "-wal", "-shm"]:
-                    fsrc = f"{legacy_db}{ext}"
-                    if os.path.isfile(fsrc):
-                        try:
-                            os.remove(fsrc)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    # 3. Mover media/ existente a target_dir/media/
-    legacy_media = os.path.join(DATA_DIR, "media")
-    target_media = os.path.join(target_dir, "media")
-    if os.path.isdir(legacy_media) and os.path.abspath(legacy_media) != os.path.abspath(target_media):
-        try:
-            for root, _, files in os.walk(legacy_media):
-                rel = os.path.relpath(root, legacy_media)
-                dst_folder = os.path.join(target_media, rel)
-                os.makedirs(dst_folder, exist_ok=True)
+            for root, _, files in os.walk(src_media_dir):
+                rel = os.path.relpath(root, src_media_dir)
+                out_folder = os.path.join(dst_media_dir, rel)
+                os.makedirs(out_folder, exist_ok=True)
                 for f in files:
                     s = os.path.join(root, f)
-                    d = os.path.join(dst_folder, f)
-                    if not os.path.exists(d):
+                    d = os.path.join(out_folder, f)
+                    if not os.path.exists(d) or os.path.getsize(d) == 0:
                         try:
                             shutil.move(s, d)
                         except Exception:
                             shutil.copy2(s, d)
-            shutil.rmtree(legacy_media, ignore_errors=True)
+            shutil.rmtree(src_media_dir, ignore_errors=True)
+        except Exception as e:
+            print(f"[WARN] Error transfiriendo media: {e}")
+
+    def _transfer_backups(src_bak_dir, dst_bak_dir):
+        if not os.path.isdir(src_bak_dir) or os.path.abspath(src_bak_dir) == os.path.abspath(dst_bak_dir):
+            return
+        os.makedirs(dst_bak_dir, exist_ok=True)
+        try:
+            for f in os.listdir(src_bak_dir):
+                s = os.path.join(src_bak_dir, f)
+                d = os.path.join(dst_bak_dir, f)
+                if os.path.isfile(s) and not os.path.exists(d):
+                    try:
+                        shutil.move(s, d)
+                    except Exception:
+                        pass
+            shutil.rmtree(src_bak_dir, ignore_errors=True)
         except Exception:
             pass
 
-    # 4. Mover backups/ existentes
-        legacy_bak = os.path.join(DATA_DIR, "backups")
-        target_bak = os.path.join(target_dir, "backups")
-        if os.path.isdir(legacy_bak) and os.path.abspath(legacy_bak) != os.path.abspath(target_bak):
+    target_media = os.path.join(target_dir, "media")
+    target_bak = os.path.join(target_dir, "backups")
+
+    # 1. CASO 1: data/whatsapp_backup.db suelta en data/
+    legacy_db = os.path.join(DATA_DIR, "whatsapp_backup.db")
+    if os.path.isfile(legacy_db):
+        if not os.path.exists(target_db) or os.path.getsize(target_db) == 0:
+            for ext in ["", "-wal", "-shm"]:
+                fsrc = f"{legacy_db}{ext}"
+                fdst = f"{target_db}{ext}"
+                if os.path.isfile(fsrc):
+                    try:
+                        shutil.move(fsrc, fdst)
+                    except Exception:
+                        pass
+        else:
+            merge_account_databases(legacy_db, target_db, account_id)
+            for ext in ["", "-wal", "-shm"]:
+                try:
+                    os.remove(f"{legacy_db}{ext}")
+                except Exception:
+                    pass
+
+        _transfer_media(os.path.join(DATA_DIR, "media"), target_media)
+        _transfer_backups(os.path.join(DATA_DIR, "backups"), target_bak)
+
+    # 2. CASO 2: data/default/ (carpeta default previa a la extracción del teléfono)
+    default_dir = os.path.join(DATA_DIR, DEFAULT_ACCOUNT_ID)
+    default_db = os.path.join(default_dir, "whatsapp_backup.db")
+    if os.path.isdir(default_dir) and os.path.abspath(default_dir) != os.path.abspath(target_dir):
+        if os.path.isfile(default_db):
+            has_data = False
             try:
-                for f in os.listdir(legacy_bak):
-                    s = os.path.join(legacy_bak, f)
-                    d = os.path.join(target_bak, f)
-                    if os.path.isfile(s) and not os.path.exists(d):
-                        shutil.move(s, d)
-                shutil.rmtree(legacy_bak, ignore_errors=True)
+                c_test = sqlite3.connect(default_db, timeout=5.0)
+                cur_t = c_test.cursor()
+                cur_t.execute("SELECT COUNT(*) FROM mensajes")
+                has_data = cur_t.fetchone()[0] > 0
+                c_test.close()
             except Exception:
                 pass
+
+            if has_data:
+                if not os.path.exists(target_db) or os.path.getsize(target_db) == 0:
+                    for ext in ["", "-wal", "-shm"]:
+                        fsrc = f"{default_db}{ext}"
+                        fdst = f"{target_db}{ext}"
+                        if os.path.isfile(fsrc):
+                            try:
+                                shutil.move(fsrc, fdst)
+                            except Exception:
+                                pass
+                else:
+                    merge_account_databases(default_db, target_db, account_id)
+
+                _transfer_media(os.path.join(default_dir, "media"), target_media)
+                _transfer_backups(os.path.join(default_dir, "backups"), target_bak)
+
+        # Archivar o limpiar default_dir de forma segura
+        try:
+            bak_archive = os.path.join(DATA_DIR, "backups", f"migrated_default_{int(time.time())}")
+            os.makedirs(os.path.dirname(bak_archive), exist_ok=True)
+            shutil.move(default_dir, bak_archive)
+        except Exception:
+            shutil.rmtree(default_dir, ignore_errors=True)
 
     save_account_metadata(account_id, name=name, phone=phone)
 
@@ -468,3 +640,15 @@ def migrate_legacy_data():
             shutil.rmtree(legacy_logs, ignore_errors=True)
         except Exception:
             pass
+
+    # 5. Unificación automática: si existe data/default/ o data/whatsapp_backup.db con datos y existe una cuenta real
+    try:
+        real_accounts = [a for a in list_accounts() if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+        if real_accounts:
+            target_account = real_accounts[0]["id"]
+            legacy_db = os.path.join(DATA_DIR, "whatsapp_backup.db")
+            default_dir = os.path.join(DATA_DIR, DEFAULT_ACCOUNT_ID)
+            if os.path.isfile(legacy_db) or os.path.isdir(default_dir):
+                migrate_single_to_multi_account(target_account)
+    except Exception as e:
+        print(f"[WARN] Error en unificación automática al inicio: {e}")
