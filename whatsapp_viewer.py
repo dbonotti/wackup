@@ -2321,7 +2321,13 @@ _sync_lock = threading.Lock()
 _ui_lock = threading.Lock()
 _sync_batch_count = 0
 _total_messages_synced = 0
-_last_sync_status_text = "Esperando datos de sincronización..."
+_last_sync_timestamp = None
+_last_sync_msgs_count = 0
+_is_saving_sync = False
+_last_sync_account = ""
+_initial_total_msgs = 0
+_anim_frame = 0
+_last_sync_status_text = "[●] 🟡 Esperando a WhatsApp Web... (Abre WhatsApp en tu navegador)"
 _last_update_status_text = "Presiona [U] para comprobar"
 _update_in_progress = False
 _server_url = None
@@ -2542,43 +2548,107 @@ def start_keyboard_listener(url):
     except Exception:
         pass
 
+def update_status_display(frame=None):
+    """Actualiza la línea de estado del panel de control con feedback amigable y pulso visual."""
+    global _anim_frame, _last_sync_status_text
+    if frame is not None:
+        _anim_frame = frame
+    else:
+        _anim_frame += 1
+
+    with _ui_lock:
+        if _update_in_progress:
+            return
+
+        pulse = "●" if (_anim_frame % 2 == 0) else "○"
+        now = time.time()
+
+        with _sync_lock:
+            last_t = _last_sync_timestamp
+            last_msgs = _last_sync_msgs_count
+            batch_count = _sync_batch_count
+            is_saving = _is_saving_sync
+            init_msgs = _initial_total_msgs
+
+        if batch_count == 0:
+            dots = "." * ((_anim_frame % 3) + 1)
+            if init_msgs > 0:
+                body = f"[{pulse}] 🟡 Esperando a WhatsApp Web{dots.ljust(3)} ({init_msgs:,} mensajes en historial)"
+            else:
+                body = f"[{pulse}] 🟡 Esperando a WhatsApp Web{dots.ljust(3)} (Abre WhatsApp en tu navegador)"
+        elif is_saving or (last_t and (now - last_t < 3.0)):
+            spinner = ["|", "/", "-", "\\"][_anim_frame % 4]
+            msgs_str = f" (+{last_msgs} nuevos mensajes)" if last_msgs > 0 else ""
+            body = f"[{spinner}] 🔄 Sincronizando con WhatsApp Web...{msgs_str}"
+        else:
+            diff = int(now - last_t) if last_t else 0
+            if diff < 5:
+                ago_str = "recién"
+            elif diff < 60:
+                ago_str = f"hace {diff} seg"
+            elif diff < 3600:
+                ago_str = f"hace {diff // 60} min"
+            else:
+                ago_str = datetime.fromtimestamp(last_t).strftime("%H:%M hs")
+
+            recent_info = f" (+{last_msgs} msgs)" if last_msgs > 0 else ""
+            body = f"[{pulse}] 🟢 Conectado y al día · Último respaldo: {ago_str}{recent_info} (Todo seguro)"
+
+        _last_sync_status_text = body
+        status_text = f"  Estado: {body}"
+
+        try:
+            cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+            max_len = max(40, cols - 1)
+        except Exception:
+            max_len = 79
+
+        if len(status_text) > max_len:
+            status_text = status_text[:max_len]
+
+        sys.stdout.write(f"\r{status_text.ljust(max_len)}")
+        sys.stdout.flush()
+
+
+def start_status_animator():
+    """Hilo secundario que actualiza suavemente la línea de estado del panel cada segundo."""
+    def _animate():
+        frame = 0
+        while True:
+            try:
+                time.sleep(1.0)
+                update_status_display(frame)
+                frame = (frame + 1) % 1000
+            except Exception:
+                time.sleep(1.0)
+
+    t = threading.Thread(target=_animate, daemon=True)
+    t.start()
+
+
 def log_sync_status(stats, account_id="default"):
-    global _sync_batch_count, _total_messages_synced, _last_sync_status_text
+    global _sync_batch_count, _total_messages_synced
+    global _last_sync_timestamp, _last_sync_msgs_count, _is_saving_sync, _last_sync_account
     msgs = stats.get("messages_saved", 0)
-    contacts = stats.get("contacts_saved", 0)
     chats = stats.get("chats_saved", 0)
-    now_time = datetime.now().strftime("%H:%M:%S")
+    contacts = stats.get("contacts_saved", 0)
     now_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with _sync_lock:
         _sync_batch_count += 1
         _total_messages_synced += msgs
-        acc_tag = f" [{account_id}]" if account_id and account_id != "default" else ""
-        _last_sync_status_text = (
-            f"[{now_time}]{acc_tag} Lote #{_sync_batch_count} (+{msgs}) | "
-            f"Msgs: {_total_messages_synced} | Chats: {chats} | Contactos: {contacts}"
-        )
+        _last_sync_timestamp = time.time()
+        _last_sync_msgs_count = msgs
+        _last_sync_account = account_id or ""
+        _is_saving_sync = False
 
     # 1. Guardar log detallado en sync.log para la ventana de logs
     append_sync_log(
         f"[{now_full}] [Sync: {account_id}] Lote #{_sync_batch_count}: +{msgs} msgs, {chats} chats, {contacts} contactos | Detalle: {stats}"
     )
 
-    # 2. Actualizar línea única en el panel de control si no hay actualización en curso
-    with _ui_lock:
-        if not _update_in_progress:
-            status_text = f"  Estado: {_last_sync_status_text}"
-            try:
-                cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-                max_len = max(40, cols - 1)
-            except Exception:
-                max_len = 79
-
-            if len(status_text) > max_len:
-                status_text = status_text[:max_len]
-
-            sys.stdout.write(f"\r{status_text.ljust(max_len)}")
-            sys.stdout.flush()
+    # 2. Actualizar visualmente la línea en el panel de control
+    update_status_display()
 
 class BackupServerHandler(BaseHTTPRequestHandler):
     def is_trusted_origin(self):
@@ -3032,6 +3102,10 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 config.save_account_metadata(account_id, name=account_name, phone=account_phone)
                 db_manager.init_db(db_path=db_path)
 
+                global _is_saving_sync
+                _is_saving_sync = True
+                update_status_display()
+
                 stats = db_manager.save_incremental_sync(payload, db_path=db_path)
                 log_sync_status(stats, account_id=account_id or "default")
                 media_manager.trigger_media_processing(db_path=db_path)
@@ -3100,9 +3174,14 @@ def run():
 
     append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Servidor iniciado en {url}")
 
+    global _initial_total_msgs
+    if accounts:
+        _initial_total_msgs = sum(a.get("total_messages", 0) for a in accounts)
+
     render_dashboard(url)
 
     start_keyboard_listener(url)
+    start_status_animator()
     webbrowser.open(url)
     try:
         server.serve_forever()
