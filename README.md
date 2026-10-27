@@ -124,3 +124,24 @@ wackup/
 ├── requirements.txt               # Dependencias mínimas de Python (cryptography)
 └── README.md                      # Documentación y guía de uso
 ```
+
+---
+
+## 🔌 Endpoints de la API Local
+
+El servidor HTTP local expone endpoints internos utilizados de forma automática por la extensión y el visor web:
+
+| Método | Endpoint | Descripción |
+| :---: | :--- | :--- |
+| `GET` | `/` o `/index.html` | Interfaz gráfica del visor web de conversaciones y multimedia. |
+| `GET` | `/api/accounts` | Lista de cuentas de WhatsApp detectadas y sus estadísticas. |
+| `GET` | `/api/sync/status` | Estado actual de sincronización, total de mensajes y multimedia en cola. |
+| `POST` | `/api/sync` | Endpoint incremental donde la extensión envía nuevos lotes de chats y mensajes. |
+| `GET` | `/api/chats` | Lista de conversaciones de la cuenta activa ordenadas cronológicamente. |
+| `GET` | `/api/messages?chat_id=...` | Historial de mensajes y multimedia del chat seleccionado. |
+| `GET` | `/api/search?q=...` | Motor de búsqueda rápida de texto completo indexado (`FTS5`). |
+| `GET` | `/api/export/html?chat_id=...` | Exportación de chat a HTML ligero o autónomo con multimedia incrustado. |
+| `GET` | `/api/export/contacts` | Exportación de libreta de contactos a archivo `.csv`. |
+| `POST` | `/api/backup/create` | Generación de copia de seguridad consistente de la base de datos SQLite. |
+| `GET` | `/api/backup/list` | Listado de copias de seguridad disponibles para descarga. |
+| `GET` | `/media/...` | Transmisión y streaming multimedia con soporte HTTP 206 (Range). |

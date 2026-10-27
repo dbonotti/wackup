@@ -2364,8 +2364,6 @@ def render_dashboard(url=None):
             "                   WACKUP - PANEL DE CONTROL & VISOR                    ",
             "========================================================================",
             f"  Dirección local:       {current_url}",
-            f"  API Incremental:       {current_url}/api/sync",
-            f"  Búsqueda FTS5:         {current_url}/api/search?q=...",
             "",
             "  Atajos en esta consola:",
             "    [V]        Abrir el visor en el navegador",
