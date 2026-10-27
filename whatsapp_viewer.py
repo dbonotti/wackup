@@ -2390,10 +2390,26 @@ def check_and_apply_update(url):
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     if not os.path.isdir(os.path.join(base_dir, ".git")):
-        _last_update_status_text = "[Aviso] Carpeta no clonada con Git. No se puede actualizar."
-        _update_in_progress = False
-        render_dashboard(url)
-        return
+        if shutil.which("git"):
+            _last_update_status_text = "Vinculando carpeta con repositorio de GitHub..."
+            render_dashboard(url)
+            repo_url = "https://github.com/dbonotti/wackup.git"
+            run_git_cmd(["init", "-b", "main"])
+            run_git_cmd(["remote", "add", "origin", repo_url])
+            res_init = run_git_cmd(["fetch", "origin", "main", "--quiet"], timeout=15)
+            if res_init.returncode == 0:
+                run_git_cmd(["reset", "--mixed", "origin/main"])
+                _last_update_status_text = "[OK] Carpeta vinculada con éxito a GitHub."
+            else:
+                _last_update_status_text = "[Aviso] Carpeta ZIP. Conecta a internet para vincular."
+                _update_in_progress = False
+                render_dashboard(url)
+                return
+        else:
+            _last_update_status_text = "[Aviso] Carpeta ZIP. Instala Git (git-scm.com) para actualizar en 1 clic."
+            _update_in_progress = False
+            render_dashboard(url)
+            return
 
     now_str = datetime.now().strftime("%H:%M:%S")
     _last_update_status_text = f"Consultando servidor de GitHub... [{now_str}]"

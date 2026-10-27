@@ -19,10 +19,18 @@ if %errorlevel% neq 0 (
 
 rem 2. Comprobar actualizaciones en GitHub (garantizando seguridad de datos)
 where git >nul 2>&1
-if %errorlevel% equ 0 if exist ".git" (
-    echo Verificando si hay actualizaciones en GitHub...
-    git config --global --add safe.directory "%CD:\=/%" >nul 2>&1
-    git -c safe.directory=* fetch origin main --quiet >nul 2>&1
+if %errorlevel% equ 0 (
+    if not exist ".git" (
+        echo [i] Vinculando carpeta con el repositorio oficial de GitHub...
+        git init -b main >nul 2>&1
+        git remote add origin https://github.com/dbonotti/wackup.git >nul 2>&1
+        git fetch origin main --quiet >nul 2>&1
+        git reset --mixed origin/main >nul 2>&1
+    )
+    if exist ".git" (
+        echo Verificando si hay actualizaciones en GitHub...
+        git config --global --add safe.directory "%CD:\=/%" >nul 2>&1
+        git -c safe.directory=* fetch origin main --quiet >nul 2>&1
     if !errorlevel! equ 0 (
         set BEHIND=0
         for /f %%i in ('git -c safe.directory=* rev-list HEAD..origin/main --count 2^>nul') do set BEHIND=%%i
@@ -64,6 +72,7 @@ if %errorlevel% equ 0 if exist ".git" (
                 echo.
             )
         )
+    )
     )
 )
 
