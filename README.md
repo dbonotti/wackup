@@ -60,7 +60,8 @@ La consola de `iniciar_visor.bat` funciona como un centro interactivo mientras e
 | :---: | :--- | :--- |
 | **`[V]`** | **Abrir Visor** | Abre o enfoca el visor web en tu navegador predeterminado. |
 | **`[L]`** | **Ver Logs en Vivo** | Abre una ventana independiente con el seguimiento de sincronización en tiempo real. |
-| **`[U]`** | **Buscar Actualizaciones** | Comprueba si hay mejoras en GitHub y permite aplicarlas interactivamente. |
+| **`[U]`** | **Buscar Actualizaciones** | Comprueba si hay mejoras en GitHub y las aplica automáticamente. |
+| **`[R]`** | **Reiniciar Visor** | Recarga el código de la aplicación en memoria sin cerrar la ventana. |
 | **`Ctrl + C`** | **Detener Servidor** | Cierra de manera limpia y ordenada el servidor SQLite. |
 
 ### 📋 Acceso y Monitoreo de Logs

@@ -2331,6 +2331,7 @@ _last_sync_status_text = "[●] 🟡 Esperando a WhatsApp Web... (Abre WhatsApp 
 _last_update_status_text = "Presiona [U] para comprobar"
 _update_in_progress = False
 _server_url = None
+_server_instance = None
 
 def get_disk_extension_version():
     """Lee la versión de la extensión declarada en extension/manifest.json."""
@@ -2376,6 +2377,7 @@ def render_dashboard(url=None):
             "    [V]        Abrir el visor en el navegador",
             "    [L]        Abrir ventana de logs de sincronización en vivo",
             "    [U]        Buscar y aplicar actualizaciones de GitHub",
+            "    [R]        Reiniciar el visor (recargar cambios)",
             "    [Ctrl + C] Detener el servidor",
             "========================================================================",
             f"  Actualizaciones:       {_last_update_status_text}",
@@ -2477,10 +2479,11 @@ def check_and_apply_update(url):
             print("[3/3] Verificando dependencias de Python...")
             subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"], cwd=base_dir)
             print("\n" + "=" * 65)
-            print("¡Actualización completada!")
-            print("Reinicia el servidor (Ctrl+C y vuelve a abrir iniciar_visor.bat)")
-            print("para que los cambios surtan efecto.")
+            print("¡Actualización completada con éxito!")
+            print("Reiniciando el visor automáticamente para aplicar cambios...")
             print("=" * 65)
+            time.sleep(1.5)
+            restart_current_process()
             _last_update_status_text = f"[✓] Actualizado con éxito a la última versión ({datetime.now().strftime('%H:%M:%S')})"
             print("\nPresiona Enter para volver al Panel de Control...")
             try:
@@ -2521,6 +2524,22 @@ def open_logs_window():
     except Exception:
         pass
 
+def restart_current_process():
+    """Reinicia el visor liberando puertos y relanzando el script en la misma consola."""
+    global _server_instance
+    print("\nReiniciando visor WAckup...")
+    try:
+        if _server_instance:
+            _server_instance.server_close()
+    except Exception:
+        pass
+    time.sleep(0.4)
+    try:
+        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
+    except Exception:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__)], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        os._exit(0)
+
 def start_keyboard_listener(url):
     """Escucha teclas de atajo [V] y [L] en segundo plano."""
     if os.name != "nt":
@@ -2539,6 +2558,8 @@ def start_keyboard_listener(url):
                             webbrowser.open(url)
                         elif ch in (b"u", b"U"):
                             check_and_apply_update(url)
+                        elif ch in (b"r", b"R"):
+                            restart_current_process()
                     time.sleep(0.15)
                 except Exception:
                     time.sleep(0.5)
@@ -3161,6 +3182,8 @@ def run():
     ThreadingHTTPServer.allow_reuse_address = False
     try:
         server = ThreadingHTTPServer(("127.0.0.1", PORT), BackupServerHandler)
+        global _server_instance
+        _server_instance = server
     except OSError as e:
         url = f"http://127.0.0.1:{PORT}"
         print(f"\n========================================================================")
