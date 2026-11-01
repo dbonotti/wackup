@@ -893,7 +893,8 @@
 
         const res = event.data.response;
         if (!res || !res.ok) {
-          return reject(new Error((res && res.error) || `Error HTTP ${res ? res.status : 'desconocido'}`));
+          const detail = (res && res.data && res.data.error) || (res && res.error) || `Error HTTP ${res ? res.status : 'desconocido'}`;
+          return reject(new Error(detail));
         }
 
         resolve(res.data);

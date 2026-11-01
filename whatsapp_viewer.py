@@ -18,6 +18,19 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
 
+# En Windows con pythonw.exe, sys.stdout y sys.stderr se inicializan como None.
+# Redirigir a os.devnull para prevenir caídas ('NoneType' object has no attribute 'write')
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        sys.stdout = io.StringIO()
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        sys.stderr = io.StringIO()
+
 import db_manager
 import media_manager
 import config
@@ -287,8 +300,12 @@ def render_dashboard(url=None):
             f"  Estado: {_last_sync_status_text}"
         ]
         # Dejar el cursor al final de la última línea con \r para actualizaciones directas
-        sys.stdout.write("\n".join(lines) + "\r")
-        sys.stdout.flush()
+        if sys.stdout and hasattr(sys.stdout, "write"):
+            try:
+                sys.stdout.write("\n".join(lines) + "\r")
+                sys.stdout.flush()
+            except Exception:
+                pass
 
 def get_system_update_status():
     """Comprueba el estado de actualizaciones mediante el actualizador nativo HTTPS."""
@@ -687,8 +704,12 @@ def update_status_display(frame=None):
         if len(status_text) > max_len:
             status_text = status_text[:max_len]
 
-        sys.stdout.write(f"\r{status_text.ljust(max_len)}")
-        sys.stdout.flush()
+        if sys.stdout and hasattr(sys.stdout, "write"):
+            try:
+                sys.stdout.write(f"\r{status_text.ljust(max_len)}")
+                sys.stdout.flush()
+            except Exception:
+                pass
 
 
 def start_status_animator():
