@@ -589,6 +589,14 @@ def cycle_workspace_profile(url=None):
     new_prof = profiles[next_idx]
     config.set_account_profile(acc_id, new_prof)
     prof_label = config.WORKSPACE_PROFILE_NAMES.get(new_prof, new_prof)
+    try:
+        sse_hub.get_sse_hub().broadcast("profile_update", {
+            "account_id": acc_id,
+            "profile": new_prof,
+            "profile_label": prof_label
+        })
+    except Exception:
+        pass
     _last_update_status_text = f"[Perfil activo cambiado a: {prof_label}]"
     render_dashboard(url)
 
@@ -1744,6 +1752,14 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 if profile and profile in config.VALID_WORKSPACE_PROFILES:
                     acc_id, _, _ = self._resolve_account_params({})
                     config.set_account_profile(acc_id, profile)
+                    try:
+                        sse_hub.get_sse_hub().broadcast("profile_update", {
+                            "account_id": acc_id,
+                            "profile": profile,
+                            "profile_label": config.WORKSPACE_PROFILE_NAMES.get(profile, profile)
+                        })
+                    except Exception:
+                        pass
                 self.send_json(200, {"ok": True, "onboarding_completed": completed})
                 return
 
@@ -1792,6 +1808,14 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 new_prof = profiles[next_idx]
                 config.set_account_profile(acc_id, new_prof)
                 prof_label = config.WORKSPACE_PROFILE_NAMES.get(new_prof, new_prof)
+                try:
+                    sse_hub.get_sse_hub().broadcast("profile_update", {
+                        "account_id": acc_id,
+                        "profile": new_prof,
+                        "profile_label": prof_label
+                    })
+                except Exception:
+                    pass
                 self.send_json(200, {
                     "ok": True,
                     "profile": new_prof,
@@ -1820,6 +1844,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
                 config.set_account_profile(account_id, new_prof)
                 prof_label = config.WORKSPACE_PROFILE_NAMES.get(new_prof, new_prof)
+                try:
+                    sse_hub.get_sse_hub().broadcast("profile_update", {
+                        "account_id": account_id,
+                        "profile": new_prof,
+                        "profile_label": prof_label,
+                        "profile_name": prof_label
+                    })
+                except Exception:
+                    pass
                 self.send_json(200, {
                     "ok": True,
                     "profile": new_prof,

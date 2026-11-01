@@ -3175,6 +3175,7 @@
         sseEventSource.addEventListener('presence_update', onEvent);
         sseEventSource.addEventListener('crm_update', onEvent);
         sseEventSource.addEventListener('sync_update', onEvent);
+        sseEventSource.addEventListener('profile_update', onEvent);
 
         sseEventSource.onerror = () => {
           // EventSource reintenta automáticamente
@@ -3219,6 +3220,19 @@
           }
           loadChats();
           break;
+
+        case 'profile_update': {
+          if (msg.profile && (!msg.account_id || msg.account_id === currentAccountId)) {
+            const label = msg.profile_label || msg.profile;
+            updateProfileUIElements(msg.profile, label);
+            const acc = accountsList.find(a => a.id === (msg.account_id || currentAccountId));
+            if (acc) {
+              acc.workspace_profile = msg.profile;
+              acc.workspace_profile_label = label;
+            }
+          }
+          break;
+        }
       }
     }
 

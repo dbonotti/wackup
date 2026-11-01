@@ -10,6 +10,12 @@
   let currentChatQuery = null;
   let currentChatId = null;
   let currentProfile = "full";
+  const profileLabels = {
+    "backup_only": "Solo Respaldo",
+    "support": "Soporte",
+    "sales": "Ventas",
+    "full": "CRM Completo"
+  };
   let currentSlaMinutes = null;
   let operatorName = "";
   let currentServerUrl = "http://127.0.0.1:8080";
@@ -128,6 +134,7 @@
 
   function updateAccountUI(info) {
     if (!info) return;
+    const prevId = currentAccountId;
     if (info.id) currentAccountId = info.id;
     if (info.name) currentAccountName = info.name;
     if (info.phone) currentAccountPhone = info.phone;
@@ -137,6 +144,10 @@
 
     if (nameEl) nameEl.textContent = currentAccountName || (currentAccountPhone ? `+${currentAccountPhone}` : "Cuenta WhatsApp");
     if (phoneEl) phoneEl.textContent = currentAccountPhone ? `(+${currentAccountPhone})` : "";
+
+    if (info.id && (prevId === "default" || prevId !== info.id)) {
+      loadWorkspaceProfile();
+    }
   }
 
   // =========================================================================
@@ -160,13 +171,6 @@
     const viewCrm = document.getElementById("view-crm");
     const secSupport = document.getElementById("sec-support-ticket");
     const secSales = document.getElementById("sec-sales-pipeline");
-
-    const profileLabels = {
-      "backup_only": "Solo Respaldo",
-      "support": "Soporte",
-      "sales": "Ventas",
-      "full": "CRM Completo"
-    };
 
     if (badge) badge.textContent = profileLabels[currentProfile] || "CRM";
 
@@ -597,6 +601,14 @@
             if (radarPane && radarPane.classList.contains("active")) {
               loadRadarData();
             }
+          } else if (msg.event === "profile_update") {
+            if (!msg.account_id || msg.account_id === currentAccountId || currentAccountId === "default") {
+              if (msg.profile && msg.profile !== currentProfile) {
+                currentProfile = msg.profile;
+                applyProfileUI();
+                showToast(`Perfil actualizado: ${profileLabels[currentProfile] || currentProfile}`);
+              }
+            }
           }
         } catch (err) {}
       };
@@ -605,6 +617,7 @@
       sseSource.addEventListener("presence_update", handleEvt);
       sseSource.addEventListener("crm_update", handleEvt);
       sseSource.addEventListener("sync_update", handleEvt);
+      sseSource.addEventListener("profile_update", handleEvt);
       sseSource.onerror = () => {};
     } catch (e) {}
   }
@@ -1135,6 +1148,30 @@
     const btnBackupManual = document.getElementById("btn-backup-manual");
     const btnUpdateExt = document.getElementById("btn-update-ext");
     const btnAddTag = document.getElementById("btn-add-tag");
+    const badgeProfile = document.getElementById("profile-badge");
+
+    if (badgeProfile) {
+      badgeProfile.style.cursor = "pointer";
+      badgeProfile.title = "Clic para cambiar perfil de trabajo (o actualizar)";
+      badgeProfile.addEventListener("click", async () => {
+        try {
+          const res = await apiFetch(`/api/profile/cycle?account_id=${encodeURIComponent(currentAccountId)}`, {
+            method: "POST"
+          });
+          if (res && res.profile) {
+            currentProfile = res.profile;
+            applyProfileUI();
+            showToast(`Perfil: ${profileLabels[currentProfile] || currentProfile}`);
+          } else {
+            await loadWorkspaceProfile();
+            showToast(`Perfil: ${profileLabels[currentProfile] || currentProfile}`);
+          }
+        } catch (e) {
+          await loadWorkspaceProfile();
+          showToast(`Perfil: ${profileLabels[currentProfile] || currentProfile}`);
+        }
+      });
+    }
 
     if (btnSyncRecent) {
       btnSyncRecent.addEventListener("click", () => {

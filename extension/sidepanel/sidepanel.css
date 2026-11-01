@@ -123,6 +123,14 @@ body {
   color: #93c5fd;
   border: 1px solid #2563eb;
   text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.badge-profile:hover {
+  opacity: 0.85;
+  transform: scale(1.05);
 }
 
 .btn-icon {
