@@ -45,6 +45,7 @@ PORT = 8080
 _last_sync_epoch = 0
 _server_instance = None
 _server_stopping = False
+_is_restarting = False
 
 def append_sync_log(entry_text):
     try:
@@ -547,11 +548,12 @@ def confirm_and_restart(url=None):
         _update_in_progress = False
 
 def restart_current_process():
-    """Reinicia el visor liberando puertos y relanzando el proceso limpiamente."""
-    global _server_instance, _exit_code, _last_client_ping, _server_stopping
+    """Solicita el reinicio ordenado del visor WAckup."""
+    global _server_instance, _exit_code, _last_client_ping, _server_stopping, _is_restarting
+    _is_restarting = True
     _exit_code = 42
     _server_stopping = True
-    print("Reiniciando visor WAckup...")
+    append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Iniciando reinicio de proceso...")
     try:
         has_recent_client = (_last_client_ping > 0 and (time.time() - _last_client_ping) < 15.0)
         flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restart_flag")
@@ -560,40 +562,15 @@ def restart_current_process():
     except Exception:
         pass
 
-    try:
-        sse_hub.get_sse_hub().shutdown()
-    except Exception:
-        pass
-
-    try:
+    # Apagar el socket de forma asíncrona para desbloquear el serve_forever del hilo principal
+    def _trigger_shutdown():
+        time.sleep(0.15)
         if _server_instance:
-            _server_instance.server_close()
-    except Exception:
-        pass
-    time.sleep(0.25)
-
-    # Si corre supervisado por iniciar_visor.bat, delegar el relanzamiento al bucle .bat con código 42
-    if os.environ.get("WACKUP_SUPERVISED") == "1":
-        os._exit(42)
-
-    # Si corre vía Iniciar_WAckup.vbs (pythonw) o ejecución directa sin .bat, relanzar autónomamente
-    try:
-        script_path = os.path.abspath(__file__)
-        env = os.environ.copy()
-        env["WACKUP_RESTARTED"] = "1"
-        creationflags = 0
-        if os.name == "nt" and sys.executable.lower().endswith("pythonw.exe"):
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        subprocess.Popen(
-            [sys.executable, script_path] + sys.argv[1:],
-            cwd=os.path.dirname(script_path),
-            env=env,
-            close_fds=True,
-            creationflags=creationflags
-        )
-        os._exit(0)
-    except Exception:
-        os._exit(42)
+            try:
+                _server_instance.shutdown()
+            except Exception:
+                pass
+    threading.Thread(target=_trigger_shutdown, daemon=True).start()
 
 def cycle_workspace_profile(url=None):
     """Alterna cíclicamente el perfil de uso de la cuenta activa."""
@@ -2270,25 +2247,46 @@ def run():
     media_manager.ensure_media_dirs()
     media_manager.trigger_media_processing()
 
-    ThreadingHTTPServer.allow_reuse_address = False
+    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restart_flag")
+    has_client_flag = False
+    is_restart = os.environ.get("WACKUP_RESTARTED") == "1" or os.path.exists(flag_path)
+    if os.path.exists(flag_path):
+        try:
+            with open(flag_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            has_client_flag = (content == "has_client")
+            os.remove(flag_path)
+        except Exception:
+            pass
+    if "WACKUP_RESTARTED" in os.environ:
+        os.environ.pop("WACKUP_RESTARTED", None)
+
+    ThreadingHTTPServer.allow_reuse_address = True
     ThreadingHTTPServer.daemon_threads = True
     settings = config.get_system_settings()
     is_lan = settings.get("network_mode") == "lan"
     bind_host = "0.0.0.0" if is_lan else "127.0.0.1"
 
-    try:
-        server = ThreadingHTTPServer((bind_host, PORT), BackupServerHandler)
-        server.daemon_threads = True
-        global _server_instance
-        _server_instance = server
-    except OSError as e:
-        url = f"http://127.0.0.1:{PORT}"
-        print(f"\n========================================================================")
-        print(f"  [AVISO] Ya existe una instancia de WAckup activa en el puerto {PORT}.")
-        print(f"  Abriendo el visor en tu navegador: {url}")
-        print(f"========================================================================\n")
-        webbrowser.open(url)
-        return
+    server = None
+    bind_attempts = 15 if is_restart else 1
+    for attempt in range(bind_attempts):
+        try:
+            server = ThreadingHTTPServer((bind_host, PORT), BackupServerHandler)
+            server.daemon_threads = True
+            global _server_instance
+            _server_instance = server
+            break
+        except OSError as e:
+            if attempt < bind_attempts - 1:
+                time.sleep(0.3)
+            else:
+                url = f"http://127.0.0.1:{PORT}"
+                print(f"\n========================================================================")
+                print(f"  [AVISO] Ya existe una instancia de WAckup activa en el puerto {PORT}.")
+                print(f"  Abriendo el visor en tu navegador: {url}")
+                print(f"========================================================================\n")
+                webbrowser.open(url)
+                return
 
     url = f"http://127.0.0.1:{PORT}"
     if is_lan:
@@ -2334,20 +2332,6 @@ def run():
             start_keyboard_listener(url)
             start_status_animator()
 
-    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restart_flag")
-    has_client_flag = False
-    is_restart = os.environ.get("WACKUP_RESTARTED") == "1" or os.path.exists(flag_path)
-    if os.path.exists(flag_path):
-        try:
-            with open(flag_path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-            has_client_flag = (content == "has_client")
-            os.remove(flag_path)
-        except Exception:
-            pass
-    if "WACKUP_RESTARTED" in os.environ:
-        os.environ.pop("WACKUP_RESTARTED", None)
-
     if not is_restart or (is_restart and not has_client_flag):
         webbrowser.open(url)
     else:
@@ -2373,6 +2357,36 @@ def run():
             server.server_close()
         except Exception:
             pass
+
+    # Si se solicitó reinicio
+    if _is_restarting:
+        append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Relanzando proceso...")
+        # Si corre supervisado por iniciar_visor.bat, delegar el relanzamiento al bucle .bat con código 42
+        if os.environ.get("WACKUP_SUPERVISED") == "1":
+            os._exit(42)
+
+        # Si corre autónomamente vía Iniciar_WAckup.vbs (pythonw) o terminal directa sin supervisor .bat
+        try:
+            script_path = os.path.abspath(__file__)
+            env = os.environ.copy()
+            env["WACKUP_RESTARTED"] = "1"
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = 0x00000008 | 0x00000200
+                if sys.executable.lower().endswith("pythonw.exe"):
+                    creationflags |= 0x08000000
+            subprocess.Popen(
+                [sys.executable, script_path] + sys.argv[1:],
+                cwd=os.path.dirname(script_path),
+                env=env,
+                close_fds=True,
+                creationflags=creationflags
+            )
+            time.sleep(0.1)
+            os._exit(0)
+        except Exception as e:
+            append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor Error Relanzamiento] {e}")
+            os._exit(42)
 
     if _exit_code != 0:
         os._exit(_exit_code)
