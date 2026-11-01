@@ -1,15 +1,29 @@
 {
   "manifest_version": 3,
-  "name": "WAckup - Backup Local para WhatsApp Web",
-  "version": "2.2.2",
-  "description": "WAckup: Respaldo pasivo, seguro e incremental de WhatsApp Web a base de datos SQLite local",
+  "name": "WAckup - Copiloto CRM y Respaldo Local para WhatsApp Web",
+  "version": "3.0.0",
+  "description": "WAckup 3.0: Copiloto nativo sidePanel, CRM comercial, atención y respaldo pasivo local para WhatsApp Web",
+  "permissions": [
+    "sidePanel",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "http://192.168.*/*",
+    "http://10.*/*",
+    "http://172.*/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
-  "host_permissions": [
-    "https://web.whatsapp.com/*",
-    "http://127.0.0.1:8080/*"
-  ],
+  "action": {
+    "default_title": "Abrir Copiloto WAckup"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
   "content_scripts": [
     {
       "matches": ["https://web.whatsapp.com/*"],
@@ -18,7 +32,7 @@
     },
     {
       "matches": ["https://web.whatsapp.com/*"],
-      "js": ["content.js"],
+      "js": ["crypto_sync.js"],
       "run_at": "document_start",
       "world": "MAIN"
     }

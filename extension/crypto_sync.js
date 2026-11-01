@@ -91,10 +91,8 @@
 
       if (newlyVerified && verifiedKeys.length > 0) {
         verifiedKeyData = verifiedKeys[0];
-        window.__wa_db_verified = verifiedKeyData;
-        window.__wa_db_verified_keys = verifiedKeys;
         console.log(`%c🎯 [WAckup] Clave de base de datos verificada (${verifiedKeys.length} clave(s) activa(s))`, "color: #10b981; font-weight: bold; font-size: 14px;");
-        updateWidgetStatus("ready", "Clave activa");
+        notifyStatus("ready", "Clave activa");
         triggerSync(true, false);
       }
     } finally {
@@ -159,19 +157,6 @@
   }
 
   async function setupCryptoInterceptor() {
-    if (Array.isArray(window.__wa_db_verified_keys) && window.__wa_db_verified_keys.length > 0) {
-      for (const k of window.__wa_db_verified_keys) {
-        if (!verifiedKeys.some(v => v.key === k.key)) verifiedKeys.push(k);
-        if (!candidateKeys.some(c => c.key === k.key)) candidateKeys.push(k);
-      }
-    }
-    if (window.__wa_db_verified) {
-      verifiedKeyData = window.__wa_db_verified;
-      if (!verifiedKeys.some(v => v.key === verifiedKeyData.key)) verifiedKeys.unshift(verifiedKeyData);
-      if (!candidateKeys.some(c => c.key === verifiedKeyData.key)) candidateKeys.unshift(verifiedKeyData);
-      updateWidgetStatus("ready", "Clave activa");
-    }
-
     window.crypto.subtle.decrypt = async function(algorithm, key, data) {
       if (key && key.type === "secret") {
         registerCandidateKey(key, algorithm);
@@ -347,8 +332,6 @@
         if (decBuf && decBuf.byteLength > 0) {
           verifiedKeys.unshift(kData);
           verifiedKeyData = verifiedKeys[0];
-          window.__wa_db_verified = verifiedKeyData;
-          window.__wa_db_verified_keys = verifiedKeys;
           return decBuf;
         }
       } catch (e) {}
@@ -357,29 +340,7 @@
     return null;
   }
 
-  function getInMemoryMessagesMap() {
-    const map = new Map();
-    try {
-      if (typeof window.require !== "function") return map;
-      const mod = window.require("WAWebMsgCollection");
-      const col = mod && (mod.MsgCollection || mod.default || mod);
-      const models = col && (typeof col.getModelsArray === "function" ? col.getModelsArray() : col._models);
-      if (Array.isArray(models)) {
-        for (const m of models) {
-          const id = extractId(m && m.id);
-          if (!id) continue;
-          const body = typeof m.body === "string" ? m.body : (typeof m.text === "string" ? m.text : "");
-          const caption = typeof m.caption === "string" ? m.caption : "";
-          const isForwarded = Boolean(m.isForwarded || (m.forwardingScore && m.forwardingScore > 0));
-          const forwardingScore = Number(m.forwardingScore) || (isForwarded ? 1 : 0);
-          if (body || caption || isForwarded) {
-            map.set(id, { body, caption, isForwarded, forwardingScore });
-          }
-        }
-      }
-    } catch (e) {}
-    return map;
-  }
+  
 
   // =========================================================================
   // 2. DECODIFICADOR PROTOBUF REAL Y UTILIDADES DE TEXTO
@@ -995,18 +956,6 @@
     };
   }
 
-  function updateWidgetAccountBadge(accountInfo) {
-    const badge = document.getElementById("backupwa-account-badge");
-    if (!badge || !accountInfo) return;
-    const label = accountInfo.phone ? `+${accountInfo.phone}` : (accountInfo.name || "");
-    if (label && label !== "default") {
-      badge.textContent = label;
-      badge.title = `Cuenta activa en este WhatsApp Web: ${accountInfo.name || label} (${accountInfo.id})`;
-      badge.style.display = "inline-block";
-    } else {
-      badge.style.display = "none";
-    }
-  }
 
   async function triggerSync(isAuto = false, forceAll = false) {
     if (isSyncing) return;
@@ -1014,7 +963,7 @@
       await scanIndexedDBForCryptoKeys();
     }
     if (verifiedKeys.length === 0 && candidateKeys.length === 0) {
-      updateWidgetStatus("waiting", "Abre un chat para activar");
+      notifyStatus("waiting", "Abre un chat para activar");
       return;
     }
 
@@ -1024,10 +973,9 @@
       knownMessageKeys = null;
     }
     lastDetectedAccountId = accountInfo.id;
-    updateWidgetAccountBadge(accountInfo);
 
     isSyncing = true;
-    updateWidgetStatus("syncing", forceAll ? "Sincronizando todo..." : "Sincronizando...");
+    notifyStatus("syncing", forceAll ? "Sincronizando todo..." : "Sincronizando...");
 
     try {
       let lastTimestamp = 0;
@@ -1036,6 +984,18 @@
         const needIds = knownMessageKeys === null ? "&include_ids=1" : "";
         const statusData = await backendFetch(`/api/sync/status?account_id=${encodeURIComponent(accountInfo.id)}${needIds}`);
         lastTimestamp = statusData.last_timestamp || 0;
+
+        // Sincronización Multi-Puesto Inteligente: si otra PC acaba de sincronizar hace < 8s, espaciar
+        if (isAuto && !forceAll && statusData && statusData.last_sync_epoch) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          const syncAge = nowSec - Number(statusData.last_sync_epoch);
+          if (syncAge >= 0 && syncAge < 8) {
+            isSyncing = false;
+            notifyStatus("ready", "Sincronizado en red");
+            return;
+          }
+        }
+
         if (knownMessageKeys === null && Array.isArray(statusData.synced_msg_ids)) {
           knownMessageKeys = new Set(statusData.synced_msg_ids);
         }
@@ -1044,7 +1004,7 @@
         }
       } catch (backendErr) {
         console.warn("[WAckup] Servidor local no disponible:", backendErr);
-        updateWidgetStatus("error", "Servidor local desconectado");
+        notifyStatus("error", "Servidor local desconectado");
         isSyncing = false;
         return;
       }
@@ -1053,7 +1013,7 @@
 
       const db = await openIndexedDB("model-storage");
       if (!db) {
-        updateWidgetStatus("error", "Error al leer IndexedDB");
+        notifyStatus("error", "Error al leer IndexedDB");
         isSyncing = false;
         return;
       }
@@ -1075,7 +1035,6 @@
             accountInfo.id = cleanNum;
           }
         }
-        updateWidgetAccountBadge(accountInfo);
       }
 
       const cleanContacts = rawContacts.map(c => {
@@ -1121,7 +1080,7 @@
       if (rawMessages.length === 0) {
         if (!shouldSendContacts && !shouldSendChats) {
           const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          updateWidgetStatus("synced", `Al día (${nowStr})`);
+          notifyStatus("synced", `Al día (${nowStr})`);
           return;
         }
 
@@ -1142,14 +1101,11 @@
         lastContactsSyncTime = now;
         const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         console.log("%c[WAckup] Contactos y chats sincronizados.", "color: #10b981; font-weight: bold;");
-        updateWidgetStatus("synced", `Al día (${nowStr})`);
+        notifyStatus("synced", `Al día (${nowStr})`);
         return;
       }
 
-      // Mapa opcional de textos en memoria de WhatsApp Web (si los modelos ya están cargados en RAM)
-      const inMemoryMap = getInMemoryMessagesMap();
-
-      // Descifrado concurrente por lotes para velocidad óptima
+      // Descifrado concurrente por lotes exclusivamente desde IndexedDB (pureza anti-ban)
       const cleanMessages = [];
       for (let i = 0; i < rawMessages.length; i += DECRYPT_CHUNK_SIZE) {
         const chunk = rawMessages.slice(i, i + DECRYPT_CHUNK_SIZE);
@@ -1161,10 +1117,8 @@
             return null;
           }
           const isMedia = m.type in { image: 1, video: 1, sticker: 1, ptt: 1, audio: 1, document: 1 };
-          const memEntry = msgId ? inMemoryMap.get(msgId) : null;
-
-          const caption = m.caption || (memEntry && memEntry.caption) || "";
-          const rawBody = (typeof m.body === "string" && m.body) ? m.body : ((memEntry && memEntry.body) || "");
+          const caption = m.caption || "";
+          const rawBody = (typeof m.body === "string" && m.body) ? m.body : "";
 
           const isBinaryOrB64 = (s) => {
             if (!s) return false;
@@ -1186,13 +1140,12 @@
             bodyText = isBinaryOrB64(rawBody) ? "" : (rawBody || caption);
           }
 
-          // Estado de reenviado desde propiedades directas o modelo en memoria
+          // Estado de reenviado desde propiedades directas en IndexedDB
           const ctxInfo = m.msgContextInfo || m.contextInfo || {};
-          let forwardingScore = Number(m.forwardingScore) || Number(ctxInfo.forwardingScore) || (memEntry && memEntry.forwardingScore) || 0;
+          let forwardingScore = Number(m.forwardingScore) || Number(ctxInfo.forwardingScore) || 0;
           let isForwarded = Boolean(
             m.isForwarded ||
             ctxInfo.isForwarded ||
-            (memEntry && memEntry.isForwarded) ||
             forwardingScore > 0
           );
 
@@ -1297,14 +1250,14 @@
         }
 
         if (rawMessages.length > 500 && i % 1000 === 0) {
-          updateWidgetStatus("syncing", `Procesando ${i}/${rawMessages.length}...`);
+          notifyStatus("syncing", `Procesando ${i}/${rawMessages.length}...`);
         }
       }
 
       if (cleanMessages.length === 0) {
         if (!shouldSendContacts && !shouldSendChats) {
           const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          updateWidgetStatus("synced", `Al día (${nowStr})`);
+          notifyStatus("synced", `Al día (${nowStr})`);
           return;
         }
 
@@ -1324,7 +1277,7 @@
         lastChatsHash = chatsHash;
         lastContactsSyncTime = now;
         const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        updateWidgetStatus("synced", `Al día (${nowStr})`);
+        notifyStatus("synced", `Al día (${nowStr})`);
         return;
       }
 
@@ -1363,7 +1316,7 @@
         }
 
         if (cleanMessages.length > BATCH_SIZE) {
-          updateWidgetStatus("syncing", `Guardando ${Math.min(i + BATCH_SIZE, cleanMessages.length)}/${cleanMessages.length}...`);
+          notifyStatus("syncing", `Guardando ${Math.min(i + BATCH_SIZE, cleanMessages.length)}/${cleanMessages.length}...`);
         }
       }
 
@@ -1373,11 +1326,11 @@
 
       const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       console.log(`%c[WAckup] Sincronización exitosa: ${totalSaved} mensajes guardados, ${totalMediaEnqueued} multimedia en cola.`, "color: #10b981; font-weight: bold; font-size: 13px;");
-      updateWidgetStatus("synced", `Sincronizado ${nowStr} (${totalSaved} msgs)`);
+      notifyStatus("synced", `Sincronizado ${nowStr} (${totalSaved} msgs)`, totalSaved);
 
     } catch (err) {
       console.error("[WAckup] Error durante sincronización:", err);
-      updateWidgetStatus("error", "Error de sincronización");
+      notifyStatus("error", "Error de sincronización");
     } finally {
       isSyncing = false;
     }
@@ -1538,117 +1491,51 @@
     return Array.from(mergedMap.values());
   }
 
+
   // =========================================================================
-  // 6. WIDGET VISUAL DISCRETO EN WHATSAPP WEB
+  // NOTIFICACIÓN PASIVA AL BRIDGE Y SERVICE WORKER (Cero DOM)
   // =========================================================================
-  function createWidget() {
-    if (document.getElementById("backupwa-widget")) return;
-
-    const widget = document.createElement("div");
-    widget.id = "backupwa-widget";
-    widget.style.cssText = `
-      position: fixed;
-      bottom: 16px;
-      left: 16px;
-      z-index: 999999;
-      background: #ffffff;
-      border: 1px solid #d1d7db;
-      border-radius: 20px;
-      padding: 5px 12px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      box-shadow: 0 2px 10px rgba(11,20,26,0.18);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 12px;
-      color: #111b21;
-      user-select: none;
-      transition: all 0.2s ease;
-    `;
-
-    widget.innerHTML = `
-      <span style="font-weight: 700; color: #00a884; font-size: 12px; letter-spacing: 0.2px;">WAckup</span>
-      <span id="backupwa-account-badge" style="display: none; background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 600;"></span>
-      <div id="backupwa-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #eab308; flex-shrink: 0;"></div>
-      <span id="backupwa-text" style="font-weight: 500;">Iniciando respaldo...</span>
-      <button id="backupwa-btn-update" title="Nueva versión disponible. Haz clic para recargar la extensión y WhatsApp Web en 1 clic." style="display: none; border: none; background: #2563eb; color: #fff; border-radius: 12px; padding: 3px 9px; font-size: 11px; font-weight: 600; cursor: pointer;">🔄 Actualizar Extensión</button>
-      <button id="backupwa-btn-sync" title="Sincronizar mensajes nuevos o recientes" style="border: none; background: #00a884; color: #fff; border-radius: 12px; padding: 3px 9px; font-size: 11px; font-weight: 600; cursor: pointer;">Novedades</button>
-      <button id="backupwa-btn-all" title="Sincronizar todos los mensajes para vincular archivos multimedia (fotos, audios, docs)" style="border: 1px solid #00a884; background: #ffffff; color: #00a884; border-radius: 12px; padding: 2px 8px; font-size: 11px; font-weight: 600; cursor: pointer;">Todo (Media)</button>
-    `;
-
-    document.body.appendChild(widget);
-    updateWidgetAccountBadge(getActiveAccountInfo());
-
-    const btnUpdate = document.getElementById("backupwa-btn-update");
-    if (btnUpdate) {
-      btnUpdate.onclick = (e) => {
-        e.stopPropagation();
-        btnUpdate.disabled = true;
-        btnUpdate.textContent = "Recargando...";
-        updateWidgetStatus("syncing", "Actualizando extensión...");
-        window.postMessage({ type: "BACKUPWA_RELOAD_EXT" }, "https://web.whatsapp.com");
-        setTimeout(() => {
-          window.location.reload();
-        }, 1200);
-      };
+  function notifyStatus(state, message, totalSaved = 0) {
+    try {
+      const accountInfo = getActiveAccountInfo();
+      window.postMessage({
+        type: "BACKUPWA_STATUS",
+        state: state,
+        message: message,
+        totalSaved: totalSaved,
+        accountInfo: accountInfo
+      }, "https://web.whatsapp.com");
+    } catch (e) {
+      console.warn("[WAckup] Error al notificar estado:", e);
     }
-
-    document.getElementById("backupwa-btn-sync").onclick = (e) => {
-      e.stopPropagation();
-      knownMessageKeys = null;
-      triggerSync(false, false);
-    };
-
-    document.getElementById("backupwa-btn-all").onclick = (e) => {
-      e.stopPropagation();
-      knownMessageKeys = null;
-      triggerSync(false, true);
-    };
   }
 
   function checkExtensionUpdate(diskVer, installedVer) {
-    const btnUpdate = document.getElementById("backupwa-btn-update");
-    if (!btnUpdate) return;
     if (diskVer && installedVer && diskVer !== installedVer) {
-      btnUpdate.style.display = "inline-block";
-      btnUpdate.textContent = `🔄 Actualizar v${diskVer}`;
-      btnUpdate.title = `Versión activa: v${installedVer} | Versión en disco: v${diskVer}. Haz clic para recargar la extensión y WhatsApp Web en 1 clic.`;
-    } else {
-      btnUpdate.style.display = "none";
+      window.postMessage({
+        type: "BACKUPWA_VERSION_INFO",
+        diskVer: diskVer,
+        installedVer: installedVer
+      }, "https://web.whatsapp.com");
     }
   }
 
-  function updateWidgetStatus(state, message) {
-    const dot = document.getElementById("backupwa-dot");
-    const text = document.getElementById("backupwa-text");
-    if (!dot || !text) return;
-
-    text.textContent = message;
-
-    if (state === "ready" || state === "synced") {
-      dot.style.background = "#25d366";
-    } else if (state === "syncing") {
-      dot.style.background = "#3b82f6";
-    } else if (state === "waiting") {
-      dot.style.background = "#eab308";
-    } else if (state === "error") {
-      dot.style.background = "#ef4444";
+  // Escuchar solicitudes de sincronización manual desde el bridge/sidepanel
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== "https://web.whatsapp.com") return;
+    if (!event.data) return;
+    if (event.data.type === "BACKUPWA_TRIGGER_SYNC") {
+      triggerSync(false, Boolean(event.data.forceAll));
     }
-  }
+  });
 
   // =========================================================================
-  // 7. INICIALIZACIÓN
+  // INICIALIZACIÓN PASIVA (Cero DOM)
   // =========================================================================
   let scrollSyncTimer = null;
 
   function init() {
     setupCryptoInterceptor();
-
-    if (document.body) {
-      createWidget();
-    } else {
-      window.addEventListener("DOMContentLoaded", createWidget);
-    }
 
     // Al hacer scroll en un chat de WhatsApp Web, sincronizar automáticamente los mensajes cargados 2.5s después
     window.addEventListener("scroll", () => {

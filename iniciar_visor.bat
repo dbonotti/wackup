@@ -1,81 +1,72 @@
 @echo off
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
-title WAckup - Panel de Control ^& Visor
+title WAckup 3.0 - Panel de Control ^& Visor
 
-rem 1. Verificar dependencias de Python
-python -c "import cryptography" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ========================================================
-    echo   Configurando dependencias necesarias de Python...
-    echo ========================================================
-    python -m pip install -r requirements.txt
-    if %errorlevel% neq 0 (
-        echo Error instalando dependencias. Verifica tu conexion y version de Python.
-        pause
-        exit /b %errorlevel%
-    )
-)
+rem 1. Detección automática del entorno Python (Portable embebido vs Sistema)
+set "PYTHON_BIN="
 
-rem 2. Comprobar actualizaciones en GitHub (garantizando seguridad de datos)
-where git >nul 2>&1
-if %errorlevel% equ 0 (
-    if not exist ".git" (
-        echo [i] Vinculando carpeta con el repositorio oficial de GitHub...
-        git init -b main >nul 2>&1
-        git remote add origin https://github.com/dbonotti/wackup.git >nul 2>&1
-        git fetch origin main --quiet >nul 2>&1
-        git reset --hard origin/main >nul 2>&1
-    )
-    if exist ".git" (
-        echo Verificando si hay actualizaciones en GitHub...
-        git config --global --add safe.directory "%CD:\=/%" >nul 2>&1
-        git -c safe.directory=* fetch origin main --quiet >nul 2>&1
+if exist "%~dp0runtime\python\python.exe" (
+    set "PYTHON_BIN=%~dp0runtime\python\python.exe"
+) else (
+    where python >nul 2>&1
     if !errorlevel! equ 0 (
-        set BEHIND=0
-        for /f %%i in ('git -c safe.directory=* rev-list HEAD..origin/main --count 2^>nul') do set BEHIND=%%i
-        if defined BEHIND if not "!BEHIND!"=="0" (
-            echo.
-            echo ========================================================
-            echo   [ACTUALIZACION DISPONIBLE]
-            echo   Hay !BEHIND! actualizacion^(es^) disponible^(s^) en GitHub.
-            echo ========================================================
-            echo Ultimos cambios:
-            git -c safe.directory=* log HEAD..origin/main --oneline -5
-            echo ========================================================
-            echo.
-            set "APPLY_UPDATE=S"
-            set /p "APPLY_UPDATE=Deseas actualizar a la ultima version ahora? (S/N) [S]: "
-            if /i "!APPLY_UPDATE!"=="S" (
-                echo.
-                echo [1/3] Creando copia de seguridad preventiva de la base de datos...
-                python -c "import config; config.backup_all_databases()"
-                
-                echo [2/3] Descargando ultimos cambios de GitHub...
-                set EXT_UPDATED=0
-                for /f %%f in ('git -c safe.directory=* diff HEAD origin/main --name-only -- extension 2^>nul') do set EXT_UPDATED=1
-                
-                git -c safe.directory=* pull origin main
-                if !errorlevel! equ 0 (
-                    echo [OK] Codigo actualizado con exito.
-                    if "!EXT_UPDATED!"=="1" (
-                        echo.
-                        echo [i] Se actualizaron archivos de la extension.
-                        echo     En WhatsApp Web veras un boton para recargarla en 1 clic.
-                    )
-                ) else (
-                    echo [ADVERTENCIA] No se pudo completar la descarga. Continuando...
-                )
-
-                echo [3/3] Verificando dependencias...
-                python -m pip install -r requirements.txt --quiet
-                echo.
-            )
+        set "PYTHON_BIN=python"
+    ) else (
+        where py >nul 2>&1
+        if !errorlevel! equ 0 (
+            set "PYTHON_BIN=py"
         )
     )
+)
+
+if not defined PYTHON_BIN (
+    echo ========================================================
+    echo   [ERROR] No se detecto un interprete de Python.
+    echo   Si descargaste la version Portable de WAckup, asegurate
+    echo   de que la carpeta 'runtime\python' este presente.
+    echo ========================================================
+    pause
+    exit /b 1
+)
+
+rem 2. Si no es entorno portable embebido, verificar dependencias en desarrollo
+if not exist "%~dp0runtime\python\python.exe" (
+    %PYTHON_BIN% -c "import cryptography, pystray, PIL" >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo ========================================================
+        echo   Configurando dependencias necesarias de Python...
+        echo ========================================================
+        %PYTHON_BIN% -m pip install -r requirements.txt
+        if !errorlevel! neq 0 (
+            echo [ADVERTENCIA] No se pudieron verificar algunas dependencias.
+        )
     )
 )
 
-echo Iniciando servidor WAckup...
-python whatsapp_viewer.py
+rem 3. Ciclo de ejecución del servidor con soporte de reinicio en caliente
+set "WACKUP_SUPERVISED=1"
+:start_server
+if exist ".restart_flag" del /f /q ".restart_flag" >nul 2>&1
+
+echo Iniciando servidor WAckup 3.0...
+%PYTHON_BIN% whatsapp_viewer.py %*
+set "EXIT_CODE=!errorlevel!"
+
+if exist ".restart_flag" (
+    cls
+    echo [i] Reinicio solicitado por el servidor...
+    goto start_server
+)
+if "!EXIT_CODE!"=="42" (
+    cls
+    echo [i] Reinicio completado (codigo 42)...
+    goto start_server
+)
+
+rem Si el usuario cerro normalmente el servidor desde la bandeja o Ctrl+C
+if "!EXIT_CODE!"=="0" (
+    exit /b 0
+)
+
 pause

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WAckup Copiloto</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <!-- CABECERA FIJA SUPERIOR -->
+  <header class="app-header">
+    <div class="header-top-row">
+      <div class="brand">
+        <span class="brand-title">WAckup</span>
+        <span class="status-indicator">
+          <span id="header-status-dot" class="status-dot"></span>
+          <span id="header-status-text" class="status-text">Conectando...</span>
+        </span>
+      </div>
+      <div class="header-actions">
+        <span id="profile-badge" class="badge-profile" title="Perfil de Espacio de Trabajo">CRM</span>
+        <button id="btn-update-ext" class="btn-icon btn-update" style="display:none;" title="Actualizar extensión">🔄 Actualizar</button>
+        <button id="btn-sync-recent" class="btn-icon" title="Sincronizar mensajes recientes (Novedades)">🔄</button>
+        <button id="btn-sync-all" class="btn-icon" title="Sincronizar historial completo (Todo)">📥</button>
+      </div>
+    </div>
+    <div class="header-sub-row">
+      <div class="account-info">
+        <span id="header-account-name" class="account-name">Cuenta WhatsApp</span>
+        <span id="header-account-phone" class="account-phone"></span>
+      </div>
+      <div class="stats-info">
+        <span id="header-stats-msgs" class="stats-msgs">0 msgs</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- VISTA EN CASO DE MODO SOLO RESPALDO -->
+  <div id="view-backup-only" class="backup-only-view" style="display: none;">
+    <div class="backup-card">
+      <div class="backup-icon">🛡️</div>
+      <h3>Modo Solo Respaldo</h3>
+      <p>Este espacio de trabajo está configurado en modo pasivo de solo respaldo. Los mensajes y contactos se sincronizan continuamente en tu base de datos SQLite local sin herramientas CRM activas.</p>
+      <div class="backup-actions">
+        <button id="btn-backup-manual" class="btn-primary">Sincronizar Ahora</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VISTA PRINCIPAL CON PESTAÑAS (CRM) -->
+  <main id="view-crm" class="crm-view">
+    <!-- PESTAÑAS SUPERIORES FIJAS -->
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="tab-management">
+        <span>📝</span> Gestión
+      </button>
+      <button class="tab-btn" data-tab="tab-card">
+        <span>📇</span> Ficha
+      </button>
+      <button class="tab-btn" data-tab="tab-radar">
+        <span>🔔</span> Radar <span id="radar-count-badge" class="tab-badge" style="display:none;">0</span>
+      </button>
+    </nav>
+
+    <!-- AVISO DE CHAT NO SELECCIONADO -->
+    <div id="no-chat-notice" class="empty-notice" style="display:none;">
+      <div class="notice-icon">💬</div>
+      <div class="notice-title">Ningún chat seleccionado</div>
+      <div class="notice-desc">Haz clic en cualquier conversación en WhatsApp Web para cargar su ficha y herramientas.</div>
+    </div>
+
+    <!-- CONTENEDOR DE PESTAÑAS -->
+    <div id="tabs-container" class="tabs-content">
+      
+      <!-- PESTAÑA 1: GESTIÓN -->
+      <section id="tab-management" class="tab-pane active">
+        <!-- Alerta de Semáforo Anti-Colisión -->
+        <div id="presence-banner" class="presence-alert" style="display:none;">
+          <span>👁️</span> <span id="presence-text"><b>Ana</b> está viendo este chat ahora</span>
+        </div>
+
+        <!-- Tarjeta de Contacto Activo -->
+        <div class="contact-header-card">
+          <div class="contact-main">
+            <div id="contact-name" class="contact-title">Cargando contacto...</div>
+            <div id="contact-phone" class="contact-subtitle">--</div>
+          </div>
+          <div class="contact-meta-badge">
+            <span id="contact-sla" class="sla-badge" title="Tiempo promedio de respuesta">-</span>
+          </div>
+          <div class="assigned-row">
+            <label for="select-assigned-to">👤 Responsable:</label>
+            <select id="select-assigned-to" class="select-sm">
+              <option value="">Sin asignar</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Etiquetas de Contacto -->
+        <div class="section-card">
+          <div class="section-title-row">
+            <span class="card-title">🏷️ Etiquetas</span>
+            <button id="btn-add-tag" class="btn-link">+ Etiqueta</button>
+          </div>
+          <div id="tags-list" class="tags-container">
+            <span class="empty-subtext">Sin etiquetas</span>
+          </div>
+        </div>
+
+        <!-- Módulo de Soporte / Tickets (condicional) -->
+        <div id="sec-support-ticket" class="section-card">
+          <div class="card-title">🎫 Estado del Ticket</div>
+          <div class="ticket-status-group">
+            <button class="btn-ticket" data-status="open">🟢 Abierto</button>
+            <button class="btn-ticket" data-status="pending">🟡 En Espera</button>
+            <button class="btn-ticket" data-status="resolved">⚪ Resuelto</button>
+          </div>
+        </div>
+
+        <!-- Módulo de Ventas / Pipeline (condicional) -->
+        <div id="sec-sales-pipeline" class="section-card">
+          <div class="card-title">💼 Pipeline Comercial</div>
+          <div class="pipeline-grid">
+            <div class="form-group full-width">
+              <label for="select-sales-stage">Etapa:</label>
+              <select id="select-sales-stage" class="form-control">
+                <option value="none">Sin Etapa Comercial</option>
+                <option value="lead">🌱 Lead / Contacto Nuevo</option>
+                <option value="contactado">💬 En Conversación</option>
+                <option value="propuesta">📄 Presupuesto Enviado</option>
+                <option value="negociacion">🤝 En Negociación</option>
+                <option value="ganado">🎉 Venta Concretada</option>
+                <option value="perdido">❌ Descartado</option>
+              </select>
+            </div>
+            <div class="form-group half-width">
+              <label for="input-deal-value">Valor ($):</label>
+              <input type="number" id="input-deal-value" class="form-control" placeholder="0.00" min="0" step="any">
+            </div>
+            <div class="form-group half-width">
+              <label for="input-followup-date">Seguimiento:</label>
+              <input type="date" id="input-followup-date" class="form-control">
+            </div>
+          </div>
+        </div>
+
+        <!-- Notas Privadas y Bitácora de Equipo -->
+        <div class="section-card">
+          <div class="section-title-row">
+            <span class="card-title">🔒 Nota Fijada (Resumen)</span>
+            <span id="notes-status" class="status-hint">Guardado ✓</span>
+          </div>
+          <textarea id="contact-notes" class="notes-textarea" placeholder="Escribe notas permanentes sobre este cliente..." rows="3"></textarea>
+
+          <div class="notes-log-section">
+            <div class="log-title">📋 Bitácora de Equipo (Hilo Rápido)</div>
+            <input type="text" id="input-new-note-log" class="form-control mb-1" placeholder="Agregar nota de seguimiento... [Enter]">
+            <div id="notes-log-list" class="notes-log-container">
+              <!-- Hilo de notas -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Plantillas de Respuesta Rápida -->
+        <div class="section-card">
+          <div class="section-title-row">
+            <span class="card-title">⚡ Respuestas Rápidas</span>
+            <span class="hint-pill">Clic copia al portapapeles</span>
+          </div>
+          <input type="text" id="input-filter-templates" class="form-control mb-2" placeholder="Buscar plantilla (ej. CBU, Saludo, Horarios)...">
+          <div id="templates-list" class="templates-list">
+            <!-- Plantillas dinámicas -->
+          </div>
+        </div>
+      </section>
+
+      <!-- PESTAÑA 2: FICHA -->
+      <section id="tab-card" class="tab-pane">
+        <!-- Entidades Comerciales Detectadas -->
+        <div class="section-card">
+          <div class="section-title-row">
+            <span class="card-title">📌 Datos Detectados en Mensajes</span>
+            <span class="hint-pill">1 Clic para copiar</span>
+          </div>
+          <div id="entities-container" class="entities-grid">
+            <div class="empty-subtext">No se han detectado CUITs, DNIs, emails ni cuentas bancarias aún en este chat.</div>
+          </div>
+        </div>
+
+        <!-- Historial de Precios Cotizados -->
+        <div class="section-card">
+          <div class="card-title">💰 Presupuestos y Precios Mencionados</div>
+          <div id="prices-history-list" class="prices-list">
+            <div class="empty-subtext">Sin precios detectados.</div>
+          </div>
+        </div>
+
+        <!-- Búsqueda FTS5 en la Conversación -->
+        <div class="section-card">
+          <div class="card-title">🔍 Buscar en este Chat</div>
+          <div class="search-input-group">
+            <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar palabras clave en mensajes...">
+            <button id="btn-search-chat" class="btn-primary">Buscar</button>
+          </div>
+          <div id="chat-search-results" class="search-results-list"></div>
+        </div>
+      </section>
+
+      <!-- PESTAÑA 3: RADAR -->
+      <section id="tab-radar" class="tab-pane">
+        <!-- Selector de Filtro de Radar -->
+        <div class="radar-toggle-bar">
+          <button id="btn-radar-unanswered" class="btn-filter active">
+            Pendientes (<span id="count-unanswered">0</span>)
+          </button>
+          <button id="btn-radar-sales" class="btn-filter">
+            Seguimientos (<span id="count-sales">0</span>)
+          </button>
+        </div>
+
+        <div class="radar-assign-filter">
+          <button class="btn-assign-filter active" data-assign="all">Todos</button>
+          <button class="btn-assign-filter" data-assign="mine">Mis chats</button>
+          <button class="btn-assign-filter" data-assign="unassigned">Sin asignar</button>
+        </div>
+
+        <!-- Lista de Contactos de Radar -->
+        <div id="radar-items-container" class="radar-list">
+          <div class="empty-subtext">Cargando radar...</div>
+        </div>
+
+        <!-- Panel Plegable de Conexión del Servidor -->
+        <div class="connection-accordion">
+          <button id="btn-toggle-connection" class="accordion-header">
+            <span>⚙️ Configuración del Servidor</span>
+            <span id="accordion-arrow">▼</span>
+          </button>
+          <div id="connection-body" class="accordion-body" style="display:none;">
+            <div class="form-group mb-2">
+              <label for="cfg-server-url">URL del Servidor (Local o IP LAN):</label>
+              <input type="text" id="cfg-server-url" class="form-control" placeholder="http://127.0.0.1:8080">
+            </div>
+            <div class="form-group mb-2">
+              <label for="cfg-office-pin">PIN de Oficina (Opcional):</label>
+              <input type="password" id="cfg-office-pin" class="form-control" placeholder="PIN de acceso LAN">
+            </div>
+            <div class="form-group mb-2">
+              <label for="cfg-operator-name">Nombre de Operador:</label>
+              <input type="text" id="cfg-operator-name" class="form-control" placeholder="Ej: Juan">
+            </div>
+            <div class="form-actions">
+              <button id="btn-save-cfg" class="btn-primary full-width">Guardar Configuración</button>
+            </div>
+            <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- TOAST DE NOTIFICACIÓN RÁPIDA -->
+  <div id="toast-notification" class="toast-popup" style="display:none;"></div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

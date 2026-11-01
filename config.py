@@ -19,7 +19,21 @@ import json
 import time
 import shutil
 import sqlite3
+import threading
+import socket
+import secrets
+import ipaddress
 from datetime import datetime
+
+# Caché en memoria para list_accounts con TTL de 5 segundos
+_ACCOUNTS_CACHE = {"data": None, "timestamp": 0.0}
+_ACCOUNTS_CACHE_LOCK = threading.Lock()
+
+def invalidate_accounts_cache():
+    """Invalida el caché en memoria de list_accounts()."""
+    with _ACCOUNTS_CACHE_LOCK:
+        _ACCOUNTS_CACHE["data"] = None
+        _ACCOUNTS_CACHE["timestamp"] = 0.0
 
 # Directorio raíz del proyecto
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +44,10 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # Directorio y archivo de logs de sincronización compartidos
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 SYNC_LOG_PATH = os.path.join(LOG_DIR, "sync.log")
+
+# Archivo de configuración global de nodo y red
+SYSTEM_SETTINGS_PATH = os.path.join(DATA_DIR, "system_settings.json")
+_SYSTEM_SETTINGS_LOCK = threading.Lock()
 
 # Rutas heredadas / por defecto
 DEFAULT_ACCOUNT_ID = "default"
@@ -45,6 +63,175 @@ MEDIA_SUBDIRS = {
     "video": os.path.join(MEDIA_DIR, "video"),
     "document": os.path.join(MEDIA_DIR, "documents"),
 }
+
+# Perfiles de uso de WAckup (Copiloto y CRM)
+VALID_WORKSPACE_PROFILES = ("backup_only", "support", "sales", "full")
+WORKSPACE_PROFILE_NAMES = {
+    "backup_only": "Solo Respaldo",
+    "support": "Atención y Soporte",
+    "sales": "Ventas y Mini-CRM",
+    "full": "Suite Completa (Soporte + Ventas)"
+}
+
+# RECORDATORIO: En desarrollo se usa "full" por defecto.
+# Al pasar a producción, migrar a la Opción C (preguntar en consola en el primer arranque).
+DEFAULT_WORKSPACE_PROFILE = "full"
+
+
+def generate_lan_pin():
+    """Genera un PIN numérico seguro de 6 dígitos."""
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+def get_system_settings():
+    """
+    Obtiene la configuración global de red y nodo de data/system_settings.json.
+    Si no existe, la inicializa con valores por defecto seguros:
+    - network_mode: 'local' (127.0.0.1)
+    - lan_pin: PIN numérico de 6 dígitos
+    - known_operators: []
+    """
+    ensure_data_dirs()
+    with _SYSTEM_SETTINGS_LOCK:
+        if os.path.isfile(SYSTEM_SETTINGS_PATH):
+            try:
+                with open(SYSTEM_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        # Asegurar campos requeridos
+                        if "network_mode" not in data or data["network_mode"] not in ("local", "lan"):
+                            data["network_mode"] = "local"
+                        if not data.get("lan_pin"):
+                            data["lan_pin"] = generate_lan_pin()
+                        if "known_operators" not in data or not isinstance(data["known_operators"], list):
+                            data["known_operators"] = []
+                        if "onboarding_completed" not in data:
+                            data["onboarding_completed"] = False
+                        return data
+            except Exception:
+                pass
+
+        # Configuración por defecto
+        default_settings = {
+            "network_mode": "local",
+            "lan_pin": generate_lan_pin(),
+            "known_operators": [],
+            "onboarding_completed": False
+        }
+        try:
+            with open(SYSTEM_SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(default_settings, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return default_settings
+
+
+def save_system_settings(settings):
+    """Guarda la configuración global del sistema en data/system_settings.json."""
+    if not isinstance(settings, dict):
+        return False
+    ensure_data_dirs()
+    with _SYSTEM_SETTINGS_LOCK:
+        try:
+            with open(SYSTEM_SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+
+def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, onboarding_completed=None):
+    """Actualiza campos específicos de la configuración global de forma thread-safe."""
+    settings = get_system_settings()
+    changed = False
+
+    if network_mode in ("local", "lan") and settings.get("network_mode") != network_mode:
+        settings["network_mode"] = network_mode
+        changed = True
+
+    if lan_pin is not None:
+        pin_str = str(lan_pin).strip()
+        if re.match(r"^\d{4,8}$", pin_str):
+            settings["lan_pin"] = pin_str
+            changed = True
+
+    if add_operator:
+        op = str(add_operator).strip()
+        if op and op not in settings.get("known_operators", []):
+            settings.setdefault("known_operators", []).append(op)
+            changed = True
+
+    if remove_operator:
+        op = str(remove_operator).strip()
+        if op in settings.get("known_operators", []):
+            settings["known_operators"].remove(op)
+            changed = True
+
+    if onboarding_completed is not None:
+        val = bool(onboarding_completed)
+        if settings.get("onboarding_completed") != val:
+            settings["onboarding_completed"] = val
+            changed = True
+
+    if changed:
+        save_system_settings(settings)
+    return settings
+
+
+def get_local_ip_addresses():
+    """
+    Detecta las direcciones IPv4 privadas reales de las placas de red de la PC anfitriona.
+    Devuelve una lista ordenada con las IPs de LAN prioritarias primero (ej. 192.168.x.x, 10.x.x.x).
+    """
+    ips = []
+    # 1. Método UDP hacia gateway para detectar la interfaz principal de salida
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        primary_ip = s.getsockname()[0]
+        s.close()
+        if primary_ip and not primary_ip.startswith("127.") and primary_ip not in ips:
+            ips.append(primary_ip)
+    except Exception:
+        pass
+
+    # 2. Exploración de interfaces mediante hostname
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None):
+            addr = info[4][0]
+            if ":" not in addr and not addr.startswith("127.") and addr not in ips:
+                ips.append(addr)
+    except Exception:
+        pass
+
+    # Ordenar priorizando subredes privadas estándar RFC1918 (192.168.*, 10.*, 172.16-31.*)
+    def ip_priority(ip_str):
+        if ip_str.startswith("192.168."):
+            return 0
+        if ip_str.startswith("10."):
+            return 1
+        if ip_str.startswith("172."):
+            return 2
+        return 3
+
+    return sorted(ips, key=ip_priority)
+
+
+def is_private_ip(ip_str):
+    """Verifica si una dirección IP o host pertenece a una subred privada RFC1918 o loopback."""
+    if not ip_str:
+        return False
+    clean_ip = ip_str.strip().lower()
+    if clean_ip in ("127.0.0.1", "localhost", "::1"):
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(clean_ip)
+        return ip_obj.is_private or ip_obj.is_loopback
+    except Exception:
+        # Puede ser un hostname local
+        return clean_ip.endswith(".local") or clean_ip.endswith(".lan")
 
 
 def sanitize_account_id(account_id):
@@ -138,7 +325,7 @@ def ensure_data_dirs():
     os.makedirs(LOG_DIR, exist_ok=True)
 
 
-def save_account_metadata(account_id, name=None, phone=None):
+def save_account_metadata(account_id, name=None, phone=None, workspace_profile=None):
     """Guarda o actualiza el archivo account.json para la cuenta indicada."""
     if not account_id:
         return
@@ -146,6 +333,7 @@ def save_account_metadata(account_id, name=None, phone=None):
         d = name
         name = d.get("name")
         phone = d.get("phone") or phone
+        workspace_profile = d.get("workspace_profile") or workspace_profile
     ensure_account_dirs(account_id)
     meta_path = os.path.join(get_account_dir(account_id), "account.json")
     data = {}
@@ -167,6 +355,11 @@ def save_account_metadata(account_id, name=None, phone=None):
     elif "name" not in data:
         data["name"] = f"+{data['phone']}" if data.get("phone") else data["id"]
 
+    if workspace_profile and workspace_profile in VALID_WORKSPACE_PROFILES:
+        data["workspace_profile"] = workspace_profile
+    elif "workspace_profile" not in data:
+        data["workspace_profile"] = DEFAULT_WORKSPACE_PROFILE
+
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if "created_at" not in data:
         data["created_at"] = now_str
@@ -175,15 +368,107 @@ def save_account_metadata(account_id, name=None, phone=None):
     try:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        invalidate_accounts_cache()
     except Exception:
         pass
 
 
-def list_accounts():
+def get_account_profile(account_id=None):
+    """
+    Obtiene el perfil de trabajo activo para la cuenta dada.
+    Si no está configurado o es inválido, retorna DEFAULT_WORKSPACE_PROFILE.
+    """
+    if not account_id:
+        try:
+            accounts = list_accounts()
+            real = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+            if real:
+                account_id = real[0]["id"]
+            elif accounts:
+                account_id = accounts[0]["id"]
+            else:
+                account_id = DEFAULT_ACCOUNT_ID
+        except Exception:
+            account_id = DEFAULT_ACCOUNT_ID
+
+    aid = sanitize_account_id(account_id)
+    meta_path = os.path.join(get_account_dir(aid), "account.json")
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                prof = data.get("workspace_profile")
+                if prof in VALID_WORKSPACE_PROFILES:
+                    return prof
+        except Exception:
+            pass
+    return DEFAULT_WORKSPACE_PROFILE
+
+
+def set_account_profile(account_id=None, profile=None):
+    """
+    Establece el perfil de trabajo en account.json para la cuenta dada.
+    Retorna True si tuvo éxito, False en caso contrario.
+    Acepta tanto (account_id, profile) como (profile, account_id) de forma robusta.
+    """
+    # Detectar intercambio de orden de argumentos
+    if account_id in VALID_WORKSPACE_PROFILES and (profile not in VALID_WORKSPACE_PROFILES or profile is None):
+        account_id, profile = profile, account_id
+
+    if not account_id:
+        try:
+            accounts = list_accounts()
+            real = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+            if real:
+                account_id = real[0]["id"]
+            elif accounts:
+                account_id = accounts[0]["id"]
+            else:
+                account_id = DEFAULT_ACCOUNT_ID
+        except Exception:
+            account_id = DEFAULT_ACCOUNT_ID
+
+    aid = sanitize_account_id(account_id)
+    if profile not in VALID_WORKSPACE_PROFILES:
+        profile = DEFAULT_WORKSPACE_PROFILE
+    ensure_account_dirs(aid)
+    meta_path = os.path.join(get_account_dir(aid), "account.json")
+    data = {}
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    data["id"] = aid
+    data["workspace_profile"] = profile
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if "created_at" not in data:
+        data["created_at"] = now_str
+    data["updated_at"] = now_str
+
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        invalidate_accounts_cache()
+        return True
+    except Exception:
+        return False
+
+
+def list_accounts(force_refresh=False):
     """
     Descubre y devuelve todas las cuentas disponibles en data/.
     Retorna una lista de diccionarios con metadatos de cada cuenta.
+    Utiliza un caché en memoria con TTL de 5 segundos para evitar consultas SQLite repetitivas.
     """
+    now = time.time()
+    if not force_refresh:
+        with _ACCOUNTS_CACHE_LOCK:
+            if _ACCOUNTS_CACHE["data"] is not None and (now - _ACCOUNTS_CACHE["timestamp"] < 5.0):
+                return [dict(a) for a in _ACCOUNTS_CACHE["data"]]
+
     accounts = []
     if not os.path.isdir(DATA_DIR):
         return accounts
@@ -243,6 +528,10 @@ def list_accounts():
         if aid == DEFAULT_ACCOUNT_ID and total_msgs == 0:
             continue
 
+        w_prof = meta.get("workspace_profile")
+        if w_prof not in VALID_WORKSPACE_PROFILES:
+            w_prof = DEFAULT_WORKSPACE_PROFILE
+
         accounts.append({
             "id": aid,
             "name": name,
@@ -252,7 +541,9 @@ def list_accounts():
             "total_messages": total_msgs,
             "total_chats": total_chats,
             "last_timestamp": last_ts,
-            "updated_at": meta.get("updated_at") or ""
+            "updated_at": meta.get("updated_at") or "",
+            "workspace_profile": w_prof,
+            "workspace_profile_label": WORKSPACE_PROFILE_NAMES.get(w_prof, w_prof)
         })
 
     # Si hay cuentas reales identificadas y con mensajes, descartar 'default' huérfana
@@ -303,6 +594,9 @@ def list_accounts():
 
     # Ordenar por último timestamp o actividad reciente descendente
     accounts.sort(key=lambda a: (a["last_timestamp"] or 0, a["updated_at"] or ""), reverse=True)
+    with _ACCOUNTS_CACHE_LOCK:
+        _ACCOUNTS_CACHE["data"] = [dict(a) for a in accounts]
+        _ACCOUNTS_CACHE["timestamp"] = time.time()
     return accounts
 
 
@@ -557,27 +851,58 @@ def migrate_single_to_multi_account(account_id, name=None, phone=None):
     save_account_metadata(account_id, name=name, phone=phone)
 
 
-def backup_all_databases():
-    """Genera copias preventivas de seguridad para todas las cuentas antes de una actualización."""
-    accounts = list_accounts()
+def backup_all_databases(target_base_dir=None):
+    """
+    Genera copias preventivas de seguridad para todas las cuentas antes de una actualización
+    utilizando sqlite3.Connection.backup() para garantizar consistencia atómica completa con WAL.
+    """
+    base_data = os.path.join(target_base_dir, "data") if target_base_dir else DATA_DIR
     ts = int(time.time())
     backed_up = 0
-    if not accounts:
-        if os.path.isfile(DB_FILE):
-            os.makedirs(BACKUP_DIR, exist_ok=True)
-            bak = os.path.join(BACKUP_DIR, f"db_backup_pre_update_{ts}.db")
-            shutil.copy2(DB_FILE, bak)
-            backed_up += 1
+
+    def _do_sqlite_backup(src_db, dst_bak):
+        os.makedirs(os.path.dirname(dst_bak), exist_ok=True)
+        try:
+            with sqlite3.connect(src_db) as src_conn:
+                with sqlite3.connect(dst_bak) as dst_conn:
+                    src_conn.backup(dst_conn)
+            return True
+        except Exception:
+            try:
+                shutil.copy2(src_db, dst_bak)
+                return True
+            except Exception:
+                return False
+
+    if target_base_dir:
+        for root, dirs, files in os.walk(base_data):
+            if "backups" in dirs:
+                dirs.remove("backups")
+            for file in files:
+                if file.endswith(".db") and not file.startswith("db_backup_"):
+                    dbp = os.path.join(root, file)
+                    bak_dir = os.path.join(root, "backups")
+                    dst_bak = os.path.join(bak_dir, f"db_backup_pre_update_{ts}_{file}")
+                    if _do_sqlite_backup(dbp, dst_bak):
+                        backed_up += 1
     else:
-        for acc in accounts:
-            dbp = acc.get("db_path")
-            if dbp and os.path.isfile(dbp):
-                bdir = os.path.join(acc["dir"], "backups")
-                os.makedirs(bdir, exist_ok=True)
-                bak = os.path.join(bdir, f"db_backup_pre_update_{ts}.db")
-                shutil.copy2(dbp, bak)
-                backed_up += 1
+        accounts = list_accounts()
+        if not accounts:
+            if os.path.isfile(DB_FILE):
+                os.makedirs(BACKUP_DIR, exist_ok=True)
+                bak = os.path.join(BACKUP_DIR, f"db_backup_pre_update_{ts}.db")
+                if _do_sqlite_backup(DB_FILE, bak):
+                    backed_up += 1
+        else:
+            for acc in accounts:
+                dbp = acc.get("db_path")
+                if dbp and os.path.isfile(dbp):
+                    bdir = os.path.join(acc["dir"], "backups")
+                    bak = os.path.join(bdir, f"db_backup_pre_update_{ts}.db")
+                    if _do_sqlite_backup(dbp, bak):
+                        backed_up += 1
     print(f"[OK] Copia preventiva de seguridad creada para {backed_up} cuenta(s).")
+    return backed_up
 
 
 def migrate_legacy_data():

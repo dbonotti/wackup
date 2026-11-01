@@ -33,8 +33,19 @@ venv/
 *.json
 !extension/manifest.json
 
-# Capturas y archivos de depuración local
+# Capturas, documentos internos de planificación y depuración local
 Errores/
+scratch/
+.restart_flag
+PLAN_EVOLUCION_WACKUP_V3.md
+PROMPTS_WACKUP_V3.md
+
+# Paquetes de distribución y runtime embebido de Python
+runtime/
+dist/
+tools/.cache/
 
 # Exportaciones HTML de chats (evitar subir conversaciones exportadas por error)
 *.html
+!web/*.html
+!extension/**/*.html

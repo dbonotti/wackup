@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WAckup - Visor</title>
+  <link rel="icon" type="image/jpeg" href="/favicon.jpg">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div id="app-container">
+
+    <!-- 1. Barra Lateral de Navegación Fija (App Rail - 58px) -->
+    <nav id="app-rail" class="app-rail" aria-label="Navegación principal de WAckup">
+      <div class="rail-top">
+        <div class="rail-brand" title="WAckup 3.0 - Sistema Local">
+          <img class="rail-logo" src="/favicon.jpg" alt="WAckup">
+        </div>
+        <div class="rail-divider"></div>
+        <button type="button" class="rail-btn active" id="railBtnConversations" onclick="switchWorkspaceView('conversations')" title="Conversaciones (Alt+1)">
+          <span class="rail-icon">💬</span>
+          <span class="rail-tooltip">Conversaciones (Alt+1)</span>
+        </button>
+        <button type="button" class="rail-btn" id="railBtnCrm" onclick="switchWorkspaceView('crm')" title="Gestión CRM (Alt+2)">
+          <span class="rail-icon">📊</span>
+          <span class="rail-tooltip">Gestión CRM (Alt+2)</span>
+        </button>
+        <button type="button" class="rail-btn" id="railBtnTemplates" onclick="switchWorkspaceView('templates')" title="Plantillas y Etiquetas (Alt+3)">
+          <span class="rail-icon">⚡</span>
+          <span class="rail-tooltip">Plantillas y Etiquetas (Alt+3)</span>
+        </button>
+        <button type="button" class="rail-btn" id="railBtnSystem" onclick="switchWorkspaceView('system')" title="Sistema y Red (Alt+4)">
+          <span class="rail-icon">⚙️</span>
+          <span class="rail-tooltip">Sistema y Red (Alt+4)</span>
+        </button>
+      </div>
+
+      <div class="rail-bottom">
+        <button type="button" class="rail-btn" id="railThemeBtn" onclick="toggleTheme()" title="Modo claro / oscuro">
+          <span class="rail-icon" id="themeMenuIcon">🌙</span>
+          <span class="rail-tooltip" id="themeMenuText">Modo oscuro</span>
+        </button>
+        <div class="rail-version" title="WAckup versión 3.0.0">v3.0</div>
+      </div>
+    </nav>
+
+    <!-- 2. Contenedor de Espacios de Trabajo -->
+    <main id="workspace-container" class="workspace-container">
+
+      <!-- ========================================== -->
+      <!-- ESPACIO 1: CONVERSACIONES Y CHATS (Alt+1) -->
+      <!-- ========================================== -->
+      <section id="view-conversations" class="workspace-view active">
+        <!-- Columna izquierda: Lista de chats y buscador único -->
+        <aside id="sidebar">
+          <div class="sidebar-header">
+            <div class="brand-title">
+              <span>Chats</span>
+            </div>
+            <div class="sidebar-actions">
+              <div class="account-selector-container" id="accountSelectorContainer" style="display: none;">
+                <div class="account-badge" id="accountSelectorBtn" onclick="toggleAccountDropdown(event)" title="Cuenta activa. Haz clic para cambiar de cuenta.">
+                  <span class="account-icon">📱</span>
+                  <span class="account-label" id="currentAccountLabel">Cuenta</span>
+                  <span class="account-arrow" id="accountSelectorArrow" style="display: none;">▾</span>
+                </div>
+                <div class="dropdown-menu account-dropdown" id="accountDropdown"></div>
+              </div>
+
+              <div class="sync-badge" id="syncStatusBadge" onclick="switchWorkspaceView('system')" title="Ver estado de sincronización y multimedia">
+                <div class="sync-dot"></div>
+                <span id="syncStatusText">Conectado</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Buscador Único Unificado -->
+          <div class="search-section">
+            <div class="search-box-wrapper">
+              <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+              <input type="text" id="searchInput" class="search-box" placeholder="Buscar contactos o en todo el historial..." oninput="handleSearchInput()">
+              <button type="button" id="searchClearBtn" class="search-clear-btn" onclick="clearSearchInput()" title="Limpiar búsqueda">✕</button>
+            </div>
+          </div>
+
+          <!-- Lista de Chats (cuando no hay búsqueda) -->
+          <ul id="chat-list"></ul>
+
+          <!-- Contenedor Unificado de Resultados de Búsqueda (cuando hay búsqueda) -->
+          <div id="unified-search-results" style="display: none; flex: 1; overflow-y: auto;">
+            <div class="search-results-group" id="unifiedContactsGroup">
+              <div class="search-group-header">👤 Contactos y Grupos coincidentes</div>
+              <ul id="unified-contacts-list" class="search-group-list"></ul>
+            </div>
+            <div class="search-results-group" id="unifiedMessagesGroup">
+              <div class="search-group-header">💬 Mensajes encontrados en todo el historial (FTS5)</div>
+              <ul id="search-results-list" class="search-group-list"></ul>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Área Central de Chat y Lectura -->
+        <div id="main-chat">
+          <div id="chat-header" style="display: none;">
+            <div class="header-left">
+              <div class="chat-avatar" id="headerAvatar"></div>
+              <div id="header-info">
+                <h3 id="headerTitle">Contacto</h3>
+                <p id="headerSub">Identificador</p>
+              </div>
+            </div>
+            <div class="header-actions">
+              <button class="btn-chat-copilot" id="btnChatCopilot" onclick="toggleChatCopilot()" title="Ficha CRM y Copiloto del contacto">
+                <span>🧭</span>
+                <span class="btn-chat-copilot-label">Copiloto</span>
+              </button>
+              <div class="menu-container">
+                <button class="btn-kebab" id="chatMenuBtn" onclick="toggleDropdown('chatDropdown', this, event)" title="Opciones del chat">
+                  <svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-.001-4.001A2 2 0 0 0 12 7zm0 2a2 2 0 1 0-.001 3.999A2 2 0 0 0 12 9zm0 6a2 2 0 1 0-.001 3.999A2 2 0 0 0 12 15z"/></svg>
+                </button>
+                <div class="dropdown-menu" id="chatDropdown">
+                  <button class="dropdown-item" onclick="closeAllDropdowns(); toggleChatFilterBar();">
+                    <span>📅</span>
+                    <span id="chatFilterMenuText">Buscar por fecha y multimedia</span>
+                  </button>
+                  <div class="dropdown-divider"></div>
+                  <button class="dropdown-item" onclick="closeAllDropdowns(); exportCurrentChat(false);">
+                    <span>📥</span>
+                    <span>Exportar chat a HTML (ligero)</span>
+                  </button>
+                  <button class="dropdown-item" onclick="closeAllDropdowns(); exportCurrentChat(true);">
+                    <span>📦</span>
+                    <span>Exportar autónomo (con multimedia)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Alerta de Presencia Anti-Colisión en Chat -->
+          <div id="chatPresenceBanner" class="presence-alert-banner" style="display: none;">
+            <span>👁️</span> <span id="chatPresenceUser">Ana</span> está viendo este chat ahora
+          </div>
+
+          <!-- Barra Plegable de Filtros del Chat -->
+          <div id="chat-filter-bar" style="display: none;">
+            <div class="filter-pills">
+              <span class="filter-pill active" onclick="setMediaFilter(null, this)">Todos</span>
+              <span class="filter-pill" onclick="setMediaFilter('image', this)">📷 Fotos</span>
+              <span class="filter-pill" onclick="setMediaFilter('audio', this)">🎤 Audios</span>
+              <span class="filter-pill" onclick="setMediaFilter('document', this)">📄 Documentos</span>
+              <span class="filter-pill" onclick="setMediaFilter('video', this)">🎬 Videos</span>
+            </div>
+            <div class="filter-dates">
+              <span>Desde:</span>
+              <input type="date" id="filterDateFrom" class="date-input" onchange="applyDateFilter()">
+              <span>Hasta:</span>
+              <input type="date" id="filterDateTo" class="date-input" onchange="applyDateFilter()">
+              <button type="button" class="filter-pill" onclick="closeChatFilterBar()" title="Cerrar y limpiar filtros" style="margin-left: 4px;">✕ Cerrar</button>
+            </div>
+          </div>
+
+          <!-- Cuerpo de mensajes + Drawer de Copiloto deslizable/acoplado -->
+          <div id="chat-body-area">
+            <div id="messages-container" style="display: none;"></div>
+            <div id="copilot-backdrop" onclick="toggleChatCopilot(false)" style="display: none;"></div>
+
+            <!-- Drawer Copiloto CRM dentro del Visor -->
+            <aside id="chat-copilot-drawer" class="chat-copilot-drawer" style="display: none;">
+              <div class="copilot-drawer-header">
+                <div class="copilot-drawer-title">
+                  <span>🧭</span>
+                  <span>Copiloto CRM</span>
+                  <span id="copilotProfilePill" class="copilot-mini-pill">Suite</span>
+                </div>
+                <button class="copilot-drawer-close" onclick="toggleChatCopilot(false)" title="Cerrar panel del Copiloto">✕</button>
+              </div>
+
+              <div class="copilot-drawer-body">
+                <!-- Alerta de Presencia Anti-Colisión en Drawer -->
+                <div id="drawerPresenceBanner" class="presence-alert-banner" style="display: none; margin: 0 0 10px 0;">
+                  <span>👁️</span> <span id="drawerPresenceUser">Ana</span> está viendo este chat ahora
+                </div>
+
+                <!-- Métricas SLA & Guardado -->
+                <div class="copilot-card copilot-card-meta">
+                  <div class="copilot-meta-item">
+                    <span class="copilot-meta-lbl">⏱️ SLA Respuesta:</span>
+                    <span class="copilot-meta-val" id="copilotSlaVal">--</span>
+                  </div>
+                  <div class="copilot-meta-item" id="copilotSaveIndicator" style="display: none; color: #10b981; font-weight: 600; font-size: 11.5px;">
+                    <span>Guardado ✓</span>
+                  </div>
+                </div>
+
+                <!-- Responsable Asignado -->
+                <div class="copilot-card">
+                  <div class="copilot-card-title">👤 Responsable Asignado</div>
+                  <select id="copilotAssignedSelect" class="search-box" onchange="saveCopilotAssignment()" style="width: 100%;">
+                    <option value="">Sin asignar</option>
+                  </select>
+                </div>
+
+                <!-- Soporte: Estado del Ticket -->
+                <div class="copilot-card" id="copilotSecTicket">
+                  <div class="copilot-card-title">🎧 Estado de Ticket</div>
+                  <div class="copilot-pill-group">
+                    <button type="button" class="copilot-pill-btn" id="btnTicket-open" onclick="setCopilotTicket('open')">🟢 Abierto</button>
+                    <button type="button" class="copilot-pill-btn" id="btnTicket-pending" onclick="setCopilotTicket('pending')">🟡 En Espera</button>
+                    <button type="button" class="copilot-pill-btn" id="btnTicket-resolved" onclick="setCopilotTicket('resolved')">⚪ Resuelto</button>
+                    <button type="button" class="copilot-pill-btn" id="btnTicket-none" onclick="setCopilotTicket('none')" title="Limpiar estado">✕</button>
+                  </div>
+                </div>
+
+                <!-- Ventas: Embudo Comercial -->
+                <div class="copilot-card" id="copilotSecSales">
+                  <div class="copilot-card-title">💼 Embudo Comercial</div>
+                  <div class="copilot-pill-group">
+                    <button type="button" class="copilot-pill-btn" id="btnStage-lead" onclick="setCopilotStage('lead')">🎯 Lead</button>
+                    <button type="button" class="copilot-pill-btn" id="btnStage-quoted" onclick="setCopilotStage('quoted')">💬 Cotiz.</button>
+                    <button type="button" class="copilot-pill-btn" id="btnStage-won" onclick="setCopilotStage('won')">🟢 Ganada</button>
+                    <button type="button" class="copilot-pill-btn" id="btnStage-lost" onclick="setCopilotStage('lost')">🔴 Perdida</button>
+                    <button type="button" class="copilot-pill-btn" id="btnStage-none" onclick="setCopilotStage('none')" title="Limpiar etapa">✕</button>
+                  </div>
+                  <div class="copilot-inputs-row">
+                    <div class="copilot-field">
+                      <label>Valor Est. ($)</label>
+                      <input type="number" id="copilotValueInput" placeholder="0.00" onchange="saveCopilotPipeline()" onblur="saveCopilotPipeline()">
+                    </div>
+                    <div class="copilot-field">
+                      <label>Seguimiento</label>
+                      <input type="date" id="copilotFollowUpInput" onchange="saveCopilotPipeline()">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Notas Privadas (Nota Fijada con bloqueo optimista) -->
+                <div class="copilot-card">
+                  <div class="copilot-card-title" style="display: flex; justify-content: space-between;">
+                    <span>🔒 Nota Fijada (Resumen)</span>
+                    <span id="copilotNotesFeedback" style="font-size: 10.5px; color: var(--text-time); font-weight: normal;"></span>
+                  </div>
+                  <textarea id="copilotNotesTextarea" class="copilot-textarea" placeholder="Notas permanentes sobre este contacto..." rows="3" oninput="handleCopilotNotesInput()" onblur="saveCopilotNotesImmediate()"></textarea>
+                </div>
+
+                <!-- Bitácora de Equipo (Hilo Rápido) -->
+                <div class="copilot-card">
+                  <div class="copilot-card-title">📋 Bitácora de Equipo (Hilo Rápido)</div>
+                  <input type="text" id="copilotNoteLogInput" class="search-box" placeholder="Agregar nota de seguimiento... Enter" onkeydown="handleNoteLogKeydown(event)" style="margin-bottom: 8px;">
+                  <div id="copilotNotesLogContainer" class="notes-log-list">
+                    <span style="font-size: 11.5px; color: var(--text-muted);">Sin notas en bitácora</span>
+                  </div>
+                </div>
+
+                <!-- Etiquetas de Contacto -->
+                <div class="copilot-card" id="copilotSecTags">
+                  <div class="copilot-card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>🏷️ Etiquetas</span>
+                    <button type="button" class="btn-card-action" onclick="addCopilotTagPrompt()" style="padding: 2px 8px; font-size: 11px;">+ Etiqueta</button>
+                  </div>
+                  <div id="copilotTagsContainer" style="display: flex; flex-wrap: wrap; gap: 4px; padding-top: 4px;">
+                    <div style="font-size: 11.5px; color: var(--text-muted);">Sin etiquetas</div>
+                  </div>
+                </div>
+
+                <!-- Ficha del Cliente (Regex: CUIT, Emails, Bancarios) -->
+                <div class="copilot-card" id="copilotSecEntities">
+                  <div class="copilot-card-title">📋 Ficha del Cliente</div>
+                  <div id="copilotEntitiesContainer" style="display: flex; flex-direction: column;">
+                    <div style="font-size: 11.5px; color: var(--text-muted); padding: 4px 0;">Sin datos detectados en este chat.</div>
+                  </div>
+                </div>
+
+                <!-- Precios Cotizados Históricos -->
+                <div class="copilot-card" id="copilotSecPrices">
+                  <div class="copilot-card-title">💵 Precios Cotizados Históricos</div>
+                  <div id="copilotPricesContainer" style="display: flex; flex-direction: column;">
+                    <div style="font-size: 11.5px; color: var(--text-muted); padding: 4px 0;">Sin precios registrados en mensajes.</div>
+                  </div>
+                </div>
+
+                <!-- Respuestas Rápidas -->
+                <div class="copilot-card" id="copilotSecTemplates">
+                  <div class="copilot-card-title">⚡ Respuestas Rápidas (Portapapeles)</div>
+                  <div id="copilotTemplatesContainer" style="display: flex; flex-direction: column;">
+                    <div style="font-size: 11.5px; color: var(--text-muted); padding: 4px 0;">Cargando plantillas...</div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <!-- Estado inicial cuando no hay chat seleccionado -->
+          <div id="empty-state">
+            <h2>WAckup</h2>
+            <p>Selecciona una conversación a la izquierda o utiliza el buscador indexado de texto completo.</p>
+            <p id="dbStatsText" style="margin-top: 14px; font-size: 13px; color: var(--text-time);"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- ESPACIO 2: GESTIÓN CRM (Alt+2)             -->
+      <!-- ========================================== -->
+      <section id="view-crm" class="workspace-view" style="display: none;">
+        <div class="crm-navbar">
+          <div class="crm-nav-left">
+            <button class="btn-back-chats" onclick="switchWorkspaceView('conversations')" title="Volver a chats">
+              <span>←</span>
+              <span>Chats</span>
+            </button>
+            <div class="crm-brand-title">
+              <span>📊 Gestión CRM</span>
+              <span id="crmProfilePill" class="crm-profile-pill">Suite Completa</span>
+            </div>
+          </div>
+
+          <div class="crm-tabs">
+            <button class="crm-tab active" id="crmTabBtn-kanban" onclick="switchCrmTab('kanban')">
+              <span>📌</span> <span>Tablero Kanban</span>
+            </button>
+            <button class="crm-tab" id="crmTabBtn-rfm" onclick="switchCrmTab('rfm')">
+              <span>🤝</span> <span>Reactivación RFM</span>
+            </button>
+            <button class="crm-tab" id="crmTabBtn-sla" onclick="switchCrmTab('sla')">
+              <span>⏱️</span> <span>Métricas SLA & Horarios</span>
+            </button>
+            <button class="crm-tab" id="crmTabBtn-demand" onclick="switchCrmTab('demand')">
+              <span>🔥</span> <span>Termómetro Demanda</span>
+            </button>
+          </div>
+
+          <div class="sidebar-actions" style="margin-left: auto;">
+            <div class="account-badge" onclick="toggleAccountDropdown(event)" title="Cuenta activa">
+              <span class="account-icon">📱</span>
+              <span class="account-label" id="crmAccountLabel">Cuenta</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="crm-content">
+          <!-- 1. Pestaña Kanban -->
+          <div id="crmSection-kanban" class="crm-section">
+            <div class="kanban-toolbar">
+              <div class="kanban-type-switcher">
+                <button class="kanban-type-btn active" id="btnKanbanSales" onclick="setKanbanType('sales')">💼 Embudo Comercial (Ventas)</button>
+                <button class="kanban-type-btn" id="btnKanbanSupport" onclick="setKanbanType('support')">🎧 Tickets de Atención (Soporte)</button>
+              </div>
+              <div class="kanban-filter-assigned">
+                <button class="kanban-filter-btn active" id="btnKanbanAssign-all" onclick="setKanbanAssignedFilter('all')">Todos</button>
+                <button class="kanban-filter-btn" id="btnKanbanAssign-mine" onclick="setKanbanAssignedFilter('mine')">Mis chats</button>
+                <button class="kanban-filter-btn" id="btnKanbanAssign-unassigned" onclick="setKanbanAssignedFilter('unassigned')">Sin asignar</button>
+              </div>
+              <div class="kanban-stats-bar" id="kanbanStatsBar">
+                <span>Cargando tablero...</span>
+              </div>
+            </div>
+            <div class="kanban-columns" id="kanbanColumnsContainer">
+              <div style="padding: 30px; text-align: center; color: var(--text-muted);">Cargando columnas...</div>
+            </div>
+          </div>
+
+          <!-- 2. Pestaña RFM Reactivación -->
+          <div id="crmSection-rfm" class="crm-section" style="display: none;">
+            <div class="rfm-header-desc">
+              <div>
+                <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 4px;">🤝 Campaña de Reactivación 1 a 1 ("5 Clientes a Saludar Hoy")</h3>
+                <p style="font-size: 13px; color: var(--text-secondary);">Clientes valiosos con historial relevante que llevan más de 30 o 45 días sin interacción. Reactivación humana 100% personalizada y segura sin riesgo de baneo por spam.</p>
+              </div>
+              <button class="btn-card-action" onclick="loadRfmDormant()" style="padding: 6px 12px; font-size: 12px;">🔄 Actualizar Lista</button>
+            </div>
+            <div class="rfm-grid" id="rfmCardsContainer">
+              <div style="padding: 30px; text-align: center; color: var(--text-muted);">Consultando clientes inactivos...</div>
+            </div>
+          </div>
+
+          <!-- 3. Pestaña Métricas SLA & Heatmap -->
+          <div id="crmSection-sla" class="crm-section" style="display: none;">
+            <div class="metrics-grid-kpi">
+              <div class="kpi-card">
+                <div class="kpi-num" id="kpiSlaText">--</div>
+                <div class="kpi-lbl">SLA Promedio de Respuesta</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-num" id="kpiTicketsOpen" style="color: #38bdf8;">0</div>
+                <div class="kpi-lbl">Tickets Abiertos / En Espera</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-num" id="kpiTicketsResolved" style="color: #10b981;">0</div>
+                <div class="kpi-lbl">Tickets Resueltos</div>
+              </div>
+            </div>
+
+            <div class="heatmap-card">
+              <div class="heatmap-header">
+                <div class="heatmap-title">🔥 Mapa de Calor de Mensajes Entrantes (Horarios Pico)</div>
+                <div class="heatmap-peak-badge" id="heatmapPeakBadge">Calculando horarios pico...</div>
+              </div>
+              <div class="heatmap-container" id="heatmapContainer">
+                <div style="padding: 30px; text-align: center; color: var(--text-muted);">Generando matriz 7x24 de mensajes...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Pestaña Termómetro de Demanda -->
+          <div id="crmSection-demand" class="crm-section" style="display: none;">
+            <div class="rfm-header-desc">
+              <div>
+                <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 4px;">🔥 Termómetro de Demanda Comercial</h3>
+                <p style="font-size: 13px; color: var(--text-secondary);">Términos y conceptos más consultados en mensajes entrantes de clientes en los últimos 60 días. Haz clic en cualquier término para buscarlo al instante.</p>
+              </div>
+              <button class="btn-card-action" onclick="loadDemandThermometer()" style="padding: 6px 12px; font-size: 12px;">🔄 Recalcular Demanda</button>
+            </div>
+            <div class="demand-cloud" id="demandCloudContainer">
+              <div style="color: var(--text-muted); font-size: 13px;">Extrayendo conceptos clave...</div>
+            </div>
+            <div class="demand-table-card">
+              <table class="crm-table">
+                <thead>
+                  <tr>
+                    <th>Concepto / Palabra Clave</th>
+                    <th>Menciones</th>
+                    <th>Relevancia</th>
+                    <th>Acción</th>
+                  </tr>
+                </thead>
+                <tbody id="demandTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- ESPACIO 3: PLANTILLAS Y ETIQUETAS (Alt+3) -->
+      <!-- ========================================== -->
+      <section id="view-templates" class="workspace-view" style="display: none;">
+        <div class="view-header-bar">
+          <div class="view-header-title">
+            <span>⚡ Plantillas Rápidas y Etiquetas</span>
+            <span class="sub-label">Gestión centralizada para respuestas rápidas y clasificación de contactos</span>
+          </div>
+          <div class="view-header-actions">
+            <button class="btn-primary" onclick="openNewTemplateDialog()">+ Nueva Plantilla</button>
+          </div>
+        </div>
+
+        <div class="templates-workspace-content">
+          <!-- Tarjeta 1: Tabla de Plantillas -->
+          <div class="workspace-card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">Plantillas de Respuesta Rápida</h3>
+                <p class="card-subtitle">Usa el atajo (ej. <code>/precio</code>) en el Copiloto o cópialo con 1 clic al portapapeles para pegarlo en WhatsApp Web.</p>
+              </div>
+              <div class="templates-filter-pills">
+                <button type="button" class="filter-pill active" onclick="filterTemplatesView('all', this)">Todas</button>
+                <button type="button" class="filter-pill" onclick="filterTemplatesView('support', this)">Soporte</button>
+                <button type="button" class="filter-pill" onclick="filterTemplatesView('sales', this)">Ventas</button>
+              </div>
+            </div>
+
+            <div class="table-responsive">
+              <table class="crm-table">
+                <thead>
+                  <tr>
+                    <th style="width: 130px;">Atajo</th>
+                    <th style="width: 180px;">Título</th>
+                    <th style="width: 100px;">Perfil</th>
+                    <th>Texto de la respuesta (Variables dinámicas)</th>
+                    <th style="width: 180px; text-align: right;">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="crmTemplatesTableBody">
+                  <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">Cargando respuestas rápidas...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tarjeta 2: Gestión de Etiquetas de Contacto -->
+          <div class="workspace-card" style="margin-top: 24px;">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">🏷️ Etiquetas de Contacto en Uso</h3>
+                <p class="card-subtitle">Etiquetas asociadas a clientes en el Copiloto. Úsalas para segmentación y filtros rápidos.</p>
+              </div>
+              <button class="btn-card-action" onclick="addCopilotTagPrompt()">+ Crear Etiqueta</button>
+            </div>
+            <div id="allTagsContainer" class="tags-directory-container">
+              <span style="color: var(--text-muted); font-size: 13px;">Cargando directorio de etiquetas...</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- ESPACIO 4: SISTEMA Y RED (Alt+4)          -->
+      <!-- ========================================== -->
+      <section id="view-system" class="workspace-view" style="display: none;">
+        <div class="view-header-bar">
+          <div class="view-header-title">
+            <span>⚙️ Sistema, Almacenamiento y Red</span>
+            <span class="sub-label">Administración integral del servidor local, backups, multimedia y diagnóstico</span>
+          </div>
+          <div class="view-header-actions">
+            <span class="system-version-tag" id="systemAppVersion">v3.0.0</span>
+            <button class="btn-secondary" onclick="openOnboardingModal(1)" title="Asistente de primer uso">🚀 Asistente de Inicio</button>
+            <button class="btn-secondary" onclick="checkSystemUpdates()" title="Atajo: U">🔄 Comprobar Actualizaciones</button>
+            <button class="btn-primary" onclick="promptRestartSystem()" title="Atajo: R">⚡ Reiniciar Servidor</button>
+          </div>
+        </div>
+
+        <div class="system-workspace-grid">
+          <!-- Tarjeta 1: Perfiles de Trabajo -->
+          <div class="workspace-card system-card">
+            <h3 class="card-title">👤 Perfil de Trabajo Activo</h3>
+            <p class="card-subtitle">Adapta la interfaz y herramientas al propósito operativo de esta estación.</p>
+            <div class="profile-cards-grid">
+              <div class="profile-card-option" id="profCard-backup_only" onclick="setWorkspaceProfile('backup_only')">
+                <div class="prof-card-icon">💾</div>
+                <div class="prof-card-info">
+                  <div class="prof-card-title">Solo Respaldo</div>
+                  <div class="prof-card-desc">Histórico pasivo de chats y archivos sin herramientas comerciales.</div>
+                </div>
+              </div>
+              <div class="profile-card-option" id="profCard-support" onclick="setWorkspaceProfile('support')">
+                <div class="prof-card-icon">🎧</div>
+                <div class="prof-card-info">
+                  <div class="prof-card-title">Atención y Soporte</div>
+                  <div class="prof-card-desc">Tickets, métricas SLA, respuestas de soporte y mapa horario.</div>
+                </div>
+              </div>
+              <div class="profile-card-option" id="profCard-sales" onclick="setWorkspaceProfile('sales')">
+                <div class="prof-card-icon">💼</div>
+                <div class="prof-card-info">
+                  <div class="prof-card-title">Ventas y Mini-CRM</div>
+                  <div class="prof-card-desc">Embudo de oportunidades, cotizaciones y reactivación RFM.</div>
+                </div>
+              </div>
+              <div class="profile-card-option" id="profCard-full" onclick="setWorkspaceProfile('full')">
+                <div class="prof-card-icon">🚀</div>
+                <div class="prof-card-info">
+                  <div class="prof-card-title">Suite Completa</div>
+                  <div class="prof-card-desc">Todas las herramientas de soporte, ventas y analítica unificadas.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tarjeta 2: Estado de Multimedia -->
+          <div class="workspace-card system-card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">🎬 Descargas Multimedia</h3>
+                <p class="card-subtitle">Descarga y descifrado pasivo de fotos, audios, videos y documentos.</p>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn-card-action" onclick="triggerProcessMedia()">▶ Procesar Cola</button>
+                <button class="btn-card-action" onclick="retryFailedMedia()">🔄 Reintentar Fallidos</button>
+              </div>
+            </div>
+            <div class="stats-grid">
+              <div class="stat-box"><div class="stat-val" id="statMediaDownloaded">0</div><div class="stat-lbl">Descargados</div></div>
+              <div class="stat-box"><div class="stat-val" id="statMediaPending">0</div><div class="stat-lbl">En cola / Pendientes</div></div>
+              <div class="stat-box"><div class="stat-val" id="statMediaFailed">0</div><div class="stat-lbl">Con error</div></div>
+              <div class="stat-box"><div class="stat-val" id="statMediaExpired">0</div><div class="stat-lbl">Expirados en CDN</div></div>
+            </div>
+          </div>
+
+          <!-- Tarjeta 3: Copias de Seguridad (Snapshots SQLite) & Exportación -->
+          <div class="workspace-card system-card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">💾 Copias de Seguridad y Exportación</h3>
+                <p class="card-subtitle">Snapshots seguros en caliente sin detener el visor ni bloquear SQLite.</p>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn-card-action" onclick="exportContactsCsv()">📇 Exportar Agenda (.csv)</button>
+                <button class="btn-primary" onclick="triggerManualBackup()" style="padding: 6px 14px; font-size: 12px;">+ Crear Backup SQLite</button>
+              </div>
+            </div>
+            <div class="backup-list-box" id="backupListContainer">
+              <p style="padding: 16px; color: var(--text-time); text-align: center;">Consultando respaldos disponibles...</p>
+            </div>
+          </div>
+
+          <!-- Tarjeta Red Local y Modo Equipo -->
+          <div class="workspace-card system-card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">🌐 Red Local y Modo Equipo</h3>
+                <p class="card-subtitle">Permite que compañeros de la oficina se conecten al visor y al copiloto desde otras PCs.</p>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn-card-action" onclick="toggleNetworkMode()" id="btnToggleNetMode">Cambiar a Modo LAN</button>
+              </div>
+            </div>
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 12px;">
+              <div class="stat-box">
+                <div class="stat-val" id="netModeStatus">Local (127.0.0.1)</div>
+                <div class="stat-lbl">Modo de Red</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-val" id="netPinDisplay" style="font-family: monospace; letter-spacing: 2px;">------</div>
+                <div class="stat-lbl">PIN de Oficina (<a href="#" onclick="promptEditPin(); return false;">Editar</a>)</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-val" id="myOperatorNameDisplay" style="font-size: 14px;">Operador</div>
+                <div class="stat-lbl">Mi Nombre (<a href="#" onclick="promptSetMyOperator(); return false;">Cambiar</a>)</div>
+              </div>
+            </div>
+            <div style="margin-top: 14px;">
+              <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary);">Direcciones para que tus compañeros ingresen desde su PC:</label>
+              <div id="lanHostIpsList" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                <span style="font-size: 12px; color: var(--text-muted);">Consultando interfaces de red...</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tarjeta 4: Extensión Chromium y Accesos de Windows -->
+          <div class="workspace-card system-card">
+            <h3 class="card-title">🔌 Extensión Chromium</h3>
+            <p class="card-subtitle">Para instalar o recargar la extensión pasiva en Chrome, Edge o Brave:</p>
+            <div style="display: flex; gap: 8px; margin-top: 12px; align-items: center;">
+              <input type="text" id="extPathInput" readonly class="search-box" style="flex: 1; font-family: monospace; font-size: 12px;" value="Cargando ruta...">
+              <button class="btn-card-action" onclick="copyExtensionPath()">📋 Copiar Ruta</button>
+            </div>
+            <p style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">
+              Abre <code>chrome://extensions</code>, activa <b>Modo desarrollador</b> y haz clic en <b>Cargar descomprimida</b>.
+            </p>
+            <div style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+              <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 8px;">Comodidad en Windows:</label>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="btn-card-action" onclick="createWindowsShortcut('desktop')">🖥️ Acceso en Escritorio</button>
+                <button class="btn-card-action" onclick="toggleWindowsStartupShortcut()" id="btnSystemStartup">🚀 Autoarranque Windows</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tarjeta 5: Visor Integrado de Logs en Vivo -->
+          <div class="workspace-card system-card logs-wide-card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">📋 Logs de Sincronización en Vivo</h3>
+                <p class="card-subtitle">Monitoreo en tiempo real sin necesidad de abrir la consola CMD ni Bloc de Notas.</p>
+              </div>
+              <div class="logs-toolbar">
+                <input type="text" id="logsFilterInput" placeholder="Filtrar eventos..." class="search-box logs-filter-box" oninput="filterSystemLogs()">
+                <label class="logs-check-lbl">
+                  <input type="checkbox" id="logsAutoScrollCheck" checked> Auto-scroll
+                </label>
+                <button class="btn-card-action" onclick="loadSystemLogs()">🔄 Refrescar</button>
+                <button class="btn-card-action" onclick="window.open('/logs', '_blank')">📄 Texto Plano</button>
+              </div>
+            </div>
+            <div id="systemLogsTerminal" class="logs-terminal-window">
+              <div style="color: var(--text-muted); padding: 14px;">Cargando registros del servidor...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <!-- Modal Diálogo Editor de Plantillas Rápidas -->
+  <div id="template-modal" class="modal-overlay" onclick="if(event.target===this) closeTemplateDialog()" style="display: none;">
+    <div class="modal-card template-editor-card">
+      <div class="modal-header">
+        <h3 id="templateModalTitle">Nueva Respuesta Rápida</h3>
+        <button class="modal-close-btn" onclick="closeTemplateDialog()">✕</button>
+      </div>
+      <form id="templateEditorForm" onsubmit="handleSaveTemplateSubmit(event)">
+        <input type="hidden" id="tplEditId" value="">
+        <div class="form-row-2">
+          <div class="form-group">
+            <label>Atajo de teclado (ej. <code>/precio</code>)</label>
+            <input type="text" id="tplEditShortcut" required class="search-box" placeholder="/atajo">
+          </div>
+          <div class="form-group">
+            <label>Perfil Destino</label>
+            <select id="tplEditProfile" class="search-box">
+              <option value="both">Ambos (Soporte y Ventas)</option>
+              <option value="support">Solo Atención / Soporte</option>
+              <option value="sales">Solo Ventas / Comercial</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 12px;">
+          <label>Título o Identificador</label>
+          <input type="text" id="tplEditTitle" required class="search-box" placeholder="Ej: Saludo de bienvenida con lista de precios">
+        </div>
+        <div class="form-group" style="margin-top: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="margin: 0;">Texto de la Respuesta</label>
+            <div class="var-chips">
+              <span class="var-chip" onclick="insertTemplateVariable('{nombre}')" title="Inserta el nombre o número del contacto">+{nombre}</span>
+              <span class="var-chip" onclick="insertTemplateVariable('{saludo}')" title="Inserta 'Buenos días' / 'Buenas tardes' según la hora">+{saludo}</span>
+              <span class="var-chip" onclick="insertTemplateVariable('{fecha}')" title="Inserta la fecha actual">+{fecha}</span>
+            </div>
+          </div>
+          <textarea id="tplEditBody" required class="copilot-textarea" rows="4" placeholder="Escribe el mensaje aquí... Puedes usar {nombre}, {saludo} y {fecha}" oninput="updateTemplateLivePreview()"></textarea>
+        </div>
+        <div class="form-group" style="margin-top: 12px;">
+          <label style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Vista Previa en Vivo (Renderizado humano):</label>
+          <div id="tplLivePreviewBox" class="tpl-live-preview">Escribe en el campo de texto para ver la vista previa...</div>
+        </div>
+        <div class="modal-actions" style="margin-top: 20px;">
+          <button type="button" class="btn-modal-cancel" onclick="closeTemplateDialog()">Cancelar</button>
+          <button type="submit" class="btn-modal-confirm">Guardar Plantilla</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Acceso PIN para Clientes Remotos LAN -->
+  <div id="lanPinModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 380px;">
+      <div class="modal-header">
+        <h3>🔐 Acceso a WAckup Oficina</h3>
+      </div>
+      <div style="padding: 16px 20px;">
+        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
+          Te estás conectando desde otra PC de la red local. Ingresa el <b>PIN de Oficina</b> y tu <b>Nombre</b> para colaborar:
+        </p>
+        <div class="form-group mb-2">
+          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">PIN de Oficina</label>
+          <input type="password" id="modalLanPinInput" class="search-box" placeholder="Ej. 123456" maxlength="8" style="width:100%;">
+        </div>
+        <div class="form-group mb-2" style="margin-top: 12px;">
+          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">Tu Nombre Corto</label>
+          <input type="text" id="modalOperatorNameInput" class="search-box" placeholder="Ej. Ana, Lucas" style="width:100%;">
+        </div>
+        <div id="lanPinErrorMsg" style="display: none; color: #ef4444; font-size: 12px; margin-top: 8px;"></div>
+        <div style="margin-top: 18px; display: flex; justify-content: flex-end;">
+          <button type="button" class="btn-primary" onclick="submitLanPinAuth()">Conectar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Visor Lightbox Imagen -->
+  <div id="image-modal" onclick="this.style.display='none'">
+    <img id="modalImg" src="" alt="Vista previa ampliada">
+  </div>
+
+  <!-- Modal Asistente de Bienvenida (Onboarding) -->
+  <div id="onboardingModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card onboarding-card">
+      <div class="modal-header">
+        <div>
+          <h3>🎉 ¡Bienvenido a WAckup 3.0!</h3>
+          <p style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0 0;">Configuración inicial en 3 pasos (menos de 60 segundos)</p>
+        </div>
+        <button type="button" class="btn-modal-close" onclick="closeOnboardingModal()">&times;</button>
+      </div>
+
+      <!-- Barra de Pasos -->
+      <div class="onboarding-steps-bar">
+        <div class="onboarding-step-pill active" id="obStepPill-1" onclick="goToOnboardingStep(1)">
+          <span class="ob-step-num">1</span> Tu Perfil
+        </div>
+        <div class="onboarding-step-pill" id="obStepPill-2" onclick="goToOnboardingStep(2)">
+          <span class="ob-step-num">2</span> Vincular Extensión
+        </div>
+        <div class="onboarding-step-pill" id="obStepPill-3" onclick="goToOnboardingStep(3)">
+          <span class="ob-step-num">3</span> Atajos Windows
+        </div>
+      </div>
+
+      <div class="onboarding-body">
+        <!-- Paso 1: Perfil de Trabajo -->
+        <div class="onboarding-step-content" id="obStepContent-1">
+          <p class="onboarding-step-desc">
+            Elige cómo usarás WAckup en esta estación. Podrás cambiarlo cuando quieras desde el menú superior o en ⚙️ Sistema.
+          </p>
+          <div class="onboarding-profile-grid">
+            <div class="ob-profile-card" data-profile="backup_only" onclick="selectOnboardingProfile('backup_only')">
+              <div class="ob-profile-icon">💾</div>
+              <div class="ob-profile-info">
+                <strong>Solo Respaldo</strong>
+                <span>Copia pasiva de chats, visor histórico y multimedia offline.</span>
+              </div>
+            </div>
+            <div class="ob-profile-card" data-profile="support" onclick="selectOnboardingProfile('support')">
+              <div class="ob-profile-icon">🎧</div>
+              <div class="ob-profile-info">
+                <strong>Atención y Soporte</strong>
+                <span>Bandeja de no respondidos, SLA, radar de atención y plantillas.</span>
+              </div>
+            </div>
+            <div class="ob-profile-card" data-profile="sales" onclick="selectOnboardingProfile('sales')">
+              <div class="ob-profile-icon">💼</div>
+              <div class="ob-profile-info">
+                <strong>Ventas y Mini-CRM</strong>
+                <span>Embudo comercial Kanban, notas colaborativas y reactivación RFM.</span>
+              </div>
+            </div>
+            <div class="ob-profile-card selected" data-profile="full" onclick="selectOnboardingProfile('full')">
+              <div class="ob-profile-icon">🚀</div>
+              <div class="ob-profile-info">
+                <strong>Suite Completa (Recomendado)</strong>
+                <span>Todas las herramientas de soporte, ventas y analítica unificadas.</span>
+              </div>
+            </div>
+          </div>
+          <div class="onboarding-actions">
+            <div></div>
+            <button type="button" class="btn-primary" onclick="goToOnboardingStep(2)">Siguiente: Vincular Extensión ➔</button>
+          </div>
+        </div>
+
+        <!-- Paso 2: Vincular Extensión -->
+        <div class="onboarding-step-content" id="obStepContent-2" style="display: none;">
+          <p class="onboarding-step-desc">
+            Instala la extensión en tu navegador Chromium (Chrome, Edge o Brave) para habilitar el copiloto y respaldo pasivo:
+          </p>
+          <div class="onboarding-instructions">
+            <div class="ob-inst-item">
+              <span class="ob-inst-num">1</span>
+              <span>Abre en una nueva pestaña: <code>chrome://extensions</code> (o <code>edge://extensions</code>)</span>
+            </div>
+            <div class="ob-inst-item">
+              <span class="ob-inst-num">2</span>
+              <span>Activa la casilla o interruptor <b>Modo de desarrollador</b> (esquina superior derecha).</span>
+            </div>
+            <div class="ob-inst-item">
+              <span class="ob-inst-num">3</span>
+              <span>Haz clic en <b>Cargar descomprimida</b> y selecciona la siguiente carpeta:</span>
+            </div>
+          </div>
+          <div class="ob-ext-copy-box">
+            <input type="text" id="obExtPathInput" readonly class="search-box" style="flex: 1; font-family: monospace; font-size: 11.5px;">
+            <button type="button" class="btn-card-action" onclick="copyOnboardingExtPath()">📋 Copiar Ruta</button>
+          </div>
+          <div class="ob-live-status" id="obLiveStatusBadge">
+            <span class="ob-status-spinner">⏳</span> Esperando conexión de la extensión... Abre WhatsApp Web en tu navegador.
+          </div>
+          <div class="onboarding-actions">
+            <button type="button" class="btn-secondary" onclick="goToOnboardingStep(1)">⬅ Anterior</button>
+            <button type="button" class="btn-primary" onclick="goToOnboardingStep(3)">Siguiente: Comodidad en Windows ➔</button>
+          </div>
+        </div>
+
+        <!-- Paso 3: Atajos en Windows -->
+        <div class="onboarding-step-content" id="obStepContent-3" style="display: none;">
+          <p class="onboarding-step-desc">
+            Configura accesos directos opcionales para iniciar WAckup silenciosamente en segundo plano sin ventanas de consola:
+          </p>
+          <div class="onboarding-shortcuts-grid">
+            <div class="ob-shortcut-card">
+              <div>
+                <strong>🖥️ Acceso Directo en el Escritorio</strong>
+                <p>Crea un ícono en tu escritorio para abrir el Visor Web con doble clic.</p>
+              </div>
+              <button type="button" class="btn-secondary" id="btnObDesktop" onclick="createOnboardingShortcut('desktop')">Crear Acceso</button>
+            </div>
+            <div class="ob-shortcut-card">
+              <div>
+                <strong>🚀 Iniciar Automáticamente con Windows</strong>
+                <p>WAckup iniciará silenciosamente en la bandeja del sistema junto al reloj.</p>
+              </div>
+              <button type="button" class="btn-secondary" id="btnObStartup" onclick="createOnboardingShortcut('startup')">Activar Autoarranque</button>
+            </div>
+          </div>
+          <div class="onboarding-actions" style="margin-top: 24px;">
+            <button type="button" class="btn-secondary" onclick="goToOnboardingStep(2)">⬅ Anterior</button>
+            <button type="button" class="btn-primary" style="padding: 9px 20px; font-weight: 700;" onclick="completeOnboarding()">🎉 ¡Comenzar a usar WAckup!</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Actualización de Sistema -->
+  <div id="updateModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 500px;">
+      <div class="modal-header">
+        <h3 id="updateModalTitle">🚀 Actualización de WAckup Disponible</h3>
+        <button type="button" class="btn-modal-close" onclick="closeUpdateModal()">&times;</button>
+      </div>
+      <div style="padding: 16px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; background: var(--bg-hover); padding: 8px 12px; border-radius: 6px;">
+          <span style="font-size: 13px;">Versión instalada: <b id="updateCurrentVer">v3.0.0</b></span>
+          <span style="font-size: 13px; color: var(--accent);">Nueva versión: <b id="updateLatestVer">v3.0.1</b></span>
+        </div>
+        <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Novedades y Cambios:</label>
+        <div id="updateNotesContainer" style="margin-top: 6px; padding: 10px 12px; background: var(--bg-app); border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;">
+          Consultando notas de la versión...
+        </div>
+        <p style="font-size: 11.5px; color: var(--text-muted); margin-top: 10px;">
+          🛡️ <i>Tus bases de datos, mensajes y configuraciones en <b>data/</b> se respaldarán automáticamente antes de actualizar.</i>
+        </p>
+        <div id="updateProgressBox" style="display: none; margin-top: 12px; text-align: center; color: var(--accent); font-weight: 600; font-size: 13px;">
+          ⏳ Descargando y aplicando actualización... Por favor espera.
+        </div>
+        <div class="modal-actions" style="margin-top: 18px;" id="updateModalActions">
+          <button type="button" class="btn-modal-cancel" onclick="closeUpdateModal()">Cerrar</button>
+          <button type="button" class="btn-modal-confirm" id="btnApplyUpdate" onclick="applySystemUpdate()">⬇️ Actualizar Ahora</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast de Notificaciones Flotantes -->
+  <div id="toast"></div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

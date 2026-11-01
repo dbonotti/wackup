@@ -1,191 +1,122 @@
-# 💬 WAckup - WhatsApp Backup Local & Incremental
+# 💬 WAckup 3.0 - Respaldo Local Pasivo, Copiloto CRM y Modo Equipo
 
-> **WAckup** (WhatsApp Backup): Sistema pasivo, privado e incremental para respaldar y visualizar conversaciones de WhatsApp Web en tu propio equipo, con soporte multi-cuenta automático, descifrado multimedia local, búsqueda indexada ultrarrápida y visor web moderno.
+> **WAckup 3.0** es la suite local definitiva para WhatsApp Web: combina un **respaldo pasivo e incremental offline** con un **Copiloto nativo en panel lateral (`chrome.sidePanel`)**, **Mini-CRM comercial**, métricas de atención y un **Modo Equipo en Red Local (LAN)** con semáforo anti-colisión en tiempo real.
 >
-> 🌐 **Repositorio:** [https://github.com/dbonotti/wackup](https://github.com/dbonotti/wackup)
+> 🌐 **Repositorio Oficial:** [https://github.com/dbonotti/wackup](https://github.com/dbonotti/wackup)
+
+---
 
 > [!IMPORTANT]
-> **Seguridad y Cero Riesgo de Suspensión:**  
-> A diferencia de librerías no oficiales (como Baileys o WA-JS) o bots automatizados, este sistema **no emite peticiones no autorizadas a Meta ni simula clics**. Opera de forma estrictamente pasiva leyendo el almacenamiento local estándar del navegador (`IndexedDB`) e interceptando de forma transparente las claves criptográficas temporales del cliente (`WebCrypto`).
+> **REGLA DE ORO ANTI-BAN (100% Pasivo y Seguro):**  
+> WAckup **NO** es un bot de envíos masivos ni una librería no oficial (no usa Baileys, Puppeteer ni WA-JS).
+> - **Cero manipulación del DOM**: No inyecta botones, estilos ni paneles dentro de `web.whatsapp.com`.
+> - **Cero eventos sintéticos**: Las respuestas rápidas y datos de clientes se copian con 1 clic al portapapeles del sistema (`navigator.clipboard.writeText`) para pegado humano con `Ctrl+V`.
+> - **Lectura criptográfica limpia**: Captura claves AES temporales de `window.crypto.subtle` y lee pasivamente el almacenamiento local estándar `IndexedDB` (`model-storage`) del propio navegador.
 
 ---
 
-## 🚀 Requisitos Previos
+## 🌟 Novedades de WAckup 3.0
 
-* **Python 3.8 o superior** (al instalar en Windows, marcar la casilla *"Add Python to PATH"*).
-* **Navegador web basado en Chromium**: Google Chrome, Brave, Microsoft Edge u Opera.
-* **Git** (recomendado para clonar y recibir actualizaciones en 1 clic): [https://git-scm.com](https://git-scm.com).
+1. **Paquete Portable "Doble Clic":**  
+   Ya no requiere tener Python ni Git instalados en la PC. El paquete incluye un runtime Python embebido autónomo.
+2. **Copiloto Nativo en Panel Lateral (`chrome.sidePanel`):**  
+   Integrado limpiamente en la interfaz de Chromium (Chrome, Edge, Brave), sin tocar el diseño de WhatsApp Web.
+3. **Visor Web con App Rail Lateral:**  
+   Diseño responsivo (`1280x720` a `4K`) con 4 espacios de trabajo:
+   - `💬 Conversaciones`: Visor histórico, reproductor multimedia con streaming HTTP Range y búsqueda indexada FTS5.
+   - `🎯 Radar de Atención & Métricas`: Embudo de no respondidos, SLA de respuesta y mapa de calor de horarios pico.
+   - `🏷️ CRM Comercial & Plantillas`: Tablero Kanban de ventas, notas compartidas y respuestas rápidas configurables.
+   - `⚙️ Sistema y Red`: Copias de seguridad en caliente, logs en vivo, diagnóstico y configuración LAN.
+4. **Modo Equipo en Red Local (LAN):**  
+   Múltiples compañeros en la misma oficina pueden conectarse simultáneamente al Visor y al Copiloto usando un **PIN simple de 6 dígitos**.
+5. **Semáforo Anti-Colisión y Bitácora en Tiempo Real:**  
+   Vía Server-Sent Events (`SSE`), visualiza quién está viendo cada chat para no pisarse al responder, y registra una bitácora cronológica inmutable por contacto.
+6. **Actualizador Nativo por HTTPS:**  
+   Comprueba y aplica actualizaciones desde GitHub Releases sin Git, generando antes un backup consistente con `sqlite3.Connection.backup()`.
+7. **Bandeja del Sistema (System Tray):**  
+   Ejecución silenciosa junto al reloj de Windows sin ventanas de consola CMD abiertas.
 
 ---
 
-## 🛠️ Puesta en Marcha (Guía Rápida)
+## 🚀 Puesta en Marcha (Menos de 60 Segundos)
 
-### Paso 0: Clonar o descargar el repositorio
+### Opción A: Paquete Portable (Recomendado para Usuarios)
+1. Descarga el archivo `WAckup_Portable_v3.0.0.zip` desde [GitHub Releases](https://github.com/dbonotti/wackup/releases).
+2. Descomprímelo en cualquier carpeta de tu equipo (ej. `C:\WAckup`).
+3. Haz doble clic en **`Iniciar_WAckup.vbs`** (o `iniciar_visor.bat`).
+4. Se abrirá automáticamente el **Asistente de Bienvenida** en tu navegador.
+
+### Opción B: Entorno de Desarrollo (Git / Python)
 ```bash
 git clone https://github.com/dbonotti/wackup.git
 cd wackup
+pip install -r requirements.txt
+python whatsapp_viewer.py --console
 ```
-*(O descarga el archivo ZIP desde [GitHub](https://github.com/dbonotti/wackup) y descomprímelo en tu equipo).*
-
-### Paso 1: Iniciar el servidor local
-Haz doble clic en **`iniciar_visor.bat`**.
-* *En el primer arranque, el lanzador instalará automáticamente las dependencias de Python necesarias (`cryptography`).*
-* Se abrirá la terminal con el **Panel de Control** y tu navegador web en: [http://127.0.0.1:8080](http://127.0.0.1:8080).
-
-### Paso 2: Cargar la extensión en el navegador
-1. Abre tu navegador y dirígete a:
-   * **Chrome:** `chrome://extensions/`
-   * **Brave:** `brave://extensions/`
-   * **Edge:** `edge://extensions/`
-2. Activa el interruptor **"Modo de desarrollador"** en la esquina superior derecha.
-3. Haz clic en el botón **"Cargar descomprimida"** (*Load unpacked*).
-4. Selecciona la carpeta **`extension`** dentro de este proyecto *(el visor web incluye un botón "📋 Copiar ruta" para pegarla directamente)*.
-
-### Paso 3: Abrir WhatsApp Web
-1. Ingresa a [https://web.whatsapp.com](https://web.whatsapp.com) y vincula tu cuenta normalmente mediante código QR.
-2. Observarás un widget en la esquina inferior izquierda: **"WAckup"**, mostrando el número o perfil de tu cuenta activa.
-3. Abre cualquier chat para capturar la clave de sesión (`🎯 ¡Clave maestra verificada!`).
-4. Haz clic en:
-   * **`[Todo (Media)]`**: Para sincronizar el historial completo y encolar la descarga y descifrado de fotos, audios y documentos.
-   * **`[Novedades]`**: Para respaldar únicamente mensajes recientes de la última hora.
-   *(La extensión continuará respaldando automáticamente nuevos mensajes cada 60 segundos de forma pasiva y desatendida).*
 
 ---
 
-## ⌨️ Panel de Control y Atajos de Teclado
+## 🔌 Instalación de la Extensión Chromium
 
-La consola de `iniciar_visor.bat` funciona como un centro interactivo y amigable mientras el servidor está activo:
-
-| Atajo | Acción | Descripción |
-| :---: | :--- | :--- |
-| **`[V]`** | **Abrir Visor** | Abre o enfoca el visor web en tu navegador predeterminado. |
-| **`[L]`** | **Ver Logs en Vivo** | Abre una ventana independiente con el seguimiento de sincronización en tiempo real. |
-| **`[U]`** | **Buscar Actualizaciones** | Comprueba si hay mejoras en GitHub, las aplica y reinicia automáticamente. |
-| **`[R]`** | **Reiniciar Visor** | Recarga el código de la aplicación en memoria en 1 segundo sin cerrar la ventana. |
-| **`Ctrl + C`** | **Detener Servidor** | Cierra de manera limpia y ordenada el servidor SQLite. |
-
-### 🟢 Estado en Tiempo Real y Animaciones Amigables
-La interfaz del panel sustituye los volcados técnicos complejos por un indicador claro con pulso visual continuo:
-* **🟡 Esperando a WhatsApp Web:** Muestra un pulso visual `[●]` / `[○]` y puntos dinámicos mientras aguarda la conexión desde el navegador.
-* **🔄 Sincronizando nuevos datos:** Activa un spinner interactivo `[/]` durante el guardado de cada nuevo lote de mensajes.
-* **🟢 Conectado y al día:** Informa en lenguaje humano cuándo se realizó el último respaldo (`hace 15 seg`, `hace 2 min`, etc.) manteniendo el pulso activo para dar certeza de que el sistema sigue operando.
-* **🛡️ Prevención de instancias duplicadas:** Si abres una consola teniendo el visor ya abierto, el sistema detecta que el puerto 8080 está en uso, te avisa y enfoca tu navegador sin crear procesos duplicados que compitan por los datos.
-
-### 📋 Acceso y Monitoreo de Logs
-Puedes supervisar los registros detallados de sincronización de 4 formas sencillas:
-1. **Atajo en consola:** Presiona la tecla **`[L]`** en el panel de control para abrir la ventana de logs en vivo.
-2. **Acceso directo en Windows:** Haz doble clic en el archivo **`ver_logs.bat`** en la raíz del proyecto.
-3. **Archivo de texto continuo:** Los registros se guardan en tiempo real en **`data/logs/sync.log`**.
-4. **Desde el Visor Web:** Haz clic en la insignia de sincronización en la barra superior izquierda para ver el estado de lotes y descargas multimedia.
+1. Abre tu navegador (Google Chrome, Microsoft Edge o Brave) y accede a:
+   - `chrome://extensions` (Chrome / Brave) o `edge://extensions` (Edge).
+2. Activa el interruptor **"Modo de desarrollador"** (esquina superior derecha).
+3. Haz clic en **"Cargar descomprimida"** y selecciona la carpeta **`extension`** del proyecto *(el Visor Web incluye un botón para copiar la ruta exacta en 1 clic)*.
+4. Abre [WhatsApp Web](https://web.whatsapp.com) y haz clic en el ícono de WAckup en la barra del navegador para abrir el **Copiloto Lateral**.
 
 ---
 
-## 🔄 Cómo Actualizar el Código Según tu Caso
+## 🌐 Modo Equipo en Red Local (LAN)
 
-El sistema está diseñado para que actualizar nunca ponga en riesgo tu información:
-* **Protección de Datos Garantizada:** Toda tu información (base de datos SQLite, archivos multimedia, respaldos y logs) reside exclusivamente en la carpeta unificada `data/` y está protegida por `.gitignore`. Nunca se sobrescribe ni se elimina al actualizar.
-* **Copia Preventiva Automática:** Antes de descargar cualquier actualización, se genera automáticamente una copia de respaldo consistente en `data/backups/`.
-
-Elige el procedimiento según cómo obtuviste el proyecto en tu equipo:
-
-### 🔹 Caso 1: Si clonaste el repositorio con Git (Recomendado)
-Las actualizaciones son completamente automáticas y en 1 solo clic:
-* **Desde el Panel de Control:** Presiona la tecla **`[U]`** en cualquier momento mientras el servidor está activo para comprobar y aplicar mejoras interactivamente.
-* **Al iniciar el visor:** Cada vez que haces doble clic en `iniciar_visor.bat`, comprobará en ~1 segundo si hay versiones nuevas en GitHub y te ofrecerá aplicarlas con solo presionar `Enter` o `S`.
-* **Desde la terminal:** Puedes ejecutar `git pull origin main` dentro de la carpeta del proyecto en cualquier momento.
-
-### 🔹 Caso 2: Si descargaste el proyecto como archivo ZIP desde GitHub
-Al descargar el código mediante *"Download ZIP"*, GitHub no incluye la carpeta oculta `.git/` de control de versiones. Tienes dos formas de proceder:
-
-* **Si tienes Git instalado en tu equipo:**
-  * **Automático:** Simplemente presiona **`[U]`** en el panel de control o abre `iniciar_visor.bat`. WAckup detectará que la carpeta provino de un ZIP y la auto-vinculará de forma transparente con el repositorio de GitHub en 2 segundos, habilitando las actualizaciones en 1 clic.
-  * **Manual (opcional):** Abre una terminal (PowerShell o CMD) en la carpeta del proyecto y ejecuta:
-    ```bash
-    git init -b main
-    git remote add origin https://github.com/dbonotti/wackup.git
-    git fetch origin main
-    git reset --hard origin/main
-    ```
-* **Si NO tienes Git instalado:**
-  1. Descarga el nuevo archivo ZIP desde [https://github.com/dbonotti/wackup](https://github.com/dbonotti/wackup).
-  2. Descomprímelo y copia los archivos nuevos sobre tu carpeta de trabajo, reemplazando los existentes.
-  3. Tu carpeta `data/` (donde están tus mensajes, multimedia y bases de datos) se conserva intacta y tus datos permanecen 100% seguros.
-
----
-
-### 🧩 Actualización Asistida de la Extensión en el Navegador
-Si una actualización incluye mejoras en los archivos de la extensión (`extension/`):
-* El widget de **WAckup** en la esquina inferior izquierda de WhatsApp Web detectará la nueva versión en disco y mostrará automáticamente el botón **`[🔄 Actualizar a v...]`**.
-* Al hacer clic, la extensión se recarga en caliente en la memoria del navegador y refresca la pestaña al instante, sin necesidad de ir a la configuración de `chrome://extensions/`.
-
----
-
-## ✨ Características Principales
-
-* **📱 Soporte Multi-Cuenta Automático:** Detección y aislamiento nativo por número telefónico. Si cambias de cuenta o utilizas varios números de WhatsApp Web en el mismo equipo, cada cuenta tiene su propia base de datos, multimedia y respaldos en `data/<número>/`. El visor web incluye un selector para alternar entre cuentas en 1 clic.
-* **🎨 Visor Web Inspirado en WhatsApp:** Modo claro y oscuro (`☀️` / `🌙`), avatares dinámicos, citas y respuestas interactivas, estados de lectura `✓✓` y paginación fluida para chats con decenas de miles de mensajes.
-* **🔐 Descifrado Multimedia Local y Streaming HTTP Range:** Descarga de archivos cifrados (`.enc`) desde los servidores de WhatsApp y descifrado local con HKDF-SHA256 + AES-256-CBC. Soporta reproducción continua de video y audio con salto temporal instantáneo (HTTP 206).
-* **🎙️ Reproductor de Notas de Voz:** Control de velocidad (`1x` ➔ `1.5x` ➔ `2x`) y encadenamiento automático entre audios consecutivos.
-* **🔍 Búsqueda Rápida de Texto Completo (FTS5):** Motor indexado SQLite con soporte insensible a tildes y mayúsculas.
-* **🏷️ Filtros Dinámicos:** Filtrado por fecha (`Desde` / `Hasta`) y por tipo de archivo (`📷 Fotos`, `🎤 Audios`, `📄 Documentos`, `🎬 Videos`).
-* **📦 Exportación Completa:** Exporta cualquier conversación a formato HTML ligero o a un archivo `.html` 100% autónomo con todas las fotos y audios incrustados en Base64 para visualizarlos sin servidor.
-* **💾 Copias de Seguridad Manuales:** Generación de snapshots atómicos y descarga de backups de la base de datos en formato `.db`.
+Para compartir el CRM y el historial con otras PCs de la oficina:
+1. En la PC principal, ingresa a **`⚙️ Sistema y Red`** en el Visor Web.
+2. Haz clic en **`Cambiar a Modo LAN`**.
+3. El servidor mostrará el **PIN de Oficina** y las direcciones IP locales disponibles (ej. `http://192.168.1.50:8080`).
+4. Cualquier compañero ingresa a esa URL desde su navegador o configura la IP en su extensión con el PIN para comenzar a colaborar en tiempo real.
 
 ---
 
 ## 📁 Estructura del Proyecto
 
-```text
+```
 wackup/
-├── data/                          # Carpeta unificada de usuario (BD, multimedia, backups, logs)
-│   ├── <numero_o_cuenta_1>/       # Carpeta aislada de la primera cuenta (ej. 5491112345678)
-│   │   ├── whatsapp_backup.db     # Base de datos SQLite local (WAL mode, FTS5)
-│   │   ├── account.json           # Metadatos del perfil de la cuenta (nombre, teléfono)
-│   │   ├── media/                 # Multimedia descifrado organizado por tipo
-│   │   │   ├── images/
-│   │   │   ├── stickers/
-│   │   │   ├── audio/
-│   │   │   ├── video/
-│   │   │   └── documents/
-│   │   └── backups/               # Copias de seguridad de esta cuenta
-│   ├── <numero_o_cuenta_2>/       # Carpeta aislada de una segunda cuenta (si existe)
-│   │   ├── whatsapp_backup.db
-│   │   ├── account.json
-│   │   ├── media/
-│   │   └── backups/
-│   └── logs/                      # Registro de sincronizaciones (sync.log)
-├── extension/                     # Extensión para el navegador (Manifest V3)
-│   ├── manifest.json              # Declaración de permisos y configuración de la extensión
-│   ├── background.js              # Service worker puente hacia el servidor local
-│   ├── bridge.js                  # Conector seguro entre contextos de página y extensión
-│   └── content.js                 # Extractor pasivo incremental, multi-cuenta y widget visual
-├── config.py                      # Rutas centralizadas y gestión multi-cuenta
-├── whatsapp_viewer.py             # Servidor local HTTP, selector de cuentas y visor web
-├── db_manager.py                  # Gestor de base de datos SQLite (WAL mode, FTS5)
-├── media_manager.py               # Descifrador de multimedia (HKDF-SHA256 + AES-256-CBC)
-├── iniciar_visor.bat              # Lanzador con autoinstalador, panel de control y actualizador
-├── ver_logs.bat                   # Monitor en vivo de logs de sincronización
-├── requirements.txt               # Dependencias mínimas de Python (cryptography)
-└── README.md                      # Documentación y guía de uso
+├── assets/                  # Recursos gráficos e iconos del sistema
+├── data/                    # DATOS DEL USUARIO (Protegidos por .gitignore)
+│   ├── <account_id>/        # Bases SQLite, multimedia, notas y metadatos
+│   └── system_settings.json # Configuración de red LAN, PIN y operadores
+├── extension/               # Extensión Manifest V3 para Chromium
+│   ├── manifest.json        # Permisos sidePanel y storage
+│   ├── crypto_sync.js       # Interceptor pasivo de WebCrypto en MAIN
+│   ├── bridge.js            # Lectura pasiva de IndexedDB y envío a background
+│   ├── background.js        # Service Worker central y enrutador seguro
+│   └── sidepanel/           # UI nativa del Copiloto en panel lateral
+├── web/                     # Frontend desacoplado del Visor Web
+│   ├── index.html           # Layout moderno con App Rail vertical (58px)
+│   ├── css/styles.css       # Estilos responsivos con Modo Claro y Oscuro
+│   └── js/app.js            # Lógica reactiva, SSE, Kanban y CRM
+├── tools/                   # Herramientas de empaquetado y release
+│   └── build_portable.py    # Constructor del ZIP portable con Python embebido
+├── tests/                   # Batería completa de pruebas unitarias y de integración
+├── Iniciar_WAckup.vbs       # Lanzador silencioso en bandeja de Windows
+├── iniciar_visor.bat        # Lanzador para diagnóstico por consola
+├── tray_manager.py          # Gestor de la bandeja del sistema (System Tray)
+├── sse_hub.py               # Servidor de eventos en tiempo real (SSE)
+├── updater.py               # Actualizador nativo por HTTPS (GitHub Releases)
+├── db_manager.py            # SQLite WAL, FTS5 y contexto colaborativo
+├── whatsapp_viewer.py       # Servidor HTTP local multi-hilo
+└── VERSION                  # Versión canónica del sistema (3.0.0)
 ```
 
 ---
 
-## 🔌 Endpoints de la API Local
+## 🛡️ Seguridad y Copias de Respaldo
 
-El servidor HTTP local expone endpoints internos utilizados de forma automática por la extensión y el visor web:
+- **Blindaje de la carpeta `data/`:** Todos los datos personales residen exclusivamente en `data/` y nunca se sobrescriben al actualizar.
+- **Backups consistentes en caliente:** Cada actualización genera automáticamente una copia de seguridad en `data/backups/` mediante la API nativa `sqlite3.Connection.backup()`.
+- **Modo Local por defecto:** De fábrica, el servidor solo escucha en `127.0.0.1`. El acceso remoto solo se habilita si el usuario activa expresamente el Modo LAN con PIN numérico.
 
-| Método | Endpoint | Descripción |
-| :---: | :--- | :--- |
-| `GET` | `/` o `/index.html` | Interfaz gráfica del visor web de conversaciones y multimedia. |
-| `GET` | `/api/accounts` | Lista de cuentas de WhatsApp detectadas y sus estadísticas. |
-| `GET` | `/api/sync/status` | Estado actual de sincronización, total de mensajes y multimedia en cola. |
-| `POST` | `/api/sync` | Endpoint incremental donde la extensión envía nuevos lotes de chats y mensajes. |
-| `GET` | `/api/chats` | Lista de conversaciones de la cuenta activa ordenadas cronológicamente. |
-| `GET` | `/api/messages?chat_id=...` | Historial de mensajes y multimedia del chat seleccionado. |
-| `GET` | `/api/search?q=...` | Motor de búsqueda rápida de texto completo indexado (`FTS5`). |
-| `GET` | `/api/export/html?chat_id=...` | Exportación de chat a HTML ligero o autónomo con multimedia incrustado. |
-| `GET` | `/api/export/contacts` | Exportación de libreta de contactos a archivo `.csv`. |
-| `POST` | `/api/backup/create` | Generación de copia de seguridad consistente de la base de datos SQLite. |
-| `GET` | `/api/backup/list` | Listado de copias de seguridad disponibles para descarga. |
-| `GET` | `/media/...` | Transmisión y streaming multimedia con soporte HTTP 206 (Range). |
+---
+
+## 📄 Licencia
+
+Desarrollado bajo licencia MIT. Software libre para uso personal y comercial.

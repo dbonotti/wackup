@@ -21,12 +21,17 @@ from datetime import datetime
 import db_manager
 import media_manager
 import config
+import sse_hub
+import updater
 from config import (
     BASE_DIR, DATA_DIR, DB_FILE, MEDIA_DIR, BACKUP_DIR, LOG_DIR,
     SYNC_LOG_PATH, ensure_data_dirs, migrate_legacy_data
 )
 
 PORT = 8080
+_last_sync_epoch = 0
+_server_instance = None
+_server_stopping = False
 
 def append_sync_log(entry_text):
     try:
@@ -36,2126 +41,18 @@ def append_sync_log(entry_text):
     except Exception:
         pass
 
-HTML_UI = """<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WAckup - Visor</title>
-  <link rel="icon" type="image/jpeg" href="/favicon.jpg">
-  <style>
-    :root {
-      --bg-body: #111b21;
-      --bg-app: #ffffff;
-      --bg-sidebar: #ffffff;
-      --bg-header: #f0f2f5;
-      --bg-chat: #efeae2;
-      --bg-hover: #f5f6f6;
-      --bg-active: #f0f2f5;
-      --bg-input: #f0f2f5;
-      --bg-incoming: #ffffff;
-      --bg-outgoing: #d9fdd3;
-      --bg-badge: #ffffff;
-      --bg-quote: rgba(0,0,0,0.05);
-      --border-color: #e9edef;
-      --border-strong: #d1d7db;
-      --text-primary: #111b21;
-      --text-secondary: #54656f;
-      --text-muted: #667781;
-      --text-time: #8696a0;
-      --accent: #00a884;
-    }
-
-    body.dark {
-      --bg-body: #0b141a;
-      --bg-app: #111b21;
-      --bg-sidebar: #111b21;
-      --bg-header: #202c33;
-      --bg-chat: #0b141a;
-      --bg-hover: #202c33;
-      --bg-active: #2a3942;
-      --bg-input: #202c33;
-      --bg-incoming: #202c33;
-      --bg-outgoing: #005c4b;
-      --bg-badge: #182229;
-      --bg-quote: rgba(255,255,255,0.08);
-      --border-color: #222d34;
-      --border-strong: #2a3942;
-      --text-primary: #e9edef;
-      --text-secondary: #aebac1;
-      --text-muted: #8696a0;
-      --text-time: #8696a0;
-      --accent: #00a884;
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-      background-color: var(--bg-body); 
-      height: 100vh; 
-      display: flex; 
-      justify-content: center; 
-      align-items: center;
-      color: var(--text-primary);
-    }
-    #app-container { display: flex; width: 100vw; height: 100vh; background-color: var(--bg-app); overflow: hidden; }
-
-    /* Scrollbars modernos estilo WhatsApp */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(134,150,160,0.3); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(134,150,160,0.5); }
-
-    /* Panel izquierdo (Sidebar) */
-    #sidebar { width: 410px; min-width: 340px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--bg-sidebar); }
-    .sidebar-header { 
-      height: 60px; 
-      background: var(--bg-header); 
-      display: flex; 
-      align-items: center; 
-      justify-content: space-between; 
-      padding: 0 14px; 
-      font-weight: 600; 
-      font-size: 15px;
-      color: var(--text-primary); 
-      border-bottom: 1px solid var(--border-color); 
-    }
-    .brand-title { display: flex; align-items: center; gap: 8px; }
-    .brand-logo { width: 26px; height: 26px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
-    
-    .sidebar-actions { display: flex; align-items: center; gap: 8px; }
-    .menu-container { position: relative; display: flex; align-items: center; }
-    .btn-kebab {
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      border: none;
-      background: transparent;
-      color: var(--text-secondary);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.15s, color 0.15s;
-    }
-    .btn-kebab:hover, .btn-kebab.active { background: var(--bg-hover); color: var(--text-primary); }
-    .btn-kebab svg { width: 20px; height: 20px; fill: currentColor; }
-
-    .dropdown-menu {
-      position: absolute;
-      top: calc(100% + 6px);
-      right: 0;
-      min-width: 235px;
-      background: var(--bg-sidebar);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      box-shadow: 0 4px 18px rgba(11, 20, 26, 0.24);
-      padding: 6px 0;
-      display: none;
-      flex-direction: column;
-      z-index: 1500;
-      animation: menuFadeIn 0.14s ease-out;
-    }
-    .dropdown-menu.open { display: flex; }
-    @keyframes menuFadeIn {
-      from { opacity: 0; transform: translateY(-6px) scale(0.97); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    .dropdown-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 18px;
-      font-size: 13.8px;
-      font-weight: 400;
-      color: var(--text-primary);
-      background: none;
-      border: none;
-      width: 100%;
-      text-align: left;
-      cursor: pointer;
-      transition: background 0.12s;
-      white-space: nowrap;
-    }
-    .dropdown-item:hover { background: var(--bg-hover); }
-    .dropdown-divider { height: 1px; background: var(--border-color); margin: 4px 0; }
-
-    .sync-badge { 
-      font-size: 11.5px; 
-      padding: 4px 9px; 
-      border-radius: 14px; 
-      background: rgba(37, 211, 102, 0.15); 
-      color: #25d366; 
-      font-weight: 600; 
-      display: flex; 
-      align-items: center; 
-      gap: 5px;
-      cursor: pointer;
-    }
-    .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #25d366; }
-
-    /* Selector de Cuentas Multi-Cuenta */
-    .account-selector-container {
-      position: relative;
-      display: flex;
-      align-items: center;
-    }
-    .account-badge {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      background: var(--bg-input);
-      border: 1px solid var(--border-color);
-      padding: 4px 10px;
-      border-radius: 14px;
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--text-primary);
-      cursor: pointer;
-      user-select: none;
-      transition: background 0.15s, border-color 0.15s;
-      max-width: 140px;
-    }
-    .account-badge:hover {
-      background: var(--bg-hover);
-      border-color: var(--accent);
-    }
-    .account-label {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .account-arrow {
-      font-size: 10px;
-      color: var(--text-time);
-      margin-left: 1px;
-    }
-    .account-dropdown {
-      min-width: 220px;
-      right: 0;
-      top: calc(100% + 6px);
-    }
-    .account-dropdown-item {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      padding: 8px 14px;
-      cursor: pointer;
-      border-bottom: 1px solid var(--border-color);
-      transition: background 0.12s;
-    }
-    .account-dropdown-item:last-child {
-      border-bottom: none;
-    }
-    .account-dropdown-item:hover {
-      background: var(--bg-hover);
-    }
-    .account-dropdown-item.active {
-      background: rgba(0, 168, 132, 0.08);
-      border-left: 3px solid var(--accent);
-    }
-    .account-item-title {
-      font-weight: 600;
-      font-size: 12.5px;
-      color: var(--text-primary);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .account-item-subtitle {
-      font-size: 11px;
-      color: var(--text-time);
-    }
-
-    .search-section { padding: 8px 12px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 6px; }
-    .search-box-wrapper { display: flex; position: relative; align-items: center; }
-    .search-box { 
-      width: 100%; 
-      padding: 8px 34px 8px 36px; 
-      border-radius: 8px; 
-      border: 1px solid var(--border-color); 
-      background: var(--bg-input); 
-      color: var(--text-primary);
-      font-size: 14px; 
-      outline: none; 
-      transition: all 0.2s;
-    }
-    .search-box:focus { background: var(--bg-sidebar); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-    .search-icon-svg { position: absolute; left: 10px; fill: var(--text-secondary); width: 16px; height: 16px; pointer-events: none; }
-    .search-clear-btn {
-      position: absolute;
-      right: 8px;
-      border: none;
-      background: none;
-      color: var(--text-secondary);
-      cursor: pointer;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      line-height: 1;
-      transition: background 0.15s, color 0.15s;
-    }
-    .search-clear-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-    
-    .search-mode-tabs { display: flex; gap: 6px; font-size: 12px; }
-    .tab-btn { 
-      border: none; 
-      background: none; 
-      padding: 4px 10px; 
-      cursor: pointer; 
-      color: var(--text-secondary); 
-      border-radius: 12px; 
-      font-weight: 500; 
-      transition: all 0.15s;
-    }
-    .tab-btn.active { background: var(--accent); color: #ffffff; font-weight: 600; }
-
-    #chat-list, #search-results-list { flex: 1; overflow-y: auto; list-style: none; }
-    .chat-item, .search-item { 
-      display: flex; 
-      align-items: center; 
-      padding: 10px 16px; 
-      cursor: pointer; 
-      border-bottom: 1px solid var(--border-color); 
-      transition: background 0.15s; 
-    }
-    .chat-item:hover, .search-item:hover { background: var(--bg-hover); }
-    .chat-item.active { background: var(--bg-active); border-left: 4px solid var(--accent); }
-    
-    .chat-avatar { 
-      width: 46px; 
-      height: 46px; 
-      border-radius: 50%; 
-      display: flex; 
-      align-items: center; 
-      justify-content: center; 
-      font-weight: 600; 
-      color: #ffffff; 
-      margin-right: 12px; 
-      flex-shrink: 0; 
-      font-size: 17px;
-    }
-    .chat-info { flex: 1; overflow: hidden; }
-    .chat-header-row { display: flex; justify-content: space-between; align-items: baseline; }
-    .chat-name { font-size: 15px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .chat-time { font-size: 11px; color: var(--text-time); flex-shrink: 0; margin-left: 6px; }
-    .chat-preview { font-size: 13.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
-
-    /* Resultados Búsqueda FTS5 */
-    .search-item { flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 16px; }
-    .search-chat-title { font-size: 12.5px; color: var(--accent); font-weight: 600; }
-    .search-snippet { font-size: 14px; color: var(--text-primary); line-height: 19px; }
-    .search-snippet mark { background-color: #ffe082; color: #111b21; padding: 1px 3px; border-radius: 2px; font-weight: 600; }
-    .search-date { font-size: 11px; color: var(--text-time); align-self: flex-end; }
-
-    /* Panel derecho (Conversación) */
-    #main-chat { flex: 1; display: flex; flex-direction: column; background: var(--bg-chat); position: relative; }
-    #chat-header { 
-      height: 60px; 
-      background: var(--bg-header); 
-      display: flex; 
-      align-items: center; 
-      justify-content: space-between;
-      padding: 0 20px; 
-      border-bottom: 1px solid var(--border-strong); 
-      z-index: 2; 
-    }
-    .header-left { display: flex; align-items: center; }
-    #header-info h3 { font-size: 16px; color: var(--text-primary); font-weight: 600; }
-    #header-info p, .header-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; display: flex; align-items: center; gap: 8px; }
-    .header-phone-row { display: inline-flex; align-items: center; gap: 7px; }
-    .header-phone-text { color: var(--text-secondary); font-weight: 500; font-size: 12.5px; letter-spacing: 0.1px; user-select: text; }
-    .btn-copy-phone {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      border: 1px solid var(--border-strong);
-      background: var(--bg-sidebar);
-      color: var(--text-secondary);
-      border-radius: 10px;
-      padding: 1px 7px;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      user-select: none;
-    }
-    .btn-copy-phone:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }
-    .btn-copy-phone.copied { background: rgba(0, 168, 132, 0.14); border-color: var(--accent); color: var(--accent); }
-    .btn-copy-phone svg { width: 11px; height: 11px; fill: currentColor; flex-shrink: 0; }
-
-    .header-actions { display: flex; align-items: center; gap: 8px; }
-    .btn-chat-action {
-      border: 1px solid var(--border-strong);
-      background: var(--bg-sidebar);
-      border-radius: 14px;
-      padding: 5px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-primary);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      transition: all 0.15s;
-    }
-    .btn-chat-action:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }
-
-    /* Barra de filtros dentro del chat */
-    #chat-filter-bar {
-      background: var(--bg-sidebar);
-      border-bottom: 1px solid var(--border-color);
-      padding: 6px 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 12px;
-      gap: 10px;
-      z-index: 1;
-      flex-wrap: wrap;
-    }
-    .filter-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-    .filter-pill {
-      border: 1px solid var(--border-color);
-      background: var(--bg-input);
-      padding: 3px 9px;
-      border-radius: 12px;
-      cursor: pointer;
-      color: var(--text-secondary);
-      font-weight: 500;
-      transition: all 0.15s;
-    }
-    .filter-pill.active { background: var(--accent); color: #ffffff; border-color: var(--accent); font-weight: 600; }
-    .filter-dates { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
-    .date-input {
-      border: 1px solid var(--border-color);
-      background: var(--bg-input);
-      padding: 3px 6px;
-      border-radius: 6px;
-      font-size: 11.5px;
-      outline: none;
-      color: var(--text-primary);
-    }
-    .date-input:focus { border-color: var(--accent); background: var(--bg-sidebar); }
-
-    #messages-container { 
-      flex: 1; 
-      overflow-y: auto; 
-      padding: 16px 5%; 
-      display: flex; 
-      flex-direction: column; 
-      gap: 4px; 
-    }
-
-    .btn-load-more {
-      align-self: center;
-      border: 1px solid var(--border-strong);
-      background: var(--bg-badge);
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 600;
-      padding: 6px 16px;
-      border-radius: 16px;
-      cursor: pointer;
-      margin: 6px 0 12px 0;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-      transition: all 0.15s;
-    }
-    .btn-load-more:hover { background: var(--bg-hover); }
-
-    /* Burbujas de chat */
-    .date-badge { 
-      align-self: center; 
-      background: var(--bg-badge); 
-      color: var(--text-secondary); 
-      font-size: 11.5px; 
-      font-weight: 500; 
-      padding: 5px 12px; 
-      border-radius: 7px; 
-      box-shadow: 0 1px 0.5px rgba(11,20,26,0.13); 
-      margin: 12px 0 6px 0; 
-      user-select: none;
-    }
-    .msg-bubble { 
-      max-width: 65%; 
-      padding: 6px 9px 6px 9px; 
-      border-radius: 7.5px; 
-      font-size: 14.2px; 
-      line-height: 19px; 
-      position: relative; 
-      word-wrap: break-word; 
-      box-shadow: 0 1px 0.5px rgba(11,20,26,0.13); 
-      display: flex; 
-      flex-direction: column; 
-    }
-    .msg-incoming { 
-      align-self: flex-start; 
-      background: var(--bg-incoming); 
-      color: var(--text-primary); 
-      border-top-left-radius: 0; 
-    }
-    .msg-outgoing { 
-      align-self: flex-end; 
-      background: var(--bg-outgoing); 
-      color: var(--text-primary); 
-      border-top-right-radius: 0; 
-    }
-    
-    .msg-sender { 
-      font-size: 12px; 
-      font-weight: 600; 
-      margin-bottom: 2px; 
-    }
-    .msg-forwarded { display: flex; align-items: center; gap: 4px; font-size: 12.2px; font-style: italic; color: var(--text-muted); margin-bottom: 2px; user-select: none; }
-    .msg-forwarded svg { width: 14px; height: 14px; fill: currentColor; flex-shrink: 0; }
-    .msg-quote {
-      background: var(--bg-quote);
-      border-left: 4px solid var(--accent);
-      border-radius: 4px;
-      padding: 4px 8px;
-      margin-bottom: 4px;
-      font-size: 12.5px;
-      cursor: pointer;
-      transition: background-color 0.15s ease, opacity 0.15s ease;
-    }
-    .msg-quote:hover {
-      background: rgba(0, 168, 132, 0.18);
-    }
-    .msg-quote-author {
-      font-weight: 600;
-      font-size: 11.5px;
-      color: var(--accent);
-      margin-bottom: 1px;
-    }
-    .msg-quote-text {
-      color: var(--text-secondary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 340px;
-    }
-    .msg-text { white-space: pre-wrap; font-size: 14.2px; word-break: break-word; }
-    .msg-footer { 
-      align-self: flex-end; 
-      font-size: 10.5px; 
-      color: var(--text-muted); 
-      margin-top: 3px; 
-      margin-left: 16px; 
-      display: flex; 
-      align-items: center; 
-      gap: 3px;
-    }
-    .msg-check { color: #53bdeb; font-size: 12px; font-weight: bold; }
-
-    /* Multimedia */
-    .media-container { margin-bottom: 4px; border-radius: 6px; overflow: hidden; }
-    .media-img { 
-      max-width: 320px; 
-      max-height: 320px; 
-      object-fit: cover; 
-      border-radius: 6px; 
-      cursor: pointer; 
-      display: block; 
-      transition: opacity 0.15s;
-    }
-    .media-img:hover { opacity: 0.95; }
-    
-    /* Contenedor de audio con control de velocidad */
-    .audio-wrapper {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      background: rgba(0,0,0,0.03);
-      padding: 4px 6px;
-      border-radius: 8px;
-    }
-    .media-audio { width: 250px; height: 36px; outline: none; }
-    .btn-speed {
-      border: 1px solid var(--border-strong);
-      background: var(--bg-sidebar);
-      border-radius: 10px;
-      padding: 3px 6px;
-      font-size: 10.5px;
-      font-weight: 700;
-      color: var(--text-secondary);
-      cursor: pointer;
-      user-select: none;
-      transition: all 0.15s;
-    }
-    .btn-speed:hover { background: var(--bg-hover); color: var(--text-primary); }
-
-    .media-video { max-width: 340px; border-radius: 6px; display: block; }
-    .media-doc { 
-      display: flex; 
-      align-items: center; 
-      gap: 10px; 
-      padding: 8px 12px; 
-      background: var(--bg-quote); 
-      border-radius: 6px; 
-      text-decoration: none; 
-      color: var(--text-primary); 
-      font-size: 13.5px; 
-      transition: background 0.15s; 
-    }
-    .media-doc:hover { opacity: 0.9; }
-    .media-doc-icon { font-size: 24px; }
-    .media-expired {
-      font-size: 12px;
-      color: var(--text-time);
-      font-style: italic;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 0;
-    }
-
-    /* Modal Visor Imagen */
-    #image-modal { 
-      display: none; 
-      position: fixed; 
-      z-index: 1000; 
-      left: 0; 
-      top: 0; 
-      width: 100vw; 
-      height: 100vh; 
-      background: rgba(0,0,0,0.85); 
-      align-items: center; 
-      justify-content: center; 
-      cursor: zoom-out; 
-    }
-    #image-modal img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); }
-
-    /* Modal de Backups y Multimedia */
-    #backup-modal, #media-modal {
-      display: none;
-      position: fixed;
-      z-index: 1000;
-      left: 0;
-      top: 0;
-      width: 100vw;
-      height: 100vh;
-      background: rgba(0,0,0,0.5);
-      align-items: center;
-      justify-content: center;
-    }
-    .modal-card {
-      background: var(--bg-sidebar);
-      color: var(--text-primary);
-      border-radius: 12px;
-      width: 480px;
-      max-width: 90vw;
-      padding: 20px 24px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-    .modal-card h3 { font-size: 17px; color: var(--text-primary); }
-    .modal-card p { font-size: 13.5px; color: var(--text-secondary); line-height: 19px; }
-    .backup-list { max-height: 200px; overflow-y: auto; list-style: none; border: 1px solid var(--border-color); border-radius: 8px; }
-    .backup-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-color); font-size: 12.5px; }
-    .backup-item:last-child { border-bottom: none; }
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .stat-box { background: var(--bg-input); border: 1px solid var(--border-color); padding: 10px 14px; border-radius: 8px; }
-    .stat-box .stat-val { font-size: 20px; font-weight: 700; color: var(--accent); }
-    .stat-box .stat-lbl { font-size: 12px; color: var(--text-secondary); }
-    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-    .btn-modal-cancel { border: 1px solid var(--border-strong); background: var(--bg-sidebar); color: var(--text-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
-    .btn-modal-confirm { border: none; background: var(--accent); color: #fff; padding: 6px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; }
-
-    /* Estado vacío */
-    #empty-state { 
-      flex: 1; 
-      display: flex; 
-      flex-direction: column; 
-      align-items: center; 
-      justify-content: center; 
-      color: var(--text-muted); 
-      background: var(--bg-header); 
-      text-align: center;
-      padding: 20px;
-    }
-    #empty-state h2 { color: var(--text-primary); margin-bottom: 8px; font-weight: 400; font-size: 26px; }
-    #empty-state p { font-size: 14px; max-width: 480px; line-height: 20px; }
-
-    /* Tarjeta de Primer Inicio / Onboarding */
-    .onboarding-box {
-      background: var(--bg-sidebar);
-      border: 1px solid var(--border-strong);
-      border-radius: 14px;
-      padding: 26px 28px;
-      max-width: 560px;
-      width: 92%;
-      text-align: left;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-    }
-    .onboarding-badge {
-      display: inline-block;
-      background: rgba(0, 168, 132, 0.15);
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 700;
-      padding: 4px 10px;
-      border-radius: 12px;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .onboarding-box h3 { font-size: 20px; color: var(--text-primary); margin-bottom: 8px; }
-    .onboarding-box p.onboarding-desc { font-size: 13.5px; color: var(--text-secondary); line-height: 19px; margin-bottom: 18px; }
-    .onboarding-steps { display: flex; flex-direction: column; gap: 12px; }
-    .onboarding-step {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      background: var(--bg-input);
-      padding: 12px 14px;
-      border-radius: 10px;
-      border: 1px solid var(--border-color);
-    }
-    .step-num {
-      width: 26px;
-      height: 26px;
-      background: var(--accent);
-      color: #fff;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: 700;
-      flex-shrink: 0;
-    }
-    .step-content { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-primary); line-height: 18px; width: 100%; }
-    .step-content strong { color: var(--text-primary); font-size: 13.5px; }
-    .step-content span { color: var(--text-secondary); }
-    .path-copy-row { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
-    .path-copy-input {
-      flex: 1;
-      padding: 6px 10px;
-      font-size: 12px;
-      border: 1px solid var(--border-strong);
-      border-radius: 6px;
-      background: var(--bg-sidebar);
-      color: var(--text-primary);
-      font-family: monospace;
-    }
-    .btn-copy-path {
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      padding: 6px 12px;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    .btn-copy-path:hover { opacity: 0.9; }
-
-    /* Indicador en vivo de espera en onboarding */
-    .onboarding-live-status {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-top: 16px;
-      padding: 10px 14px;
-      background: rgba(0, 168, 132, 0.08);
-      border: 1px solid rgba(0, 168, 132, 0.28);
-      border-radius: 8px;
-      font-size: 13px;
-      color: var(--text-primary);
-    }
-    .live-pulse-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 8px var(--accent);
-      flex-shrink: 0;
-      animation: pulseDot 1.8s infinite ease-in-out;
-    }
-    @keyframes pulseDot {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.3; transform: scale(0.8); }
-    }
-
-    /* Notificación Toast */
-    #toast {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: #111b21;
-      color: #ffffff;
-      padding: 10px 18px;
-      border-radius: 8px;
-      font-size: 13.5px;
-      font-weight: 500;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
-      display: none;
-      z-index: 2000;
-      animation: fadeIn 0.2s ease;
-    }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-  </style>
-</head>
-<body>
-  <div id="app-container">
-    <!-- Panel izquierdo (Sidebar) -->
-    <div id="sidebar">
-      <div class="sidebar-header">
-        <div class="brand-title">
-          <img class="brand-logo" src="/favicon.jpg" alt="" width="26" height="26">
-          <span>WAckup</span>
-        </div>
-        <div class="sidebar-actions">
-          <div class="account-selector-container" id="accountSelectorContainer" style="display: none;">
-            <div class="account-badge" id="accountSelectorBtn" onclick="toggleAccountDropdown(event)" title="Cuenta activa. Haz clic para cambiar de cuenta.">
-              <span class="account-icon">📱</span>
-              <span class="account-label" id="currentAccountLabel">Cuenta</span>
-              <span class="account-arrow" id="accountSelectorArrow" style="display: none;">▾</span>
-            </div>
-            <div class="dropdown-menu account-dropdown" id="accountDropdown"></div>
-          </div>
-          <div class="sync-badge" id="syncStatusBadge" onclick="openMediaModal()" title="Ver estado de sincronización y multimedia">
-            <div class="sync-dot"></div>
-            <span id="syncStatusText">Conectado</span>
-          </div>
-          <div class="menu-container">
-            <button class="btn-kebab" id="globalMenuBtn" onclick="toggleDropdown('globalDropdown', this, event)" title="Menú de opciones globales">
-              <svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-.001-4.001A2 2 0 0 0 12 7zm0 2a2 2 0 1 0-.001 3.999A2 2 0 0 0 12 9zm0 6a2 2 0 1 0-.001 3.999A2 2 0 0 0 12 15z"/></svg>
-            </button>
-            <div class="dropdown-menu" id="globalDropdown">
-              <button class="dropdown-item" onclick="closeAllDropdowns(); openMediaModal();">
-                <span>🎬</span>
-                <span>Estado de multimedia</span>
-              </button>
-              <button class="dropdown-item" onclick="closeAllDropdowns(); openBackupModal();">
-                <span>💾</span>
-                <span>Copias de seguridad (Backup)</span>
-              </button>
-              <button class="dropdown-item" onclick="closeAllDropdowns(); exportContactsCsv();">
-                <span>📇</span>
-                <span>Exportar contactos (.csv)</span>
-              </button>
-              <button class="dropdown-item" onclick="closeAllDropdowns(); openSyncLogs();">
-                <span>📋</span>
-                <span>Logs de sincronización</span>
-              </button>
-              <div class="dropdown-divider"></div>
-              <button class="dropdown-item" onclick="toggleTheme(); closeAllDropdowns();">
-                <span id="themeMenuIcon">🌙</span>
-                <span id="themeMenuText">Modo oscuro</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="search-section">
-        <div class="search-box-wrapper">
-          <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-          <input type="text" id="searchInput" class="search-box" placeholder="Buscar un chat o iniciar uno nuevo..." oninput="handleSearchInput()">
-          <button type="button" id="searchClearBtn" class="search-clear-btn" onclick="clearSearchInput()" title="Limpiar texto de búsqueda">✕</button>
-        </div>
-        <div class="search-mode-tabs">
-          <button class="tab-btn active" id="tabChats" onclick="setSearchMode('chats')">Chats</button>
-          <button class="tab-btn" id="tabGlobal" onclick="setSearchMode('global')">Búsqueda Global (FTS5)</button>
-        </div>
-      </div>
-
-      <ul id="chat-list"></ul>
-      <ul id="search-results-list" style="display: none;"></ul>
-    </div>
-
-    <!-- Panel derecho (Chat) -->
-    <div id="main-chat">
-      <div id="chat-header" style="display: none;">
-        <div class="header-left">
-          <div class="chat-avatar" id="headerAvatar"></div>
-          <div id="header-info">
-            <h3 id="headerTitle">Contacto</h3>
-            <p id="headerSub">Identificador</p>
-          </div>
-        </div>
-        <div class="header-actions">
-          <div class="menu-container">
-            <button class="btn-kebab" id="chatMenuBtn" onclick="toggleDropdown('chatDropdown', this, event)" title="Opciones del chat">
-              <svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-.001-4.001A2 2 0 0 0 12 7zm0 2a2 2 0 1 0-.001 3.999A2 2 0 0 0 12 9zm0 6a2 2 0 1 0-.001 3.999A2 2 0 0 0 12 15z"/></svg>
-            </button>
-            <div class="dropdown-menu" id="chatDropdown">
-              <button class="dropdown-item" onclick="closeAllDropdowns(); toggleChatFilterBar();">
-                <span>📅</span>
-                <span id="chatFilterMenuText">Buscar por fecha y multimedia</span>
-              </button>
-              <div class="dropdown-divider"></div>
-              <button class="dropdown-item" onclick="closeAllDropdowns(); exportCurrentChat(false);">
-                <span>📥</span>
-                <span>Exportar chat a HTML (ligero)</span>
-              </button>
-              <button class="dropdown-item" onclick="closeAllDropdowns(); exportCurrentChat(true);">
-                <span>📦</span>
-                <span>Exportar autónomo (con multimedia)</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Barra de Filtros del Chat (desplegable desde el menú de 3 puntos) -->
-      <div id="chat-filter-bar" style="display: none;">
-        <div class="filter-pills">
-          <span class="filter-pill active" onclick="setMediaFilter(null, this)">Todos</span>
-          <span class="filter-pill" onclick="setMediaFilter('image', this)">📷 Fotos</span>
-          <span class="filter-pill" onclick="setMediaFilter('audio', this)">🎤 Audios</span>
-          <span class="filter-pill" onclick="setMediaFilter('document', this)">📄 Documentos</span>
-          <span class="filter-pill" onclick="setMediaFilter('video', this)">🎬 Videos</span>
-        </div>
-        <div class="filter-dates">
-          <span>Desde:</span>
-          <input type="date" id="filterDateFrom" class="date-input" onchange="applyDateFilter()">
-          <span>Hasta:</span>
-          <input type="date" id="filterDateTo" class="date-input" onchange="applyDateFilter()">
-          <button type="button" class="filter-pill" onclick="closeChatFilterBar()" title="Cerrar y limpiar filtros" style="margin-left: 4px;">✕ Cerrar</button>
-        </div>
-      </div>
-      
-      <div id="messages-container" style="display: none;"></div>
-
-      <div id="empty-state">
-        <h2>WAckup</h2>
-        <p>Selecciona una conversación a la izquierda o utiliza el buscador indexado de texto completo.</p>
-        <p id="dbStatsText" style="margin-top: 14px; font-size: 13px; color: var(--text-time);"></p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modal Visor Imagen -->
-  <div id="image-modal" onclick="this.style.display='none'">
-    <img id="modalImg" src="">
-  </div>
-
-  <!-- Modal de Gestión de Backups -->
-  <div id="backup-modal" onclick="if(event.target===this) closeBackupModal()">
-    <div class="modal-card">
-      <h3>Copias de Seguridad de Base de Datos</h3>
-      <p>Crea copias manuales puntuales de tu archivo SQLite sin interrumpir el funcionamiento del servidor.</p>
-      <div class="backup-list" id="backupListContainer">
-        <p style="padding: 14px; color: var(--text-time); text-align: center;">Cargando respaldos...</p>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-modal-cancel" onclick="closeBackupModal()">Cerrar</button>
-        <button class="btn-modal-confirm" onclick="triggerManualBackup()">+ Crear Nuevo Backup</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modal de Estado Multimedia -->
-  <div id="media-modal" onclick="if(event.target===this) closeMediaModal()">
-    <div class="modal-card">
-      <h3>Estado de Descargas Multimedia</h3>
-      <p>Los archivos multimedia se descargan y descifran automáticamente en segundo plano desde los servidores de WhatsApp.</p>
-      <div class="stats-grid">
-        <div class="stat-box"><div class="stat-val" id="statMediaDownloaded">0</div><div class="stat-lbl">Descargados</div></div>
-        <div class="stat-box"><div class="stat-val" id="statMediaPending">0</div><div class="stat-lbl">En cola / Pendientes</div></div>
-        <div class="stat-box"><div class="stat-val" id="statMediaFailed">0</div><div class="stat-lbl">Con error (Reintentables)</div></div>
-        <div class="stat-box"><div class="stat-val" id="statMediaExpired">0</div><div class="stat-lbl">Expirados en CDN</div></div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-modal-cancel" onclick="closeMediaModal()">Cerrar</button>
-        <button class="btn-modal-confirm" onclick="retryFailedMedia()">🔄 Reintentar Fallidos</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="toast"></div>
-
-  <script>
-    let currentAccountId = localStorage.getItem('wackup_selected_account') || null;
-    let availableAccounts = [];
-    let allChats = [];
-    let currentMode = 'chats';
-    let searchDebounceTimer = null;
-    let selectedChatId = null;
-    let activeMediaFilter = null;
-    let currentMessages = [];
-    let filteredMessages = [];
-    let renderedCount = 0;
-    const PAGE_SIZE = 300;
-    let lastSyncData = {};
-
-    function withAccount(url) {
-      if (!currentAccountId) return url;
-      const sep = url.includes('?') ? '&' : '?';
-      return `${url}${sep}account_id=${encodeURIComponent(currentAccountId)}`;
-    }
-
-    const AVATAR_COLORS = [
-      '#00a884', '#0284c7', '#7c3aed', '#db2777', 
-      '#ea580c', '#16a34a', '#059669', '#4f46e5'
-    ];
-    const SENDER_COLORS = [
-      '#1f7a63', '#1e88e5', '#8e24aa', '#e53935', 
-      '#fb8c00', '#00acc1', '#43a047', '#3949ab'
-    ];
-
-    function safeDomId(prefix, rawId) {
-      if (!rawId) return prefix + 'unknown';
-      return prefix + encodeURIComponent(String(rawId)).replace(/[^a-zA-Z0-9_-]/g, '_');
-    }
-
-    function updateThemeMenuLabel(isDark) {
-      const iconEl = document.getElementById('themeMenuIcon');
-      const textEl = document.getElementById('themeMenuText');
-      if (iconEl) iconEl.textContent = isDark ? '☀️' : '🌙';
-      if (textEl) textEl.textContent = isDark ? 'Modo claro' : 'Modo oscuro';
-    }
-
-    function toggleTheme() {
-      const isDark = document.body.classList.toggle('dark');
-      localStorage.setItem('wa_backup_theme', isDark ? 'dark' : 'light');
-      updateThemeMenuLabel(isDark);
-    }
-
-    function initTheme() {
-      const saved = localStorage.getItem('wa_backup_theme');
-      const isDark = saved === 'dark';
-      if (isDark) {
-        document.body.classList.add('dark');
-      }
-      updateThemeMenuLabel(isDark);
-    }
-
-    function closeAllDropdowns() {
-      document.querySelectorAll('.dropdown-menu.open').forEach(el => el.classList.remove('open'));
-      document.querySelectorAll('.btn-kebab.active').forEach(el => el.classList.remove('active'));
-    }
-
-    function toggleDropdown(menuId, btnEl, event) {
-      if (event) event.stopPropagation();
-      const menu = document.getElementById(menuId);
-      if (!menu) return;
-      const isOpen = menu.classList.contains('open');
-      closeAllDropdowns();
-      if (!isOpen) {
-        menu.classList.add('open');
-        if (btnEl) btnEl.classList.add('active');
-      }
-    }
-
-    /* Gestión y selector de múltiples cuentas */
-    async function loadAccountsList() {
-      try {
-        const res = await fetch('/api/accounts');
-        availableAccounts = await res.json();
-        renderAccountSelector();
-      } catch (e) {
-        console.error('Error cargando cuentas:', e);
-      }
-    }
-
-    function renderAccountSelector() {
-      const container = document.getElementById('accountSelectorContainer');
-      const label = document.getElementById('currentAccountLabel');
-      const arrow = document.getElementById('accountSelectorArrow');
-      const dropdown = document.getElementById('accountDropdown');
-      if (!container || !label || !dropdown) return;
-
-      if (!availableAccounts || availableAccounts.length === 0) {
-        container.style.display = 'none';
-        return;
-      }
-
-      let activeAcc = availableAccounts.find(a => a.id === currentAccountId);
-      if (!activeAcc || (activeAcc.id === 'default' && availableAccounts.some(a => a.id !== 'default'))) {
-        const realAcc = availableAccounts.find(a => a.id !== 'default') || availableAccounts[0];
-        activeAcc = realAcc;
-        currentAccountId = activeAcc ? activeAcc.id : null;
-        if (currentAccountId) {
-          localStorage.setItem('wackup_selected_account', currentAccountId);
-        }
-      }
-
-      container.style.display = 'flex';
-      const displayName = activeAcc.name || formatPhoneNumber(activeAcc.phone) || activeAcc.id;
-      label.textContent = displayName;
-      label.title = `Cuenta activa: ${displayName} (${activeAcc.id})`;
-
-      arrow.style.display = availableAccounts.length > 1 ? 'inline' : 'none';
-
-      dropdown.innerHTML = '';
-      availableAccounts.forEach(acc => {
-        const item = document.createElement('div');
-        const isActive = acc.id === currentAccountId;
-        item.className = 'account-dropdown-item' + (isActive ? ' active' : '');
-        item.onclick = (e) => {
-          e.stopPropagation();
-          selectAccount(acc.id);
-        };
-
-        const titleText = acc.name || formatPhoneNumber(acc.phone) || acc.id;
-        const phoneSubtitle = (acc.phone && acc.name && acc.name !== acc.phone) ? formatPhoneNumber(acc.phone) : (acc.id !== titleText ? acc.id : '');
-        const msgsSubtitle = `${(acc.total_messages || 0).toLocaleString()} msgs · ${acc.total_chats || 0} chats`;
-
-        item.innerHTML = `
-          <div class="account-item-title">
-            <span>${escapeHtml(titleText)}</span>
-            ${isActive ? '<span style="color: var(--accent); font-size: 11px; font-weight: 600;">✓ Activa</span>' : ''}
-          </div>
-          <div class="account-item-subtitle">${phoneSubtitle ? escapeHtml(phoneSubtitle) + ' · ' : ''}${msgsSubtitle}</div>
-        `;
-        dropdown.appendChild(item);
-      });
-    }
-
-    function toggleAccountDropdown(event) {
-      if (event) event.stopPropagation();
-      if (!availableAccounts || availableAccounts.length <= 1) return;
-      const menu = document.getElementById('accountDropdown');
-      if (!menu) return;
-      const isOpen = menu.classList.contains('open');
-      closeAllDropdowns();
-      if (!isOpen) {
-        menu.classList.add('open');
-      }
-    }
-
-    async function selectAccount(accountId) {
-      closeAllDropdowns();
-      if (currentAccountId === accountId) return;
-      currentAccountId = accountId;
-      localStorage.setItem('wackup_selected_account', accountId);
-      selectedChatId = null;
-      allChats = [];
-      currentMessages = [];
-      filteredMessages = [];
-
-      document.getElementById('chat-header').style.display = 'none';
-      document.getElementById('chat-filter-bar').style.display = 'none';
-      document.getElementById('messages-container').style.display = 'none';
-      document.getElementById('empty-state').style.display = 'flex';
-
-      renderAccountSelector();
-      showToast(`Cambiando a cuenta: ${accountId}...`);
-      await updateSyncStatus();
-      await loadChats();
-    }
-
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('.menu-container') && !e.target.closest('.account-selector-container')) {
-        closeAllDropdowns();
-      }
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        closeAllDropdowns();
-      }
-    });
-
-    function toggleChatFilterBar() {
-      const bar = document.getElementById('chat-filter-bar');
-      if (!bar) return;
-      const isHidden = bar.style.display === 'none' || !bar.style.display;
-      if (isHidden) {
-        bar.style.display = 'flex';
-        const menuText = document.getElementById('chatFilterMenuText');
-        if (menuText) menuText.textContent = 'Ocultar barra de filtros';
-      } else {
-        closeChatFilterBar();
-      }
-    }
-
-    function closeChatFilterBar() {
-      const bar = document.getElementById('chat-filter-bar');
-      if (bar) bar.style.display = 'none';
-      const menuText = document.getElementById('chatFilterMenuText');
-      if (menuText) menuText.textContent = 'Buscar por fecha y multimedia';
-      if (activeMediaFilter !== null || document.getElementById('filterDateFrom').value || document.getElementById('filterDateTo').value) {
-        activeMediaFilter = null;
-        document.querySelectorAll('#chat-filter-bar .filter-pills .filter-pill').forEach((el, idx) => el.classList.toggle('active', idx === 0));
-        document.getElementById('filterDateFrom').value = '';
-        document.getElementById('filterDateTo').value = '';
-        applyClientFilters();
-      }
-    }
-
-    function showToast(message) {
-      const toast = document.getElementById('toast');
-      toast.textContent = message;
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3500);
-    }
-
-    function getColorForName(name, palette = AVATAR_COLORS) {
-      if (!name) return palette[0];
-      let hash = 0;
-      for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-      return palette[Math.abs(hash) % palette.length];
-    }
-
-    function isBinaryOrBase64(text) {
-      if (!text) return false;
-      const t = text.trim();
-      if (t.startsWith('data:image') || t.includes('/9j/')) return true;
-      if (/^[0-9a-zA-Z._+-]+@(s\\.whatsapp\\.net|lid|g\\.us|c\\.us|broadcast|newsletter)$/i.test(t)) return true;
-      if (/@(s\\.whatsapp\\.net|lid|g\\.us|c\\.us|broadcast)\\b/i.test(t) && !t.includes(' ')) return true;
-      if (t.length > 35 && !/\\s/.test(t) && /^[-A-Za-z0-9+/=_*&\"'()%:;$^]+$/.test(t)) return true;
-      return false;
-    }
-
-    function cleanText(text) {
-      if (!text) return '';
-      if (isBinaryOrBase64(text)) return '';
-      let t = text.replace(/\\ufffd/g, '').replace(/[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]/g, '').trim();
-      // Limpiar prefijos residuales de cabeceras Protobuf (ej. "a\\n9Ya en la camita!" o "r\\nJAcá todo")
-      t = t.replace(/^[A-Za-z0-9]{1,2}\\r?\\n[0-9!-/:-@\\[-`{-~](?=[A-Za-zÁÉÍÓÚáéíóúÑñ¿¡"'\\uD800-\\uDBFF])/u, '');
-      t = t.replace(/^[A-Za-z0-9]{1,2}\\r?\\n[A-Za-z](?=[A-ZÁÉÍÓÚÑ¿¡][a-záéíóúñ])/u, '');
-      if (isBinaryOrBase64(t)) return '';
-      return t.trim();
-    }
-
-    function formatLocalDate(ts, fallbackStr) {
-      if (ts) {
-        const d = new Date(ts * 1000);
-        const yyyy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        return `${yyyy}-${mm}-${dd}`;
-      }
-      return fallbackStr ? fallbackStr.split(' ')[0] : 'Desconocida';
-    }
-
-    function formatLocalTime(ts, fallbackStr) {
-      if (ts) {
-        const d = new Date(ts * 1000);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-      }
-      return fallbackStr && fallbackStr.includes(' ') ? fallbackStr.split(' ')[1].substring(0, 5) : '';
-    }
-
-    function formatPhoneNumber(rawPhone) {
-      if (!rawPhone) return '';
-      const raw = String(rawPhone).split('@')[0].replace(/\\D/g, '');
-      if (!raw) return '';
-      if (/^549\\d{10}$/.test(raw)) {
-        return `+54 9 ${raw.substring(3, 6)} ${raw.substring(6, 9)}-${raw.substring(9)}`;
-      }
-      if (/^54\\d{10}$/.test(raw)) {
-        return `+54 ${raw.substring(2, 5)} ${raw.substring(5, 8)}-${raw.substring(8)}`;
-      }
-      if (/^1\\d{10}$/.test(raw)) {
-        return `+1 ${raw.substring(1, 4)} ${raw.substring(4, 7)}-${raw.substring(7)}`;
-      }
-      if (/^\\d{7,15}$/.test(raw)) {
-        return `+${raw}`;
-      }
-      return raw;
-    }
-
-    function formatFriendlyName(name, jid) {
-      if (name && !name.endsWith('@c.us') && !name.endsWith('@g.us') && !name.endsWith('@lid') && !name.endsWith('@broadcast')) {
-        return name;
-      }
-      const raw = (name || jid || '').split('@')[0];
-      if (/^549\\d{10}$/.test(raw)) {
-        return `+54 9 ${raw.substring(3, 6)} ${raw.substring(6, 9)}-${raw.substring(9)}`;
-      }
-      if (/^\\d{10,}$/.test(raw)) {
-        return `+${raw}`;
-      }
-      return raw || 'Desconocido';
-    }
-
-    function formatPreview(lastMsg, lastTipo) {
-      const clean = cleanText(lastMsg);
-      if (clean) return clean;
-      if (lastTipo === 'image') return '📷 Foto';
-      if (lastTipo === 'video') return '🎬 Video';
-      if (lastTipo === 'ptt') return '🎤 Mensaje de voz';
-      if (lastTipo === 'audio') return '🎵 Audio';
-      if (lastTipo === 'document') return '📄 Documento';
-      if (lastTipo === 'sticker') return '💟 Sticker';
-      if (lastTipo === 'album') return '📷 Álbum de fotos';
-      if (lastTipo === 'revoked') return '🚫 Este mensaje fue eliminado';
-      if (lastTipo === 'location') return '📍 Ubicación';
-      if (lastTipo === 'vcard') return '👤 Contacto';
-      if (lastTipo === 'poll_creation') return '📊 Encuesta';
-      if (lastTipo === 'interactive' || lastTipo === 'list' || lastTipo === 'rich_response') return '💬 Mensaje interactivo';
-      if (lastTipo === 'groups_v4_invite') return '👥 Invitación de grupo';
-      return 'Sin mensajes';
-    }
-
-    let syncIntervalId = null;
-
-    async function init() {
-      initTheme();
-      await loadAccountsList();
-      await updateSyncStatus();
-      await loadChats();
-      // Si todavía no hay chats respaldados, consultar cada 2s para que la pantalla se actualice de inmediato al conectar WhatsApp Web
-      startSyncPolling((!allChats || allChats.length === 0) ? 2000 : 4000);
-    }
-
-    function startSyncPolling(intervalMs) {
-      if (syncIntervalId) clearInterval(syncIntervalId);
-      syncIntervalId = setInterval(updateSyncStatus, intervalMs);
-    }
-
-    async function updateSyncStatus() {
-      try {
-        const res = await fetch(withAccount('/api/sync/status'));
-        const data = await res.json();
-        const prevLastTs = lastSyncData.last_timestamp;
-        const prevTotalMsgs = lastSyncData.total_messages;
-        const prevTotalChats = lastSyncData.total_chats;
-        const prevValidMsgs = lastSyncData.valid_messages;
-        const prevDownloadedMedia = lastSyncData.downloaded_media;
-        const prevExpiredMedia = lastSyncData.expired_media;
-        const hadNoChats = (!allChats || allChats.length === 0);
-
-        lastSyncData = data;
-
-        // Si no teníamos cuenta activa pero ahora la API nos indica una (o se crearon nuevas cuentas), refrescar selector
-        if (data.account_id && (!currentAccountId || (availableAccounts.length === 0 && ((data.total_messages || 0) > 0 || (data.total_chats || 0) > 0)))) {
-          await loadAccountsList();
-        }
-
-        const syncStatusEl = document.getElementById('syncStatusText');
-        if (syncStatusEl) {
-          syncStatusEl.textContent = `${(data.total_messages || 0).toLocaleString()} msgs`;
-        }
-
-        const dbStatsEl = document.getElementById('dbStatsText');
-        if (dbStatsEl) {
-          dbStatsEl.textContent = 
-            `Base de datos: ${(data.total_messages || 0).toLocaleString()} mensajes | ${data.total_chats || 0} chats | ${data.downloaded_media || 0} archivos multimedia (${data.pending_media || 0} en cola)`;
-        }
-
-        if (document.getElementById('media-modal') && document.getElementById('media-modal').style.display === 'flex') {
-          renderMediaStats(data);
-        }
-
-        const messagesChanged = prevLastTs !== undefined && (
-          data.last_timestamp !== prevLastTs || 
-          data.total_messages !== prevTotalMsgs || 
-          data.valid_messages !== prevValidMsgs
-        );
-        const chatsChanged = prevTotalChats !== undefined && (data.total_chats !== prevTotalChats);
-        const mediaChanged = prevDownloadedMedia !== undefined && (
-          data.downloaded_media !== prevDownloadedMedia || 
-          data.expired_media !== prevExpiredMedia
-        );
-        const firstDataArrived = hadNoChats && ((data.total_chats || 0) > 0 || (data.total_messages || 0) > 0);
-
-        // Si llegaron chats o mensajes nuevos, recargar la lista de chats automáticamente
-        if (messagesChanged || chatsChanged || firstDataArrived) {
-          await loadChats();
-          // Al pasar de 0 a tener chats, ajustar la frecuencia de refresco a 4s
-          if (hadNoChats && allChats && allChats.length > 0) {
-            startSyncPolling(4000);
-          }
-        }
-
-        // Si el chat abierto recibió nuevos mensajes o completó descargas multimedia, refrescarlo sin perder la posición de lectura
-        if ((messagesChanged || mediaChanged) && selectedChatId) {
-          await refreshActiveChatSilently();
-        }
-      } catch (e) {
-        console.error('Error al actualizar estado:', e);
-        const syncStatusEl = document.getElementById('syncStatusText');
-        if (syncStatusEl) syncStatusEl.textContent = 'Desconectado';
-      }
-    }
-
-    async function refreshActiveChatSilently() {
-      if (!selectedChatId) return;
-      const container = document.getElementById('messages-container');
-      // No interrumpir si el usuario está reproduciendo un audio o video
-      const isPlayingMedia = Array.from(container.querySelectorAll('audio, video')).some(el => !el.paused);
-      if (isPlayingMedia) return;
-
-      const chatIdSnapshot = selectedChatId;
-      try {
-        const res = await fetch(withAccount(`/api/messages?chat_id=${encodeURIComponent(chatIdSnapshot)}`));
-        const freshMessages = await res.json();
-        if (selectedChatId !== chatIdSnapshot) return;
-
-        let hasChanged = freshMessages.length !== currentMessages.length;
-        if (!hasChanged) {
-          for (let i = freshMessages.length - 1; i >= 0; i--) {
-            const a = freshMessages[i];
-            const b = currentMessages[i];
-            if (a.msg_id !== b.msg_id || a.archivo_local !== b.archivo_local || a.estado_multimedia !== b.estado_multimedia || a.contenido !== b.contenido || a.reenviado !== b.reenviado) {
-              hasChanged = true;
-              break;
-            }
-          }
-        }
-        if (!hasChanged) return;
-
-        const wasNearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 80;
-        const prevScrollTop = container.scrollTop;
-        const prevFilteredLen = filteredMessages.length;
-
-        currentMessages = freshMessages;
-        filteredMessages = computeFilteredMessages(currentMessages);
-        const delta = Math.max(0, filteredMessages.length - prevFilteredLen);
-        renderedCount = Math.max(PAGE_SIZE, renderedCount + delta);
-
-        renderMessages(filteredMessages, null, !wasNearBottom);
-        if (!wasNearBottom) {
-          container.scrollTop = prevScrollTop;
-        }
-      } catch (e) {
-        // Ignorar errores transitorios en segundo plano
-      }
-    }
-
-    async function loadChats() {
-      try {
-        const prevCount = allChats ? allChats.length : 0;
-        const res = await fetch(withAccount('/api/chats'));
-        allChats = await res.json();
-        if (document.getElementById('searchInput') && document.getElementById('searchInput').value.trim()) {
-          handleSearchInput();
-        } else {
-          renderChats(allChats);
-        }
-        updateEmptyState();
-        if (prevCount === 0 && allChats && allChats.length > 0) {
-          showToast('¡WhatsApp Web sincronizado con éxito! Conversaciones listas.');
-        }
-      } catch (e) {
-        console.error('Error cargando chats:', e);
-      }
-    }
-
-    function updateEmptyState() {
-      const emptyStateEl = document.getElementById('empty-state');
-      if (!emptyStateEl || selectedChatId) return;
-
-      if (!allChats || allChats.length === 0) {
-        emptyStateEl.innerHTML = `
-          <div class="onboarding-box">
-            <span class="onboarding-badge">🚀 Guía de Primer Inicio</span>
-            <h3>Servidor Activo y Listo</h3>
-            <p class="onboarding-desc">Para comenzar a respaldar tus conversaciones de forma segura y privada, completa estos sencillos pasos:</p>
-            
-            <div class="onboarding-steps">
-              <div class="onboarding-step">
-                <div class="step-num">1</div>
-                <div class="step-content">
-                  <strong>Servidor local en funcionamiento</strong>
-                  <span>El motor SQLite está activo y escuchando en <code>http://127.0.0.1:8080</code>.</span>
-                </div>
-              </div>
-
-              <div class="onboarding-step">
-                <div class="step-num">2</div>
-                <div class="step-content">
-                  <strong>Carga la extensión en tu navegador (Chrome / Edge / Brave)</strong>
-                  <span>Abre <code>chrome://extensions</code>, activa el <em>Modo de desarrollador</em> y haz clic en <em>Cargar descomprimida</em> seleccionando esta carpeta:</span>
-                  <div class="path-copy-row">
-                    <input type="text" id="extPathInput" class="path-copy-input" readonly value="Cargando ruta..." />
-                    <button type="button" class="btn-copy-path" onclick="copyExtensionPath()">📋 Copiar ruta</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="onboarding-step">
-                <div class="step-num">3</div>
-                <div class="step-content">
-                  <strong>Abre WhatsApp Web</strong>
-                  <span>Ingresa a <a href="https://web.whatsapp.com" target="_blank" style="color: var(--accent); font-weight:600; text-decoration: underline;">web.whatsapp.com</a>. Tus mensajes comenzarán a respaldarse de forma pasiva e incremental.</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="onboarding-live-status">
-              <span class="live-pulse-dot"></span>
-              <span>Esperando primera sincronización desde WhatsApp Web... La pantalla se actualizará automáticamente sin recargar.</span>
-            </div>
-          </div>
-        `;
-        fetchExtensionPath();
-      } else {
-        emptyStateEl.innerHTML = `
-          <h2>WAckup</h2>
-          <p>Selecciona una conversación a la izquierda o utiliza el buscador indexado de texto completo.</p>
-          <p id="dbStatsText" style="margin-top: 14px; font-size: 13px; color: var(--text-time);"></p>
-        `;
-        const statsEl = document.getElementById('dbStatsText');
-        if (statsEl && lastSyncData && lastSyncData.total_messages !== undefined) {
-          statsEl.textContent = `Base de datos: ${(lastSyncData.total_messages || 0).toLocaleString()} mensajes | ${lastSyncData.total_chats || 0} chats | ${lastSyncData.downloaded_media || 0} archivos multimedia (${lastSyncData.pending_media || 0} en cola)`;
-        }
-      }
-    }
-
-    let cachedExtensionPath = '';
-    async function fetchExtensionPath() {
-      try {
-        if (!cachedExtensionPath) {
-          const res = await fetch('/api/extension/info');
-          const data = await res.json();
-          cachedExtensionPath = data.extension_path || '';
-        }
-        const input = document.getElementById('extPathInput');
-        if (input) input.value = cachedExtensionPath;
-      } catch (e) {}
-    }
-
-    async function copyExtensionPath() {
-      if (!cachedExtensionPath) {
-        await fetchExtensionPath();
-      }
-      if (cachedExtensionPath) {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(cachedExtensionPath);
-        } else {
-          const input = document.getElementById('extPathInput');
-          if (input) {
-            input.select();
-            document.execCommand('copy');
-          }
-        }
-        showToast('Ruta de la extensión copiada al portapapeles.');
-      }
-    }
-
-    function renderChats(chats) {
-      const list = document.getElementById('chat-list');
-      list.innerHTML = '';
-      if (!chats || chats.length === 0) {
-        list.innerHTML = '<li style="padding: 24px 14px; color: var(--text-time); text-align: center; font-size: 13px; line-height: 1.5;">Sin conversaciones respaldadas aún.<br>Sigue la guía en pantalla.</li>';
-        return;
-      }
-      chats.forEach(chat => {
-        const li = document.createElement('li');
-        li.className = 'chat-item' + (chat.chat_id === selectedChatId ? ' active' : '');
-        li.id = safeDomId('chat-', chat.chat_id);
-        li.onclick = () => selectChat(chat);
-        
-        const friendlyTitle = formatFriendlyName(chat.display_name, chat.chat_id);
-        const initial = (friendlyTitle || '?')[0].toUpperCase();
-        const avatarBg = getColorForName(friendlyTitle);
-
-        let timeStr = '';
-        if (chat.last_ts) {
-          const d = new Date(chat.last_ts * 1000);
-          timeStr = d.toLocaleDateString() === new Date().toLocaleDateString() 
-            ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
-        }
-
-        const previewText = formatPreview(chat.last_msg, chat.last_tipo);
-
-        li.innerHTML = `
-          <div class="chat-avatar" style="background-color: ${avatarBg};">${initial}</div>
-          <div class="chat-info">
-            <div class="chat-header-row">
-              <span class="chat-name">${escapeHtml(friendlyTitle)}</span>
-              <span class="chat-time">${timeStr}</span>
-            </div>
-            <div class="chat-preview">${escapeHtml(previewText)}</div>
-          </div>
-        `;
-        list.appendChild(li);
-      });
-    }
-
-    function setSearchMode(mode) {
-      currentMode = mode;
-      document.getElementById('tabChats').classList.toggle('active', mode === 'chats');
-      document.getElementById('tabGlobal').classList.toggle('active', mode === 'global');
-      document.getElementById('searchInput').placeholder = mode === 'chats' ? 'Buscar un chat...' : 'Buscar en todos los mensajes (FTS5)...';
-      
-      if (mode === 'chats') {
-        document.getElementById('chat-list').style.display = 'block';
-        document.getElementById('search-results-list').style.display = 'none';
-        handleSearchInput();
-      } else {
-        document.getElementById('chat-list').style.display = 'none';
-        document.getElementById('search-results-list').style.display = 'block';
-        handleSearchInput();
-      }
-    }
-
-    function clearSearchInput() {
-      const input = document.getElementById('searchInput');
-      input.value = '';
-      handleSearchInput();
-      input.focus();
-    }
-
-    function handleSearchInput() {
-      const input = document.getElementById('searchInput');
-      const query = input.value.trim();
-      const clearBtn = document.getElementById('searchClearBtn');
-      if (clearBtn) {
-        clearBtn.style.display = input.value.length > 0 ? 'flex' : 'none';
-      }
-      if (currentMode === 'chats') {
-        const q = query.toLowerCase();
-        const filtered = allChats.filter(c => {
-          const name = (c.display_name || '').toLowerCase();
-          const id = (c.chat_id || '').toLowerCase();
-          const last = (c.last_msg || '').toLowerCase();
-          const phone = (c.phone_number || '').toLowerCase();
-          const phoneFmt = formatPhoneNumber(c.phone_number).toLowerCase();
-          return name.includes(q) || id.includes(q) || last.includes(q) || phone.includes(q) || phoneFmt.includes(q);
-        });
-        renderChats(filtered);
-      } else {
-        clearTimeout(searchDebounceTimer);
-        if (!query) {
-          document.getElementById('search-results-list').innerHTML = '<li style="padding: 24px; color: var(--text-time); text-align: center;">Escribe una palabra o frase para buscar...</li>';
-          return;
-        }
-        searchDebounceTimer = setTimeout(() => performGlobalSearch(query), 300);
-      }
-    }
-
-    async function performGlobalSearch(query) {
-      const list = document.getElementById('search-results-list');
-      list.innerHTML = '<li style="padding: 24px; color: var(--text-time); text-align: center;">Buscando en base de datos...</li>';
-      try {
-        const res = await fetch(withAccount(`/api/search?q=${encodeURIComponent(query)}`));
-        const results = await res.json();
-        list.innerHTML = '';
-        if (results.length === 0) {
-          list.innerHTML = '<li style="padding: 24px; color: var(--text-time); text-align: center;">No se encontraron mensajes coincidentes.</li>';
-          return;
-        }
-        results.forEach(item => {
-          const li = document.createElement('li');
-          li.className = 'search-item';
-          const title = formatFriendlyName(item.chat_nombre, item.chat_id);
-          li.onclick = () => {
-            const chat = allChats.find(c => c.chat_id === item.chat_id) || { chat_id: item.chat_id, display_name: title };
-            selectChat(chat, item.msg_id);
-          };
-          li.innerHTML = `
-            <div class="search-chat-title">${escapeHtml(title)}</div>
-            <div class="search-snippet">${item.snippet || escapeHtml(cleanText(item.contenido || ''))}</div>
-            <div class="search-date">${escapeHtml(item.fecha_utc || '')}</div>
-          `;
-          list.appendChild(li);
-        });
-      } catch (e) {
-        list.innerHTML = '<li style="padding: 24px; color: #d32f2f; text-align: center;">Error al realizar la búsqueda.</li>';
-      }
-    }
-
-    async function selectChat(chat, scrollToMsgId = null) {
-      selectedChatId = chat.chat_id;
-      activeMediaFilter = null;
-      document.querySelectorAll('#chat-filter-bar .filter-pills .filter-pill').forEach((el, idx) => el.classList.toggle('active', idx === 0));
-      document.getElementById('filterDateFrom').value = '';
-      document.getElementById('filterDateTo').value = '';
-      const menuText = document.getElementById('chatFilterMenuText');
-      if (menuText) menuText.textContent = 'Buscar por fecha y multimedia';
-
-      document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
-      const activeEl = document.getElementById(safeDomId('chat-', chat.chat_id));
-      if (activeEl) activeEl.classList.add('active');
-
-      document.getElementById('empty-state').style.display = 'none';
-      document.getElementById('chat-header').style.display = 'flex';
-      document.getElementById('chat-filter-bar').style.display = 'none';
-      document.getElementById('messages-container').style.display = 'flex';
-
-      const friendlyTitle = formatFriendlyName(chat.display_name, chat.chat_id);
-      document.getElementById('headerTitle').textContent = friendlyTitle;
-      
-      const isGroup = chat.chat_id.endsWith('@g.us');
-      const isNewsletter = chat.chat_id.endsWith('@newsletter');
-      const knownChat = allChats.find(c => c.chat_id === chat.chat_id) || chat;
-      const rawPhone = (!isGroup && !isNewsletter)
-        ? (knownChat.phone_number || ((chat.chat_id.endsWith('@c.us') || chat.chat_id.endsWith('@s.whatsapp.net')) ? chat.chat_id.split('@')[0] : null))
-        : null;
-
-      const headerSubEl = document.getElementById('headerSub');
-      if (isGroup) {
-        headerSubEl.textContent = 'Grupo de WhatsApp';
-      } else if (isNewsletter) {
-        headerSubEl.textContent = 'Canal de WhatsApp';
-      } else if (rawPhone) {
-        const formattedPhone = formatPhoneNumber(rawPhone);
-        headerSubEl.innerHTML = `
-          <span class="header-phone-row">
-            <span class="header-phone-text">${escapeHtml(formattedPhone)}</span>
-            <button type="button" class="btn-copy-phone" onclick="copyChatPhone('${escapeHtml(formattedPhone)}', this)" title="Copiar número de teléfono">
-              <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-              <span class="copy-label">Copiar</span>
-            </button>
-          </span>
-        `;
-      } else {
-        headerSubEl.textContent = 'Conversación directa';
-      }
-      
-      const avatarEl = document.getElementById('headerAvatar');
-      avatarEl.textContent = (friendlyTitle || '?')[0].toUpperCase();
-      avatarEl.style.backgroundColor = getColorForName(friendlyTitle);
-
-      const container = document.getElementById('messages-container');
-      container.innerHTML = '<p style="text-align: center; color: var(--text-muted); margin-top: 24px;">Cargando mensajes...</p>';
-
-      const res = await fetch(withAccount(`/api/messages?chat_id=${encodeURIComponent(chat.chat_id)}`));
-      currentMessages = await res.json();
-      filteredMessages = currentMessages;
-
-      if (scrollToMsgId) {
-        const targetIdx = filteredMessages.findIndex(m => m.msg_id === scrollToMsgId);
-        if (targetIdx !== -1) {
-          renderedCount = Math.max(PAGE_SIZE, filteredMessages.length - targetIdx + 50);
-        } else {
-          renderedCount = PAGE_SIZE;
-        }
-      } else {
-        renderedCount = PAGE_SIZE;
-      }
-
-      renderMessages(filteredMessages, scrollToMsgId);
-    }
-
-    function loadOlderMessages() {
-      const container = document.getElementById('messages-container');
-      const prevScrollHeight = container.scrollHeight;
-      renderedCount += PAGE_SIZE;
-      renderMessages(filteredMessages, null, true);
-      container.scrollTop = container.scrollHeight - prevScrollHeight;
-    }
-
-    function highlightBubble(el) {
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.style.transition = 'outline 0.2s ease, box-shadow 0.2s ease';
-      el.style.outline = '3px solid var(--accent)';
-      el.style.boxShadow = '0 0 16px rgba(0, 168, 132, 0.6)';
-      setTimeout(() => {
-        el.style.outline = 'none';
-        el.style.boxShadow = 'none';
-      }, 2500);
-    }
-
-    function findMessageById(rawId) {
-      if (!rawId) return null;
-      const cleanRaw = String(rawId).trim();
-      // 1. Coincidencia exacta o por subcadena/stanzaId en filteredMessages
-      let found = filteredMessages.find(m => m.msg_id === cleanRaw);
-      if (found) return found;
-
-      found = filteredMessages.find(m => m.msg_id && (m.msg_id.includes(cleanRaw) || cleanRaw.includes(m.msg_id)));
-      if (found) return found;
-
-      // 2. Si está en currentMessages pero oculto por filtros de fecha/medios
-      found = currentMessages.find(m => m.msg_id === cleanRaw || (m.msg_id && (m.msg_id.includes(cleanRaw) || cleanRaw.includes(m.msg_id))));
-      if (found) {
-        closeChatFilterBar();
-        return found;
-      }
-      return null;
-    }
-
-    function scrollToMessage(rawId) {
-      if (!rawId) return;
-      const targetMsg = findMessageById(rawId);
-      if (!targetMsg) {
-        const directEl = document.getElementById(safeDomId('msg-', rawId));
-        if (directEl) {
-          highlightBubble(directEl);
-        } else {
-          showToast('El mensaje citado no se encuentra en el historial descargado.');
-        }
-        return;
-      }
-
-      const actualId = targetMsg.msg_id;
-      const idx = filteredMessages.findIndex(m => m.msg_id === actualId);
-
-      if (idx !== -1) {
-        const startIdx = Math.max(0, filteredMessages.length - renderedCount);
-        if (idx < startIdx) {
-          // El mensaje está más arriba en el historial paginado: cargar los mensajes necesarios
-          renderedCount = Math.max(renderedCount, filteredMessages.length - idx + 50);
-          renderMessages(filteredMessages, actualId);
-          return;
-        }
-      }
-
-      const targetEl = document.getElementById(safeDomId('msg-', actualId));
-      if (targetEl) {
-        highlightBubble(targetEl);
-      } else if (idx !== -1) {
-        renderedCount = Math.max(renderedCount, filteredMessages.length - idx + 50);
-        renderMessages(filteredMessages, actualId);
-      }
-    }
-
-    function renderMessages(messages, scrollToMsgId = null, preserveScroll = false) {
-      const container = document.getElementById('messages-container');
-      container.innerHTML = '';
-      let lastDate = null;
-      const isGroup = selectedChatId && selectedChatId.endsWith('@g.us');
-
-      if (messages.length === 0) {
-        container.innerHTML = '<p style="text-align: center; color: var(--text-time); margin-top: 30px;">No hay mensajes coincidentes con los filtros.</p>';
-        return;
-      }
-
-      const startIdx = Math.max(0, messages.length - renderedCount);
-      const visibleMessages = messages.slice(startIdx);
-
-      if (startIdx > 0) {
-        const loadMoreBtn = document.createElement('button');
-        loadMoreBtn.className = 'btn-load-more';
-        loadMoreBtn.textContent = `⬆️ Cargar mensajes anteriores (${startIdx.toLocaleString()} restantes)`;
-        loadMoreBtn.onclick = loadOlderMessages;
-        container.appendChild(loadMoreBtn);
-      }
-
-      const fragment = document.createDocumentFragment();
-
-      visibleMessages.forEach(m => {
-        if (['e2e_notification', 'notification_template', 'gp2', 'protocol', 'ciphertext'].includes(m.tipo)) {
-          return;
-        }
-        const cleanBody = cleanText(m.contenido);
-        const hasMedia = Boolean(m.archivo_local || m.estado_multimedia === 'expirado' || (m.thumbnail && m.thumbnail.startsWith('data:image')));
-        if (!cleanBody && !hasMedia && !m.quoted_body) {
-          // Si es un mensaje cuyo contenido era un JID o basura cifrada aún pendiente de re-sincronizar
-          return;
-        }
-
-        const msgDate = formatLocalDate(m.timestamp, m.fecha_utc);
-        if (msgDate !== lastDate) {
-          const dateDiv = document.createElement('div');
-          dateDiv.className = 'date-badge';
-          dateDiv.textContent = msgDate;
-          fragment.appendChild(dateDiv);
-          lastDate = msgDate;
-        }
-
-        const isMine = Boolean(m.es_mio) || (m.msg_id && m.msg_id.startsWith('true_'));
-
-        const bubble = document.createElement('div');
-        bubble.className = `msg-bubble ${isMine ? 'msg-outgoing' : 'msg-incoming'}`;
-        if (m.msg_id) bubble.id = safeDomId('msg-', m.msg_id);
-
-        let senderHtml = '';
-        if (isGroup && !isMine) {
-          const senderDisplayName = formatFriendlyName(m.remitente_nombre, m.remitente_jid);
-          const senderColor = getColorForName(senderDisplayName, SENDER_COLORS);
-          senderHtml = `<div class="msg-sender" style="color: ${senderColor};">${escapeHtml(senderDisplayName)}</div>`;
-        }
-
-        let forwardedHtml = '';
-        if (m.reenviado && m.reenviado > 0) {
-          const isMany = m.reenviado >= 5;
-          const fwdLabel = isMany ? 'Reenviado muchas veces' : 'Reenviado';
-          const fwdIcon = isMany
-            ? `<svg viewBox="0 0 20 16"><path d="M8.5 3.5L13 8l-4.5 4.5V9.8c-3.2 0-5.4 1.1-6.8 3.7 0.7-3.6 2.6-6.2 6.8-6.9V3.5zm5.5 0L18.5 8 14 12.5v-2l2.5-2.5L14 5.5v-2z"/></svg>`
-            : `<svg viewBox="0 0 16 16"><path d="M9.5 3.5L14 8l-4.5 4.5V9.8c-3.5 0-6 1.1-7.5 3.7 0.8-3.6 2.9-6.2 7.5-6.9V3.5z"/></svg>`;
-          forwardedHtml = `<div class="msg-forwarded">${fwdIcon}<span>${fwdLabel}</span></div>`;
-        }
-
-        let quoteHtml = '';
-        if (m.quoted_body || m.quoted_msg_id) {
-          const qAuthor = m.quoted_author ? formatFriendlyName(m.quoted_author, m.quoted_author) : 'Mensaje citado';
-          const qText = cleanText(m.quoted_body) || '📎 Archivo / Mensaje citado';
-          const clickAttr = m.quoted_msg_id ? `onclick="scrollToMessage(this.dataset.quotedId)" data-quoted-id="${escapeHtml(m.quoted_msg_id)}" title="Ir al mensaje citado"` : '';
-          quoteHtml = `
-            <div class="msg-quote" ${clickAttr}>
-              <div class="msg-quote-author">${escapeHtml(qAuthor)}</div>
-              <div class="msg-quote-text">${escapeHtml(qText)}</div>
-            </div>`;
-        }
-
-        let mediaHtml = '';
-        if (m.archivo_local) {
-          if (m.tipo === 'image' || m.tipo === 'sticker' || (m.mimetype && m.mimetype.startsWith('image/'))) {
-            mediaHtml = `<div class="media-container"><img class="media-img" src="/${m.archivo_local}" onclick="openModal(this.src)" loading="lazy"></div>`;
-          } else if (m.tipo === 'audio' || m.tipo === 'ptt' || (m.mimetype && m.mimetype.startsWith('audio/'))) {
-            mediaHtml = `
-              <div class="media-container audio-wrapper">
-                <audio class="media-audio" controls preload="metadata" src="/${m.archivo_local}" onended="playNextAudio(this)"></audio>
-                <button class="btn-speed" onclick="toggleAudioSpeed(this)">1x</button>
-              </div>`;
-          } else if (m.tipo === 'video' || (m.mimetype && m.mimetype.startsWith('video/'))) {
-            mediaHtml = `<div class="media-container"><video class="media-video" controls preload="metadata" src="/${m.archivo_local}"></video></div>`;
-          } else {
-            const fileName = m.archivo_local.split('/').pop();
-            mediaHtml = `<div class="media-container"><a class="media-doc" href="/${m.archivo_local}" download><span class="media-doc-icon">📄</span><span>${escapeHtml(fileName)}</span></a></div>`;
-          }
-        } else if (m.estado_multimedia === 'expirado') {
-          mediaHtml = `<div class="media-expired"><span>⚠️</span><span>[Archivo multimedia expirado en servidores de WhatsApp]</span></div>`;
-        } else if (m.thumbnail && m.thumbnail.startsWith('data:image')) {
-          mediaHtml = `<div class="media-container"><img class="media-img" src="${m.thumbnail}" onclick="openModal(this.src)"></div>`;
-        }
-
-        const timeStr = formatLocalTime(m.timestamp, m.fecha_utc);
-        const checkHtml = isMine ? '<span class="msg-check">✓✓</span>' : '';
-
-        bubble.innerHTML = `
-          ${senderHtml}
-          ${forwardedHtml}
-          ${quoteHtml}
-          ${mediaHtml}
-          ${cleanBody ? `<div class="msg-text">${escapeHtml(cleanBody)}</div>` : ''}
-          <div class="msg-footer">
-            <span>${timeStr}</span>
-            ${checkHtml}
-          </div>
-        `;
-        fragment.appendChild(bubble);
-      });
-
-      container.appendChild(fragment);
-
-      if (scrollToMsgId) {
-        const target = document.getElementById(safeDomId('msg-', scrollToMsgId));
-        if (target) {
-          highlightBubble(target);
-          return;
-        }
-      }
-      if (!preserveScroll) {
-        container.scrollTop = container.scrollHeight;
-      }
-    }
-
-    // Filtros multimedia en el chat
-    function setMediaFilter(type, el) {
-      activeMediaFilter = type;
-      document.querySelectorAll('#chat-filter-bar .filter-pills .filter-pill').forEach(pill => pill.classList.remove('active'));
-      el.classList.add('active');
-      applyClientFilters();
-    }
-
-    function applyDateFilter() {
-      applyClientFilters();
-    }
-
-    function computeFilteredMessages(messages) {
-      const fromVal = document.getElementById('filterDateFrom').value;
-      const toVal = document.getElementById('filterDateTo').value;
-
-      let filtered = messages;
-
-      if (activeMediaFilter) {
-        if (activeMediaFilter === 'audio') {
-          filtered = filtered.filter(m => m.tipo === 'audio' || m.tipo === 'ptt' || (m.mimetype && m.mimetype.startsWith('audio/')));
-        } else if (activeMediaFilter === 'image') {
-          filtered = filtered.filter(m => m.tipo === 'image' || (m.mimetype && m.mimetype.startsWith('image/')));
-        } else if (activeMediaFilter === 'video') {
-          filtered = filtered.filter(m => m.tipo === 'video' || (m.mimetype && m.mimetype.startsWith('video/')));
-        } else if (activeMediaFilter === 'document') {
-          filtered = filtered.filter(m => m.tipo === 'document' || (m.mimetype && !m.mimetype.startsWith('image/') && !m.mimetype.startsWith('audio/') && !m.mimetype.startsWith('video/')));
-        }
-      }
-
-      if (fromVal) {
-        const fromTs = new Date(fromVal + 'T00:00:00').getTime() / 1000;
-        filtered = filtered.filter(m => (m.timestamp || 0) >= fromTs);
-      }
-      if (toVal) {
-        const toTs = new Date(toVal + 'T23:59:59').getTime() / 1000;
-        filtered = filtered.filter(m => (m.timestamp || 0) <= toTs);
-      }
-      return filtered;
-    }
-
-    function applyClientFilters() {
-      filteredMessages = computeFilteredMessages(currentMessages);
-      renderedCount = PAGE_SIZE;
-      renderMessages(filteredMessages);
-    }
-
-    // Control de velocidad y reproducción continua de audios
-    function toggleAudioSpeed(btn) {
-      const wrapper = btn.closest('.audio-wrapper');
-      const audio = wrapper.querySelector('audio');
-      if (!audio) return;
-
-      const speeds = [1, 1.5, 2];
-      const current = audio.playbackRate;
-      let nextIdx = (speeds.indexOf(current) + 1) % speeds.length;
-      audio.playbackRate = speeds[nextIdx];
-      btn.textContent = speeds[nextIdx] + 'x';
-    }
-
-    function playNextAudio(currentAudio) {
-      const allAudios = Array.from(document.querySelectorAll('.media-audio'));
-      const idx = allAudios.indexOf(currentAudio);
-      if (idx !== -1 && idx + 1 < allAudios.length) {
-        const next = allAudios[idx + 1];
-        next.currentTime = 0;
-        next.play();
-        next.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }
-
-    // Exportación de Chat a HTML y Contactos a CSV
-    function exportCurrentChat(embedMedia = false) {
-      if (!selectedChatId) return;
-      const embedParam = embedMedia ? '&embed=1' : '';
-      window.open(withAccount(`/api/export/html?chat_id=${encodeURIComponent(selectedChatId)}${embedParam}`), '_blank');
-    }
-
-    function exportContactsCsv() {
-      showToast('Descargando contactos en formato CSV...');
-      window.location.href = withAccount('/api/export/contacts');
-    }
-
-    function openSyncLogs() {
-      fetch('/api/logs/open', { method: 'POST' }).then(() => {
-        showToast('Ventana de logs abierta.');
-      }).catch(() => {
-        window.open('/logs', '_blank');
-      });
-    }
-
-    async function copyChatPhone(phoneText, btnEl) {
-      if (!phoneText) return;
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(phoneText);
-        } else {
-          const ta = document.createElement('textarea');
-          ta.value = phoneText;
-          ta.style.position = 'fixed';
-          ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-        }
-        if (btnEl) {
-          const labelEl = btnEl.querySelector('.copy-label');
-          btnEl.classList.add('copied');
-          if (labelEl) labelEl.textContent = '✓ Copiado';
-          setTimeout(() => {
-            btnEl.classList.remove('copied');
-            if (labelEl) labelEl.textContent = 'Copiar';
-          }, 2000);
-        }
-        showToast(`📋 Número copiado: ${phoneText}`);
-      } catch (e) {
-        showToast('Error al copiar el número al portapapeles');
-      }
-    }
-
-    // Gestión de Multimedia
-    async function openMediaModal() {
-      const modal = document.getElementById('media-modal');
-      modal.style.display = 'flex';
-      await updateSyncStatus();
-      renderMediaStats(lastSyncData);
-    }
-
-    function closeMediaModal() {
-      document.getElementById('media-modal').style.display = 'none';
-    }
-
-    function renderMediaStats(data) {
-      document.getElementById('statMediaDownloaded').textContent = (data.downloaded_media || 0).toLocaleString();
-      document.getElementById('statMediaPending').textContent = (data.pending_media || 0).toLocaleString();
-      document.getElementById('statMediaFailed').textContent = (data.failed_media || 0).toLocaleString();
-      document.getElementById('statMediaExpired').textContent = (data.expired_media || 0).toLocaleString();
-    }
-
-    async function retryFailedMedia() {
-      showToast('Reencolando descargas multimedia fallidas...');
-      try {
-        const res = await fetch(withAccount('/api/media/retry'), { method: 'POST' });
-        const data = await res.json();
-        showToast(`Se reencolaron ${data.reset_count || 0} archivos para descarga.`);
-        await updateSyncStatus();
-      } catch (e) {
-        showToast('Error al reintentar descargas multimedia');
-      }
-    }
-
-    // Gestión de Backups
-    async function openBackupModal() {
-      const modal = document.getElementById('backup-modal');
-      modal.style.display = 'flex';
-      await loadBackupList();
-    }
-
-    function closeBackupModal() {
-      document.getElementById('backup-modal').style.display = 'none';
-    }
-
-    async function loadBackupList() {
-      const container = document.getElementById('backupListContainer');
-      container.innerHTML = '<p style="padding: 14px; color: var(--text-time); text-align: center;">Cargando respaldos...</p>';
-      try {
-        const res = await fetch(withAccount('/api/backup/list'));
-        const backups = await res.json();
-        if (backups.length === 0) {
-          container.innerHTML = '<p style="padding: 14px; color: var(--text-time); text-align: center;">No hay copias de seguridad manuales aún.</p>';
-          return;
-        }
-        container.innerHTML = '';
-        backups.forEach(b => {
-          const div = document.createElement('div');
-          div.className = 'backup-item';
-          const downloadUrl = withAccount(`/api/backup/download?file=${encodeURIComponent(b.filename)}`);
-          div.innerHTML = `
-            <div>
-              <strong>${escapeHtml(b.filename)}</strong>
-              <div style="color: var(--text-time); font-size: 11px;">${b.created_at} · ${b.size_mb} MB</div>
-            </div>
-            <a href="${downloadUrl}" class="btn-chat-action" style="text-decoration: none;">Descargar</a>
-          `;
-          container.appendChild(div);
-        });
-      } catch (e) {
-        container.innerHTML = '<p style="padding: 14px; color: #d32f2f; text-align: center;">Error al cargar lista de backups.</p>';
-      }
-    }
-
-    async function triggerManualBackup() {
-      showToast('Creando copia de seguridad consistente de SQLite...');
-      try {
-        const res = await fetch(withAccount('/api/backup/create'), { method: 'POST' });
-        const data = await res.json();
-        if (data.success) {
-          showToast(`¡Backup creado con éxito! (${data.backup.size_mb} MB)`);
-          await loadBackupList();
-        } else {
-          showToast('Error al crear backup: ' + (data.error || 'Desconocido'));
-        }
-      } catch (e) {
-        showToast('Error de conexión al generar backup');
-      }
-    }
-
-    function openModal(src) {
-      const modal = document.getElementById('image-modal');
-      document.getElementById('modalImg').src = src;
-      modal.style.display = 'flex';
-    }
-
-    function escapeHtml(text) {
-      if (!text) return '';
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    init();
-  </script>
-</body>
-</html>
-"""
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+def get_html_ui():
+    """Retorna el contenido de web/index.html de forma dinámica."""
+    index_path = os.path.join(WEB_DIR, "index.html")
+    if os.path.isfile(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return "<!DOCTYPE html><html><body><h1>WAckup Visor</h1></body></html>"
+
+# Mantener compatibilidad con scripts o tests que lean HTML_UI
+HTML_UI = get_html_ui()
 
 def _file_to_data_uri(rel_path, default_mime="application/octet-stream", max_size_mb=15):
     """Convierte un archivo local en un Data URI base64 si existe y no supera el límite."""
@@ -2332,6 +229,9 @@ _last_update_status_text = "Presiona [U] para comprobar"
 _update_in_progress = False
 _server_url = None
 _server_instance = None
+_exit_code = 0
+SERVER_SESSION_ID = f"sess_{int(time.time() * 1000)}"
+_last_client_ping = 0
 
 def get_disk_extension_version():
     """Lee la versión de la extensión declarada en extension/manifest.json."""
@@ -2372,12 +272,14 @@ def render_dashboard(url=None):
             "                   WACKUP - PANEL DE CONTROL & VISOR                    ",
             "========================================================================",
             f"  Dirección local:       {current_url}",
+            f"  Perfil de trabajo:     {config.get_account_profile().upper()}",
             "",
             "  Atajos en esta consola:",
             "    [V]        Abrir el visor en el navegador",
             "    [L]        Abrir ventana de logs de sincronización en vivo",
             "    [U]        Buscar y aplicar actualizaciones de GitHub",
             "    [R]        Reiniciar el visor (recargar cambios)",
+            "    [P]        Cambiar perfil de uso (Backup / Soporte / Ventas / Full)",
             "    [Ctrl + C] Detener el servidor",
             "========================================================================",
             f"  Actualizaciones:       {_last_update_status_text}",
@@ -2388,79 +290,157 @@ def render_dashboard(url=None):
         sys.stdout.write("\n".join(lines) + "\r")
         sys.stdout.flush()
 
+def get_system_update_status():
+    """Comprueba el estado de actualizaciones mediante el actualizador nativo HTTPS."""
+    try:
+        return updater.check_for_updates()
+    except Exception as e:
+        return {
+            "ok": False,
+            "status": "error",
+            "message": str(e)
+        }
+
+
+def check_shortcut_exists(action: str) -> bool:
+    """Verifica si existe el acceso directo en Escritorio o Inicio."""
+    if sys.platform != "win32":
+        return False
+    try:
+        if action == "desktop":
+            user_profile = os.environ.get("USERPROFILE", "")
+            desk = os.path.join(user_profile, "Desktop", "WAckup.lnk")
+            onedrive_desk = os.path.join(user_profile, "OneDrive", "Escritorio", "WAckup.lnk")
+            onedrive_desk_en = os.path.join(user_profile, "OneDrive", "Desktop", "WAckup.lnk")
+            return os.path.isfile(desk) or os.path.isfile(onedrive_desk) or os.path.isfile(onedrive_desk_en)
+        elif action == "startup":
+            appdata = os.environ.get("APPDATA", "")
+            startup = os.path.join(appdata, r"Microsoft\Windows\Start Menu\Programs\Startup", "WAckup.lnk")
+            return os.path.isfile(startup)
+    except Exception:
+        pass
+    return False
+
+
+def manage_windows_shortcut(action: str, enable: bool = True) -> dict:
+    """
+    Crea o elimina accesos directos en el Escritorio o Inicio de Windows
+    usando PowerShell WScript.Shell estándar sin dependencias externas.
+    """
+    if sys.platform != "win32":
+        return {"ok": False, "error": "Acción disponible únicamente en sistemas Windows."}
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    vbs_path = os.path.join(base_dir, "Iniciar_WAckup.vbs")
+    bat_path = os.path.join(base_dir, "iniciar_visor.bat")
+    icon_path = os.path.join(base_dir, "assets", "favicon.jpg")
+
+    target = vbs_path if os.path.isfile(vbs_path) else bat_path
+
+    if action == "desktop":
+        ps_script = f'''
+$ws = New-Object -ComObject WScript.Shell
+$desk = $ws.SpecialFolders("Desktop")
+$sc = $ws.CreateShortcut("$desk\\WAckup.lnk")
+$sc.TargetPath = "{target}"
+$sc.WorkingDirectory = "{base_dir}"
+$sc.Description = "WAckup 3.0 - Copiloto CRM y Respaldo Local"
+if (Test-Path "{icon_path}") {{ $sc.IconLocation = "{icon_path},0" }}
+$sc.Save()
+'''
+        try:
+            res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                                 capture_output=True, text=True, timeout=8)
+            if res.returncode == 0:
+                return {"ok": True, "message": "Acceso directo en el Escritorio creado exitosamente."}
+            else:
+                return {"ok": False, "error": f"Error PowerShell: {res.stderr.strip()}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    elif action == "startup":
+        if enable:
+            ps_script = f'''
+$ws = New-Object -ComObject WScript.Shell
+$startup = $ws.SpecialFolders("Startup")
+$sc = $ws.CreateShortcut("$startup\\WAckup.lnk")
+$sc.TargetPath = "{target}"
+$sc.WorkingDirectory = "{base_dir}"
+$sc.Description = "WAckup 3.0 Autoarranque"
+if (Test-Path "{icon_path}") {{ $sc.IconLocation = "{icon_path},0" }}
+$sc.Save()
+'''
+            try:
+                res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                                     capture_output=True, text=True, timeout=8)
+                if res.returncode == 0:
+                    return {"ok": True, "message": "Inicio automático con Windows activado correctamente."}
+                else:
+                    return {"ok": False, "error": f"Error PowerShell: {res.stderr.strip()}"}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+        else:
+            ps_script = '''
+$ws = New-Object -ComObject WScript.Shell
+$startup = $ws.SpecialFolders("Startup")
+$path = "$startup\\WAckup.lnk"
+if (Test-Path $path) { Remove-Item $path -Force }
+'''
+            try:
+                res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                                     capture_output=True, text=True, timeout=8)
+                return {"ok": True, "message": "Inicio automático desactivado."}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    return {"ok": False, "error": f"Acción de atajo no reconocida: '{action}'"}
+
 def check_and_apply_update(url):
-    """Verifica si hay actualizaciones en GitHub sin provocar scroll en el panel."""
+    """Verifica y aplica actualizaciones nativas por HTTPS (sin requerir Git)."""
     global _last_update_status_text, _update_in_progress
     if _update_in_progress:
         return
     _update_in_progress = True
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    if not os.path.isdir(os.path.join(base_dir, ".git")):
-        if shutil.which("git"):
-            _last_update_status_text = "Vinculando carpeta con repositorio de GitHub..."
-            render_dashboard(url)
-            repo_url = "https://github.com/dbonotti/wackup.git"
-            run_git_cmd(["init", "-b", "main"])
-            run_git_cmd(["remote", "add", "origin", repo_url])
-            res_init = run_git_cmd(["fetch", "origin", "main", "--quiet"], timeout=15)
-            if res_init.returncode == 0:
-                run_git_cmd(["reset", "--hard", "origin/main"])
-                _last_update_status_text = "[OK] Carpeta vinculada y actualizada con éxito desde GitHub."
-            else:
-                _last_update_status_text = "[Aviso] Carpeta ZIP. Conecta a internet para vincular."
-                _update_in_progress = False
-                render_dashboard(url)
-                return
-        else:
-            _last_update_status_text = "[Aviso] Carpeta ZIP. Instala Git (git-scm.com) para actualizar en 1 clic."
-            _update_in_progress = False
-            render_dashboard(url)
-            return
-
     now_str = datetime.now().strftime("%H:%M:%S")
-    _last_update_status_text = f"Consultando servidor de GitHub... [{now_str}]"
+    _last_update_status_text = f"Consultando actualizaciones en GitHub HTTPS... [{now_str}]"
     render_dashboard(url)
 
-    res = run_git_cmd(["fetch", "origin", "main", "--quiet"], timeout=12)
+    check = updater.check_for_updates()
     now_str = datetime.now().strftime("%H:%M:%S")
-    if res.returncode != 0:
-        err = (res.stderr or "").strip().lower()
-        if "could not resolve host" in err or "failed to connect" in err or "timed out" in err:
-            err_desc = "Sin conexión a GitHub (verifica tu internet)"
-        elif "not appear to be a git repository" in err or "not found" in err:
-            err_desc = "Repositorio remoto no encontrado"
-        elif "permission denied" in err or "authentication" in err:
-            err_desc = "Error de autenticación con GitHub"
-        else:
-            first_line = (res.stderr or "").strip().split("\n")[0]
-            err_desc = first_line[:50] if first_line else "Error consultando GitHub"
 
-        append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Update Error] {res.stderr or res.stdout}")
-        _last_update_status_text = f"[Error] {err_desc} ({now_str})"
+    if not check.get("ok"):
+        err_desc = check.get("message") or "Error consultando GitHub"
+        append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Update Error] {err_desc}")
+        _last_update_status_text = f"[Error] {err_desc[:55]} ({now_str})"
         _update_in_progress = False
         render_dashboard(url)
         return
 
-    count_res = run_git_cmd(["rev-list", "HEAD..origin/main", "--count"], timeout=10)
-    count = int(count_res.stdout.strip() or "0")
-    if count == 0:
-        _last_update_status_text = f"[✓] ¡Sistema al día con GitHub! (comprobado {now_str})"
+    status = check.get("status")
+    if status == "dev_branch":
+        _last_update_status_text = f"[En rama: {check.get('branch')}] Actualizaciones pausadas en desarrollo."
         _update_in_progress = False
         render_dashboard(url)
         return
 
-    _last_update_status_text = f"[!] Hay {count} actualización(es) disponible(s)"
+    if status != "update_available":
+        _last_update_status_text = f"[✓] ¡Sistema al día ({check.get('current_version')})! (comprobado {now_str})"
+        _update_in_progress = False
+        render_dashboard(url)
+        return
 
-    # Mostrar detalles de actualización en vista limpia
+    latest_ver = check.get("latest_version")
+    _last_update_status_text = f"[!] Nueva versión v{latest_ver} disponible"
+
     os.system("cls" if os.name == "nt" else "clear")
     print("========================================================================")
-    print(f"       [!] ACTUALIZACIÓN DISPONIBLE EN GITHUB ({count} cambios)")
+    print(f"       [!] NUEVA VERSIÓN DISPONIBLE EN GITHUB: v{latest_ver}")
     print("========================================================================")
-    print("Últimos cambios:")
-    log_res = run_git_cmd(["log", "HEAD..origin/main", "--oneline", "-5"], timeout=10)
-    print(log_res.stdout.strip())
-    print("========================================================================")
+    if check.get("release_notes"):
+        print("Notas de la versión:")
+        print(check["release_notes"][:600])
+        print("========================================================================")
     print("Seguridad garantizada: se creará un snapshot previo de whatsapp_backup.db.")
     print("")
     try:
@@ -2469,38 +449,27 @@ def check_and_apply_update(url):
         resp = "N"
 
     if resp in ("", "S", "SI"):
-        print("\n[1/3] Creando copias preventivas de seguridad de las bases de datos...")
-        config.backup_all_databases()
-
-        print("[2/3] Descargando código actualizado...")
-        pull_res = run_git_cmd(["pull", "origin", "main"], timeout=30)
-        if pull_res.returncode == 0:
-            print("      Código actualizado correctamente.")
-            print("[3/3] Verificando dependencias de Python...")
-            subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"], cwd=base_dir)
+        print("\nDescargando y aplicando actualización segura...")
+        res = updater.apply_update(download_url=check.get("download_url"), restart=False)
+        if res.get("ok"):
             print("\n" + "=" * 65)
-            print("¡Actualización completada con éxito!")
+            print(res.get("message", "¡Actualización completada con éxito!"))
             print("Reiniciando el visor automáticamente para aplicar cambios...")
             print("=" * 65)
-            time.sleep(1.5)
+            time.sleep(1.2)
             restart_current_process()
-            _last_update_status_text = f"[✓] Actualizado con éxito a la última versión ({datetime.now().strftime('%H:%M:%S')})"
-            print("\nPresiona Enter para volver al Panel de Control...")
-            try:
-                input()
-            except Exception:
-                pass
         else:
-            print(f"      [Error] Falló la descarga: {pull_res.stderr}")
-            append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Update Pull Error] {pull_res.stderr}")
-            _last_update_status_text = f"[Error] Falló la descarga de GitHub ({datetime.now().strftime('%H:%M:%S')})"
+            err_msg = res.get("error", "Error desconocido")
+            print(f"      [Error] {err_msg}")
+            append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Update Apply Error] {err_msg}")
+            _last_update_status_text = f"[Error] {err_msg[:50]} ({datetime.now().strftime('%H:%M:%S')})"
             print("\nPresiona Enter para volver al Panel de Control...")
             try:
                 input()
             except Exception:
                 pass
     else:
-        _last_update_status_text = f"[Aviso] {count} actualización(es) pendiente(s) de aplicar"
+        _last_update_status_text = f"[Aviso] Versión v{latest_ver} pendiente de aplicar"
 
     _update_in_progress = False
     render_dashboard(url)
@@ -2524,24 +493,113 @@ def open_logs_window():
     except Exception:
         pass
 
+def confirm_and_restart(url=None):
+    """Solicita confirmación al usuario antes de reiniciar el visor pausando el animador."""
+    global _update_in_progress
+    _update_in_progress = True
+    try:
+        import msvcrt
+        print("\n\n" + "=" * 54)
+        print("  ¿Deseas reiniciar el visor? (S/N) [S]: ", end="", flush=True)
+
+        # Limpiar cualquier tecla previa residual en el buffer
+        while msvcrt.kbhit():
+            msvcrt.getch()
+
+        ans = msvcrt.getch()
+        if ans in (b"\x00", b"\xe0"):
+            msvcrt.getch()
+            print("N\n  Reinicio cancelado.")
+            print("=" * 54 + "\n")
+            _update_in_progress = False
+            return
+
+        if ans in (b"s", b"S", b"\r", b"\n", b"y", b"Y", b"r", b"R"):
+            print("S\n" + "=" * 54)
+            restart_current_process()
+        else:
+            try:
+                char_str = ans.decode("latin-1", errors="ignore")
+                print(f"{char_str}\n  Reinicio cancelado.")
+            except Exception:
+                print("N\n  Reinicio cancelado.")
+            print("=" * 54 + "\n")
+            _update_in_progress = False
+    except Exception as e:
+        print(f"\nReinicio cancelado ({e}).")
+        _update_in_progress = False
+
 def restart_current_process():
-    """Reinicia el visor liberando puertos y relanzando el script en la misma consola."""
-    global _server_instance
-    print("\nReiniciando visor WAckup...")
+    """Reinicia el visor liberando puertos y relanzando el proceso limpiamente."""
+    global _server_instance, _exit_code, _last_client_ping, _server_stopping
+    _exit_code = 42
+    _server_stopping = True
+    print("Reiniciando visor WAckup...")
+    try:
+        has_recent_client = (_last_client_ping > 0 and (time.time() - _last_client_ping) < 15.0)
+        flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restart_flag")
+        with open(flag_path, "w", encoding="utf-8") as f:
+            f.write("has_client" if has_recent_client else "no_client")
+    except Exception:
+        pass
+
+    try:
+        sse_hub.get_sse_hub().shutdown()
+    except Exception:
+        pass
+
     try:
         if _server_instance:
             _server_instance.server_close()
     except Exception:
         pass
-    time.sleep(0.4)
+    time.sleep(0.25)
+
+    # Si corre supervisado por iniciar_visor.bat, delegar el relanzamiento al bucle .bat con código 42
+    if os.environ.get("WACKUP_SUPERVISED") == "1":
+        os._exit(42)
+
+    # Si corre vía Iniciar_WAckup.vbs (pythonw) o ejecución directa sin .bat, relanzar autónomamente
     try:
-        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
-    except Exception:
-        subprocess.Popen([sys.executable, os.path.abspath(__file__)], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        script_path = os.path.abspath(__file__)
+        env = os.environ.copy()
+        env["WACKUP_RESTARTED"] = "1"
+        creationflags = 0
+        if os.name == "nt" and sys.executable.lower().endswith("pythonw.exe"):
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        subprocess.Popen(
+            [sys.executable, script_path] + sys.argv[1:],
+            cwd=os.path.dirname(script_path),
+            env=env,
+            close_fds=True,
+            creationflags=creationflags
+        )
         os._exit(0)
+    except Exception:
+        os._exit(42)
+
+def cycle_workspace_profile(url=None):
+    """Alterna cíclicamente el perfil de uso de la cuenta activa."""
+    global _last_update_status_text
+    profiles = ["backup_only", "support", "sales", "full"]
+    accounts = config.list_accounts()
+    acc_id = None
+    if accounts:
+        real = [a for a in accounts if a["id"] != config.DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
+        acc_id = real[0]["id"] if real else accounts[0]["id"]
+    curr = config.get_account_profile(acc_id)
+    try:
+        next_idx = (profiles.index(curr) + 1) % len(profiles)
+    except ValueError:
+        next_idx = 0
+    new_prof = profiles[next_idx]
+    config.set_account_profile(acc_id, new_prof)
+    prof_label = config.WORKSPACE_PROFILE_NAMES.get(new_prof, new_prof)
+    _last_update_status_text = f"[Perfil activo cambiado a: {prof_label}]"
+    render_dashboard(url)
 
 def start_keyboard_listener(url):
-    """Escucha teclas de atajo [V] y [L] en segundo plano."""
+    """Escucha teclas de atajo [V], [L], [U], [R] y [P] en segundo plano."""
     if os.name != "nt":
         return
     try:
@@ -2559,7 +617,9 @@ def start_keyboard_listener(url):
                         elif ch in (b"u", b"U"):
                             check_and_apply_update(url)
                         elif ch in (b"r", b"R"):
-                            restart_current_process()
+                            confirm_and_restart(url)
+                        elif ch in (b"p", b"P"):
+                            cycle_workspace_profile(url)
                     time.sleep(0.15)
                 except Exception:
                     time.sleep(0.5)
@@ -2683,20 +743,76 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         ]
         if origin in allowed_origins or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://"):
             return True
+
+        # En modo LAN, permitir orígenes de subredes privadas RFC1918
+        settings = config.get_system_settings()
+        if settings.get("network_mode") == "lan":
+            try:
+                parsed = urlparse(origin)
+                host = parsed.hostname
+                if host and config.is_private_ip(host):
+                    return True
+            except Exception:
+                pass
         return False
 
     def send_cors_headers(self):
         origin = self.headers.get("Origin")
-        allowed_origins = [
-            f"http://127.0.0.1:{PORT}",
-            f"http://localhost:{PORT}",
-            "https://web.whatsapp.com"
-        ]
-        if origin and (origin in allowed_origins or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://")):
+        if origin and self.is_trusted_origin():
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Range")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Range, X-WAckup-Pin, X-Office-PIN, X-WAckup-Operator, X-Operator-Name")
             self.send_header("Vary", "Origin")
+
+    def is_local_client(self):
+        """
+        Verifica si la petición proviene físicamente de la PC anfitriona (127.0.0.1 / ::1).
+        Jamás permite que un socket externo suplante IP local mediante X-Forwarded-For.
+        """
+        ip = self.client_address[0] if self.client_address else "127.0.0.1"
+        if ip not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        simulated = self.headers.get("X-Forwarded-For") or self.headers.get("X-Remote-IP")
+        if simulated:
+            clean_sim = simulated.split(",")[0].strip()
+            return clean_sim in ("127.0.0.1", "localhost", "::1")
+        return True
+
+    def is_authorized_request(self):
+        """
+        Control de acceso LAN:
+        - Si el cliente es local (127.0.0.1): 100% autorizado sin pedir PIN.
+        - Si el cliente es remoto:
+          - Si network_mode != 'lan': 403 Forbidden.
+          - Si network_mode == 'lan': exige PIN válido (X-WAckup-Pin, X-Office-PIN o query ?pin=).
+            Si falta o no coincide -> 401 Unauthorized.
+        """
+        if self.is_local_client():
+            return True, 200, None
+
+        settings = config.get_system_settings()
+        if settings.get("network_mode") != "lan":
+            return False, 403, "El servidor está configurado en modo local (solo esta PC). Activa Modo Equipo en Red Local en Sistema."
+
+        expected_pin = str(settings.get("lan_pin", "")).strip()
+        client_pin = (
+            self.headers.get("X-WAckup-Pin") or
+            self.headers.get("X-Office-PIN") or
+            ""
+        ).strip()
+
+        if not client_pin:
+            try:
+                url = urlparse(self.path)
+                params = parse_qs(url.query)
+                client_pin = (params.get("pin", [""])[0] or params.get("office_pin", [""])[0]).strip()
+            except Exception:
+                pass
+
+        if not expected_pin or client_pin != expected_pin:
+            return False, 401, "PIN de oficina requerido o incorrecto"
+
+        return True, 200, None
 
     def do_OPTIONS(self):
         if not self.is_trusted_origin():
@@ -2761,10 +877,20 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     break
                 remaining -= len(chunk)
 
-    def _resolve_account_params(self, params=None):
-        account_id = None
-        if params:
-            account_id = params.get("account_id", [None])[0]
+    def _resolve_account_params(self, params=None, fallback_query_params=None):
+        def _extract_aid(src):
+            if not isinstance(src, dict):
+                return None
+            raw = src.get("account_id")
+            if raw is None:
+                raw = src.get("account")
+            if isinstance(raw, (list, tuple)):
+                return raw[0] if raw else None
+            if isinstance(raw, str):
+                return raw.strip() or None
+            return str(raw) if raw is not None else None
+
+        account_id = _extract_aid(params) or _extract_aid(fallback_query_params)
         if account_id and account_id != config.DEFAULT_ACCOUNT_ID:
             config.migrate_single_to_multi_account(account_id)
         elif not account_id or account_id == config.DEFAULT_ACCOUNT_ID:
@@ -2777,6 +903,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         return account_id, db_path, backup_dir
 
     def do_GET(self):
+        global _last_client_ping, _last_sync_epoch
         if not self.is_trusted_origin():
             self.send_json(403, {"error": "Origen no permitido"})
             return
@@ -2784,10 +911,46 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
 
         if url.path in ["/", "/index.html"]:
+            index_path = os.path.join(WEB_DIR, "index.html")
+            if os.path.isfile(index_path):
+                with open(index_path, "rb") as f:
+                    content_bytes = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(content_bytes)))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(content_bytes)
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
+
+        # Servir recursos estáticos dentro de web/ (css, js, assets) con protección anti-traversal
+        rel_static_path = url.path.lstrip("/")
+        candidate_static = os.path.abspath(os.path.join(WEB_DIR, rel_static_path))
+        if os.path.commonpath([candidate_static, os.path.abspath(WEB_DIR)]) == os.path.abspath(WEB_DIR) and os.path.isfile(candidate_static):
+            ext = os.path.splitext(candidate_static)[1].lower()
+            mime_types = {
+                ".html": "text/html; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".svg": "image/svg+xml",
+                ".ico": "image/x-icon"
+            }
+            content_type = mime_types.get(ext, "application/octet-stream")
+            with open(candidate_static, "rb") as f:
+                content_bytes = f.read()
             self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(content_bytes)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
-            self.wfile.write(HTML_UI.encode("utf-8"))
+            self.wfile.write(content_bytes)
             return
 
         elif url.path in ["/favicon.jpg", "/favicon.ico"]:
@@ -2806,18 +969,283 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
+        # Control de autorización para endpoints de API, Logs y Multimedia
+        if (
+            url.path.startswith("/api/")
+            or url.path.startswith("/media/")
+            or url.path == "/logs"
+            or (url.path.startswith("/data/") and "/media/" in url.path)
+        ):
+            if url.path not in ("/api/auth/verify_pin", "/api/system/network"):
+                auth_ok, status_code, err_msg = self.is_authorized_request()
+                if not auth_ok:
+                    self.send_json(status_code, {
+                        "ok": False,
+                        "error": err_msg,
+                        "needs_pin": (status_code == 401)
+                    })
+                    return
+
+        if url.path == "/api/system/network":
+            is_local = self.is_local_client()
+            settings = config.get_system_settings()
+            ips = config.get_local_ip_addresses()
+            auth_ok, _, _ = self.is_authorized_request()
+            can_see_pin = is_local or auth_ok
+
+            resp_data = {
+                "ok": True,
+                "network_mode": settings.get("network_mode", "local"),
+                "host_ips": ips,
+                "local_ips": ips,
+                "port": PORT,
+                "known_operators": settings.get("known_operators", []),
+                "is_local": is_local,
+                "needs_pin": not can_see_pin
+            }
+            if can_see_pin:
+                resp_data["lan_pin"] = settings.get("lan_pin", "")
+            self.send_json(200, resp_data)
+            return
+
+        elif url.path == "/api/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_cors_headers()
+            self.end_headers()
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
+
+            hub = sse_hub.get_sse_hub()
+            client_q = hub.subscribe()
+
+            try:
+                init_payload = {
+                    "connected": True,
+                    "timestamp": int(time.time()),
+                    "active_presence": hub.get_active_presence()
+                }
+                init_msg = f"event: connected\ndata: {json.dumps(init_payload, ensure_ascii=False)}\n\n"
+                self.wfile.write(init_msg.encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                hub.unsubscribe(client_q)
+                return
+
+            try:
+                while not _server_stopping:
+                    try:
+                        msg = client_q.get(timeout=20.0)
+                        if msg is None:
+                            break
+                        self.wfile.write(msg.encode("utf-8"))
+                        self.wfile.flush()
+                    except queue.Empty:
+                        try:
+                            self.wfile.write(b": ping\n\n")
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            break
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                hub.unsubscribe(client_q)
+            return
+
+        elif url.path == "/api/presence":
+            hub = sse_hub.get_sse_hub()
+            active = hub.get_active_presence()
+            self.send_json(200, {
+                "ok": True,
+                "presence": active,
+                "active_presence": active
+            })
+            return
+
+        elif url.path == "/api/copilot/notes/log":
+            params = parse_qs(url.query)
+            _, db_path, _ = self._resolve_account_params(params)
+            chat_id = params.get("chat_id", [None])[0]
+            limit = int(params.get("limit", ["50"])[0])
+            notes = db_manager.get_contact_notes_log(chat_id, limit=limit, db_path=db_path)
+            self.send_json(200, {
+                "ok": True,
+                "chat_id": chat_id,
+                "notes_log": notes
+            })
+            return
+
         elif url.path == "/api/accounts":
             accounts = config.list_accounts()
             self.send_json(200, accounts)
             return
 
+        elif url.path == "/api/system/info":
+            settings = config.get_system_settings()
+            ver = updater.get_current_version()
+            is_lan = settings.get("network_mode") == "lan"
+            ext_connected = (_last_client_ping > 0 and (time.time() - _last_client_ping) < 120.0)
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ext_path = os.path.join(base_dir, "extension")
+            info_data = {
+                "ok": True,
+                "version": ver,
+                "network_mode": settings.get("network_mode", "local"),
+                "is_lan": is_lan,
+                "local_ips": config.get_local_ip_addresses(),
+                "port": PORT,
+                "onboarding_completed": settings.get("onboarding_completed", False),
+                "extension_connected": ext_connected,
+                "extension_path": ext_path,
+                "desktop_shortcut_exists": check_shortcut_exists("desktop"),
+                "startup_shortcut_exists": check_shortcut_exists("startup"),
+                "git_branch": updater.get_git_branch(base_dir)
+            }
+            self.send_json(200, info_data)
+            return
+
+        elif url.path == "/api/system/onboarding":
+            settings = config.get_system_settings()
+            ext_connected = (_last_client_ping > 0 and (time.time() - _last_client_ping) < 120.0)
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            self.send_json(200, {
+                "ok": True,
+                "onboarding_completed": settings.get("onboarding_completed", False),
+                "extension_connected": ext_connected,
+                "extension_path": os.path.join(base_dir, "extension")
+            })
+            return
+
+        elif url.path == "/api/system/update/check":
+            status = updater.check_for_updates()
+            self.send_json(200, status)
+            return
+
+        elif url.path == "/api/profile":
+            params = parse_qs(url.query)
+            acc_id, _, _ = self._resolve_account_params(params)
+            prof = config.get_account_profile(acc_id)
+            prof_names = {
+                "backup_only": "Solo Respaldo",
+                "support": "Atención y Soporte",
+                "sales": "Ventas y Mini-CRM",
+                "full": "Suite Completa"
+            }
+            self.send_json(200, {
+                "account_id": acc_id,
+                "profile": prof,
+                "profile_label": prof_names.get(prof, prof),
+                "available_profiles": config.VALID_WORKSPACE_PROFILES
+            })
+            return
+
+        elif url.path == "/api/copilot/context":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            chat_query = params.get("chat_query", [None])[0] or params.get("chat_id", [None])[0]
+            if not chat_query:
+                self.send_json(400, {"ok": False, "error": "Falta parámetro chat_query"})
+                return
+            context = db_manager.get_copilot_context(chat_query, db_path=db_path)
+            if not context:
+                self.send_json(404, {"ok": False, "error": "Chat no encontrado"})
+                return
+            prof = config.get_account_profile(account_id)
+            context["account_id"] = account_id
+            context["profile"] = prof
+            context["profile_label"] = config.WORKSPACE_PROFILE_NAMES.get(prof, prof)
+            self.send_json(200, context)
+            return
+
+        elif url.path == "/api/support/unanswered":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            limit = int(params.get("limit", ["30"])[0])
+            chats = db_manager.get_unanswered_chats(limit=limit, db_path=db_path)
+            self.send_json(200, {
+                "ok": True,
+                "account_id": account_id,
+                "count": len(chats),
+                "chats": chats
+            })
+            return
+
+        elif url.path == "/api/support/templates":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            p_type = params.get("profile_type", [None])[0]
+            templates = db_manager.list_quick_templates(profile_type=p_type, db_path=db_path)
+            self.send_json(200, {
+                "ok": True,
+                "account_id": account_id,
+                "templates": templates
+            })
+            return
+
+        elif url.path == "/api/sales/radar":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            limit = int(params.get("limit", ["30"])[0])
+            leads = db_manager.get_sales_followups(limit=limit, db_path=db_path)
+            self.send_json(200, {
+                "ok": True,
+                "account_id": account_id,
+                "count": len(leads),
+                "leads": leads
+            })
+            return
+
+        elif url.path == "/api/crm/kanban":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            board_type = params.get("type", ["sales"])[0]
+            data = db_manager.get_kanban_board(board_type=board_type, db_path=db_path)
+            data["account_id"] = account_id
+            self.send_json(200, data)
+            return
+
+        elif url.path == "/api/crm/rfm/dormant":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            days = int(params.get("days", ["45"])[0])
+            limit = int(params.get("limit", ["5"])[0])
+            clients = db_manager.get_rfm_dormant_clients(days=days, limit=limit, db_path=db_path)
+            self.send_json(200, {"ok": True, "account_id": account_id, "clients": clients})
+            return
+
+        elif url.path == "/api/crm/demand":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            days = int(params.get("days", ["60"])[0])
+            limit = int(params.get("limit", ["25"])[0])
+            data = db_manager.get_demand_thermometer(days=days, limit=limit, db_path=db_path)
+            data["account_id"] = account_id
+            self.send_json(200, data)
+            return
+
+        elif url.path == "/api/crm/support/metrics":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            data = db_manager.get_support_metrics(db_path=db_path)
+            data["account_id"] = account_id
+            self.send_json(200, data)
+            return
+
         elif url.path == "/api/sync/status":
+            _last_client_ping = time.time()
             params = parse_qs(url.query)
             account_id, db_path, _ = self._resolve_account_params(params)
             include_ids = params.get("include_ids", ["0"])[0] == "1"
             status = db_manager.get_sync_status(db_path=db_path, include_ids=include_ids)
             status["account_id"] = account_id or config.DEFAULT_ACCOUNT_ID
             status["extension_version"] = get_disk_extension_version()
+            status["server_session_id"] = SERVER_SESSION_ID
+            status["last_sync_epoch"] = _last_sync_epoch
             self.send_json(200, status)
             return
 
@@ -2837,44 +1265,31 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             cur = conn.cursor()
             contact_map = db_manager.build_contact_map(cur)
             query = """
-            WITH latest_msgs AS (
-                SELECT 
-                    chat_id,
-                    contenido AS last_msg,
-                    tipo AS last_tipo,
-                    timestamp AS last_ts,
-                    ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY timestamp DESC) AS rn
-                FROM mensajes
-                WHERE chat_id IS NOT NULL 
-                  AND chat_id != 'status@broadcast'
-                  AND tipo NOT IN ('e2e_notification', 'notification_template', 'gp2', 'protocol', 'ciphertext', 'call_log', 'biz_content_placeholder', 'message_history_notice', 'pinned_message', 'album')
-                  AND NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = ''))
-            )
             SELECT 
-                lm.chat_id,
+                c.chat_id,
                 COALESCE(
-                    NULLIF(c.nombre, lm.chat_id),
+                    NULLIF(c.nombre, c.chat_id),
                     ct.nombre,
                     ct_num.nombre,
                     ct.push_name,
                     ct_num.push_name,
                     c.nombre,
-                    lm.chat_id
+                    c.chat_id
                 ) AS display_name,
                 COALESCE(
-                    CASE WHEN lm.chat_id LIKE '%@c.us' OR lm.chat_id LIKE '%@s.whatsapp.net' THEN SUBSTR(lm.chat_id, 1, INSTR(lm.chat_id, '@') - 1) END,
+                    CASE WHEN c.chat_id LIKE '%@c.us' OR c.chat_id LIKE '%@s.whatsapp.net' THEN SUBSTR(c.chat_id, 1, INSTR(c.chat_id, '@') - 1) END,
                     ct.numero,
                     ct_num.numero
                 ) AS phone_number,
-                lm.last_msg,
-                lm.last_tipo,
-                COALESCE(c.ultimo_timestamp, lm.last_ts) AS last_ts
-            FROM latest_msgs lm
-            LEFT JOIN chats c ON lm.chat_id = c.chat_id
-            LEFT JOIN contactos ct ON lm.chat_id = ct.contact_id
-            LEFT JOIN contactos ct_num ON lm.chat_id LIKE '%@c.us' AND REPLACE(lm.chat_id, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
-            WHERE lm.rn = 1
-            ORDER BY COALESCE(c.ultimo_timestamp, lm.last_ts) DESC
+                c.ultimo_mensaje AS last_msg,
+                c.ultimo_tipo AS last_tipo,
+                c.ultimo_timestamp AS last_ts
+            FROM chats c
+            LEFT JOIN contactos ct ON c.chat_id = ct.contact_id
+            LEFT JOIN contactos ct_num ON c.chat_id LIKE '%@c.us' AND REPLACE(c.chat_id, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
+            WHERE c.chat_id IS NOT NULL 
+              AND c.chat_id != 'status@broadcast'
+            ORDER BY c.ultimo_timestamp DESC
             """
             cur.execute(query)
             chats = [dict(row) for row in cur.fetchall()]
@@ -3071,6 +1486,33 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             })
             return
 
+        elif url.path == "/api/logs":
+            lines = []
+            if os.path.isfile(SYNC_LOG_PATH):
+                try:
+                    with open(SYNC_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                        lines = [l.rstrip("\r\n") for l in f.readlines()]
+                except Exception as e:
+                    lines = [f"[Error al leer logs: {e}]"]
+            self.send_json(200, {
+                "ok": True,
+                "logs": lines,
+                "count": len(lines),
+                "path": SYNC_LOG_PATH
+            })
+            return
+
+        elif url.path == "/api/copilot/tags/all":
+            params = parse_qs(url.query)
+            account_id, db_path, _ = self._resolve_account_params(params)
+            tags = db_manager.list_all_tags(db_path=db_path)
+            self.send_json(200, {
+                "ok": True,
+                "account_id": account_id,
+                "tags": tags
+            })
+            return
+
         elif url.path == "/logs":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -3094,9 +1536,561 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
             url = urlparse(self.path)
 
-            if url.path == "/api/logs/open":
+            # Control de autorización para endpoints de API (excepto /api/auth/verify_pin)
+            if url.path.startswith("/api/") and url.path != "/api/auth/verify_pin":
+                auth_ok, status_code, err_msg = self.is_authorized_request()
+                if not auth_ok:
+                    self.send_json(status_code, {
+                        "ok": False,
+                        "error": err_msg,
+                        "needs_pin": (status_code == 401)
+                    })
+                    return
+
+            if url.path == "/api/auth/verify_pin":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                pin = str(payload.get("pin", "")).strip()
+                operator_name = str(payload.get("operator") or payload.get("operator_name", "")).strip()
+
+                settings = config.get_system_settings()
+                expected_pin = str(settings.get("lan_pin", "")).strip()
+
+                if pin and pin == expected_pin:
+                    if operator_name:
+                        config.update_system_settings(add_operator=operator_name)
+                    self.send_json(200, {
+                        "ok": True,
+                        "operator_name": operator_name,
+                        "message": "PIN verificado correctamente"
+                    })
+                else:
+                    self.send_json(401, {
+                        "ok": False,
+                        "error": "PIN de oficina incorrecto",
+                        "needs_pin": True
+                    })
+                return
+
+            elif url.path == "/api/system/network":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+
+                net_mode = payload.get("network_mode")
+                lan_pin = payload.get("lan_pin")
+                add_op = payload.get("operator_name") or payload.get("add_operator")
+                remove_op = payload.get("remove_operator")
+
+                updated = config.update_system_settings(
+                    network_mode=net_mode,
+                    lan_pin=lan_pin,
+                    add_operator=add_op,
+                    remove_operator=remove_op
+                )
+                ips = config.get_local_ip_addresses()
+                self.send_json(200, {
+                    "ok": True,
+                    "settings": updated,
+                    "host_ips": ips,
+                    "local_ips": ips,
+                    "port": PORT
+                })
+                return
+
+            elif url.path == "/api/presence/heartbeat":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+
+                chat_id = payload.get("chat_id")
+                operator = payload.get("operator") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or "Operador"
+                client_id = payload.get("client_id")
+                source = payload.get("source", "visor")
+
+                if chat_id:
+                    try:
+                        _, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                        with db_manager.db_connection(db_path, write=False) as conn:
+                            chat_id = db_manager.resolve_canonical_chat_id(conn.cursor(), chat_id) or chat_id
+                    except Exception:
+                        pass
+
+                hub = sse_hub.get_sse_hub()
+                hub.record_presence(chat_id, operator, client_id, source=source)
+                if operator and operator != "Operador":
+                    try:
+                        config.update_system_settings(add_operator=operator)
+                    except Exception:
+                        pass
+                self.send_json(200, {"ok": True, "canonical_chat_id": chat_id})
+                return
+
+            elif url.path == "/api/presence/leave":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                chat_id = payload.get("chat_id")
+                client_id = payload.get("client_id")
+                if client_id:
+                    sse_hub.get_sse_hub().remove_presence(client_id, chat_id=chat_id)
+                self.send_json(200, {"ok": True})
+                return
+
+            elif url.path == "/api/copilot/notes/log":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+
+                account_id, db_path, _ = self._resolve_account_params(payload)
+                chat_id = payload.get("chat_id")
+                author = payload.get("author") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or "Operador"
+                content = payload.get("content")
+
+                if not chat_id or not content:
+                    self.send_json(400, {"ok": False, "error": "chat_id y content requeridos"})
+                    return
+
+                created_note = db_manager.add_contact_note_log(chat_id, author, content, db_path=db_path)
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "note_log_added",
+                    "chat_id": chat_id,
+                    "note": created_note,
+                    "author": author
+                })
+                self.send_json(200, {"ok": True, "note": created_note})
+                return
+
+            elif url.path == "/api/copilot/notes/log/delete":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                _, db_path, _ = self._resolve_account_params(payload)
+                note_id = payload.get("id") or payload.get("note_id")
+                chat_id = payload.get("chat_id")
+                author = payload.get("author")
+                db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "note_log_deleted",
+                    "chat_id": chat_id,
+                    "note_id": note_id
+                })
+                self.send_json(200, {"ok": True})
+                return
+
+            elif url.path == "/api/copilot/assignment":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+
+                _, db_path, _ = self._resolve_account_params(payload)
+                chat_id = payload.get("chat_id")
+                assigned_to = payload.get("assigned_to", "")
+                operator_name = payload.get("operator_name") or payload.get("updated_by") or self.headers.get("X-WAckup-Operator") or ""
+
+                res = db_manager.upsert_contact_meta(chat_id, assigned_to=assigned_to, updated_by=operator_name, db_path=db_path)
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "assignment_updated",
+                    "chat_id": chat_id,
+                    "assigned_to": assigned_to,
+                    "updated_by": operator_name
+                })
+                self.send_json(200, {"ok": True, "meta": res})
+                return
+
+            elif url.path == "/api/logs/open":
                 open_logs_window()
                 self.send_json(200, {"success": True, "message": "Ventana de logs abierta"})
+                return
+
+            elif url.path == "/api/system/restart":
+                self.send_json(200, {"ok": True, "message": "Reiniciando visor..."})
+                def _do_restart():
+                    time.sleep(0.4)
+                    restart_current_process()
+                threading.Thread(target=_do_restart, daemon=True).start()
+                return
+
+            elif url.path == "/api/system/onboarding":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                completed = payload.get("completed", True)
+                profile = payload.get("profile")
+                config.update_system_settings(onboarding_completed=completed)
+                if profile and profile in config.VALID_WORKSPACE_PROFILES:
+                    acc_id, _, _ = self._resolve_account_params({})
+                    config.set_account_profile(acc_id, profile)
+                self.send_json(200, {"ok": True, "onboarding_completed": completed})
+                return
+
+            elif url.path == "/api/system/shortcuts":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                action = payload.get("action", "")
+                enable = payload.get("enable", True)
+                res = manage_windows_shortcut(action, enable=enable)
+                self.send_json(200 if res.get("ok") else 400, res)
+                return
+
+            elif url.path == "/api/system/update/apply":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                force = bool(payload.get("force", False))
+                download_url = payload.get("download_url")
+                result = updater.apply_update(download_url=download_url, force=force, restart=False)
+                if result.get("ok"):
+                    self.send_json(200, result)
+                    def _do_update_restart():
+                        time.sleep(0.8)
+                        restart_current_process()
+                    threading.Thread(target=_do_update_restart, daemon=True).start()
+                else:
+                    self.send_json(400, result)
+                return
+
+            elif url.path == "/api/profile/cycle":
+                params = parse_qs(url.query)
+                acc_id, _, _ = self._resolve_account_params(params)
+                curr = config.get_account_profile(acc_id)
+                profiles = list(config.VALID_WORKSPACE_PROFILES)
+                try:
+                    next_idx = (profiles.index(curr) + 1) % len(profiles)
+                except ValueError:
+                    next_idx = 0
+                new_prof = profiles[next_idx]
+                config.set_account_profile(acc_id, new_prof)
+                prof_label = config.WORKSPACE_PROFILE_NAMES.get(new_prof, new_prof)
+                self.send_json(200, {
+                    "ok": True,
+                    "profile": new_prof,
+                    "profile_label": prof_label,
+                    "account_id": acc_id
+                })
+                return
+
+            elif url.path == "/api/profile":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                new_prof = payload.get("profile")
+                account_id, _, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                if not new_prof or new_prof not in config.VALID_WORKSPACE_PROFILES:
+                    self.send_json(400, {"ok": False, "error": f"Perfil inválido: {new_prof}"})
+                    return
+
+                config.set_account_profile(account_id, new_prof)
+                prof_label = config.WORKSPACE_PROFILE_NAMES.get(new_prof, new_prof)
+                self.send_json(200, {
+                    "ok": True,
+                    "profile": new_prof,
+                    "profile_label": prof_label,
+                    "profile_name": prof_label,
+                    "account_id": account_id
+                })
+                return
+
+            elif url.path == "/api/copilot/notes":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                notes = payload.get("notes", "")
+                expected_updated_at = payload.get("expected_updated_at")
+                operator_name = payload.get("updated_by") or payload.get("operator") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or ""
+
+                if not chat_id:
+                    self.send_json(400, {"ok": False, "error": "Falta chat_id"})
+                    return
+
+                res = db_manager.upsert_contact_meta(
+                    chat_id,
+                    notes=notes,
+                    updated_by=operator_name,
+                    expected_updated_at=expected_updated_at,
+                    db_path=db_path
+                )
+
+                if isinstance(res, dict) and res.get("conflict"):
+                    self.send_json(409, {
+                        "ok": False,
+                        "conflict": True,
+                        "error": res.get("error", "Conflicto de edición en la nota"),
+                        "current_notes": res.get("current_notes", ""),
+                        "updated_at": res.get("updated_at"),
+                        "updated_by": res.get("updated_by", ""),
+                        "current_updated_by": res.get("updated_by", "")
+                    })
+                    return
+
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "notes_updated",
+                    "chat_id": chat_id,
+                    "notes": res.get("notes", "") if res else notes,
+                    "updated_by": operator_name
+                })
+                self.send_json(200, {
+                    "ok": True,
+                    "chat_id": chat_id,
+                    "notes": res.get("notes", "") if res else notes,
+                    "updated_at": res.get("updated_at") if res else None,
+                    "notes_updated_at": res.get("updated_at") if res else None
+                })
+                return
+
+            elif url.path == "/api/support/ticket":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                ticket_status = payload.get("ticket_status", "none")
+
+                if not chat_id:
+                    self.send_json(400, {"ok": False, "error": "Falta chat_id"})
+                    return
+
+                res = db_manager.upsert_contact_meta(chat_id, ticket_status=ticket_status, db_path=db_path)
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "ticket_updated",
+                    "chat_id": chat_id,
+                    "ticket_status": res.get("ticket_status", "none")
+                })
+                self.send_json(200, {"ok": True, "chat_id": chat_id, "ticket_status": res.get("ticket_status", "none")})
+                return
+
+            elif url.path == "/api/support/templates":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                action = payload.get("action", "save")
+                template_id = payload.get("template_id") or payload.get("id")
+
+                if action == "delete":
+                    if not template_id:
+                        self.send_json(400, {"ok": False, "error": "template_id requerido para eliminar"})
+                        return
+                    db_manager.delete_quick_template(template_id, db_path=db_path)
+                    self.send_json(200, {"ok": True, "deleted": True, "template_id": template_id})
+                    return
+
+                shortcut = payload.get("shortcut", "").strip()
+                title = payload.get("title", "").strip()
+                t_body = payload.get("body", "").strip()
+                profile_type = payload.get("profile_type", "both")
+
+                if not shortcut or not title or not t_body:
+                    self.send_json(400, {"ok": False, "error": "Campos incompletos (shortcut, title, body requeridos)"})
+                    return
+
+                tid = db_manager.save_quick_template(shortcut, title, t_body, profile_type=profile_type, template_id=template_id, db_path=db_path)
+                self.send_json(200, {"ok": True, "template_id": tid})
+                return
+
+            elif url.path == "/api/support/templates/delete":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+                try:
+                    payload = json.loads(body.decode("utf-8")) if body else {}
+                except Exception:
+                    payload = {}
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                template_id = payload.get("template_id") or payload.get("id")
+                if not template_id:
+                    params = parse_qs(url.query)
+                    template_id = params.get("template_id", [None])[0] or params.get("id", [None])[0]
+                if not template_id:
+                    self.send_json(400, {"ok": False, "error": "template_id requerido"})
+                    return
+                db_manager.delete_quick_template(template_id, db_path=db_path)
+                self.send_json(200, {"ok": True, "deleted": True, "template_id": template_id})
+                return
+
+            elif url.path == "/api/sales/pipeline":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                sales_stage = payload.get("sales_stage")
+                estimated_value = payload.get("estimated_value")
+                follow_up_date = payload.get("follow_up_date")
+
+                if not chat_id:
+                    self.send_json(400, {"ok": False, "error": "Falta chat_id"})
+                    return
+
+                res = db_manager.upsert_contact_meta(
+                    chat_id,
+                    sales_stage=sales_stage,
+                    estimated_value=estimated_value,
+                    follow_up_date=follow_up_date,
+                    db_path=db_path
+                )
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "pipeline_updated",
+                    "chat_id": chat_id,
+                    "sales_stage": res.get("sales_stage", "none"),
+                    "estimated_value": res.get("estimated_value", 0.0),
+                    "follow_up_date": res.get("follow_up_date")
+                })
+                self.send_json(200, {
+                    "ok": True,
+                    "chat_id": chat_id,
+                    "sales_stage": res.get("sales_stage", "none"),
+                    "estimated_value": res.get("estimated_value", 0.0),
+                    "follow_up_date": res.get("follow_up_date")
+                })
+                return
+
+            elif url.path == "/api/crm/kanban/move":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                sales_stage = payload.get("sales_stage")
+                ticket_status = payload.get("ticket_status")
+                estimated_value = payload.get("estimated_value")
+                follow_up_date = payload.get("follow_up_date")
+
+                if not chat_id:
+                    self.send_json(400, {"ok": False, "error": "Falta chat_id"})
+                    return
+
+                res = db_manager.upsert_contact_meta(
+                    chat_id,
+                    sales_stage=sales_stage,
+                    ticket_status=ticket_status,
+                    estimated_value=estimated_value,
+                    follow_up_date=follow_up_date,
+                    db_path=db_path
+                )
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "kanban_moved",
+                    "chat_id": chat_id,
+                    "updated": res
+                })
+                self.send_json(200, {"ok": True, "chat_id": chat_id, "updated": res})
+                return
+
+            elif url.path == "/api/copilot/tags":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length == 0:
+                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                tag = (payload.get("tag") or "").strip()
+                category = payload.get("category", "general")
+                action = payload.get("action", "add")
+
+                if not chat_id or not tag:
+                    self.send_json(400, {"ok": False, "error": "Faltan parámetros chat_id o tag"})
+                    return
+
+                if action == "remove":
+                    ok = db_manager.remove_chat_tag(chat_id, tag, db_path=db_path)
+                else:
+                    ok = db_manager.add_chat_tag(chat_id, tag, category=category, db_path=db_path)
+
+                tags = db_manager.get_chat_tags(chat_id, db_path=db_path)
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "tags_updated",
+                    "chat_id": chat_id,
+                    "tags": tags
+                })
+                self.send_json(200, {"ok": ok, "chat_id": chat_id, "tags": tags})
                 return
 
             elif url.path == "/api/sync":
@@ -3121,7 +2115,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
                 db_path = config.get_account_db(account_id)
                 config.save_account_metadata(account_id, name=account_name, phone=account_phone)
-                db_manager.init_db(db_path=db_path)
+                db_manager.ensure_db_initialized(db_path=db_path)
 
                 global _is_saving_sync
                 _is_saving_sync = True
@@ -3131,7 +2125,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 log_sync_status(stats, account_id=account_id or "default")
                 media_manager.trigger_media_processing(db_path=db_path)
 
-                self.send_json(200, {"success": True, "stats": stats, "account_id": account_id or "default"})
+                global _last_sync_epoch
+                _last_sync_epoch = int(time.time())
+                sse_hub.get_sse_hub().broadcast("sync_update", {
+                    "last_sync_epoch": _last_sync_epoch,
+                    "account_id": account_id or "default",
+                    "stats": stats
+                })
+
+                self.send_json(200, {"success": True, "stats": stats, "account_id": account_id or "default", "last_sync_epoch": _last_sync_epoch})
                 return
 
             elif url.path == "/api/backup/create":
@@ -3162,6 +2164,74 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.send_json(500, {"error": str(e)})
 
+    def do_DELETE(self):
+        try:
+            if not self.is_trusted_origin():
+                self.send_json(403, {"error": "Origen no permitido"})
+                return
+
+            auth_ok, status_code, err_msg = self.is_authorized_request()
+            if not auth_ok:
+                self.send_json(status_code, {
+                    "ok": False,
+                    "error": err_msg,
+                    "needs_pin": (status_code == 401)
+                })
+                return
+
+            url = urlparse(self.path)
+            if url.path == "/api/support/templates":
+                params = parse_qs(url.query)
+                account_id, db_path, _ = self._resolve_account_params(params)
+                template_id = params.get("id", [None])[0] or params.get("template_id", [None])[0]
+                if not template_id:
+                    content_length = int(self.headers.get("Content-Length", 0))
+                    if content_length > 0:
+                        body = self.rfile.read(content_length)
+                        try:
+                            payload = json.loads(body.decode("utf-8"))
+                            template_id = payload.get("id") or payload.get("template_id")
+                        except Exception:
+                            pass
+                if not template_id:
+                    self.send_json(400, {"ok": False, "error": "id de plantilla requerido"})
+                    return
+                db_manager.delete_quick_template(template_id, db_path=db_path)
+                self.send_json(200, {"ok": True, "deleted": True, "template_id": template_id})
+                return
+
+            elif url.path == "/api/copilot/notes/log":
+                params = parse_qs(url.query)
+                _, db_path, _ = self._resolve_account_params(params)
+                note_id = params.get("id", [None])[0] or params.get("note_id", [None])[0]
+                author = params.get("author", [None])[0]
+                if not note_id:
+                    content_length = int(self.headers.get("Content-Length", 0))
+                    if content_length > 0:
+                        body = self.rfile.read(content_length)
+                        try:
+                            payload = json.loads(body.decode("utf-8"))
+                            note_id = payload.get("id") or payload.get("note_id")
+                            author = payload.get("author") or author
+                        except Exception:
+                            pass
+                if not note_id:
+                    self.send_json(400, {"ok": False, "error": "id de nota requerido"})
+                    return
+                db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "note_log_deleted",
+                    "note_id": note_id
+                })
+                self.send_json(200, {"ok": True, "deleted": True, "note_id": note_id})
+                return
+
+            self.send_response(404)
+            self.end_headers()
+        except Exception as e:
+            traceback.print_exc()
+            self.send_json(500, {"error": str(e)})
+
     def log_message(self, format, *args):
         return
 
@@ -3180,8 +2250,14 @@ def run():
     media_manager.trigger_media_processing()
 
     ThreadingHTTPServer.allow_reuse_address = False
+    ThreadingHTTPServer.daemon_threads = True
+    settings = config.get_system_settings()
+    is_lan = settings.get("network_mode") == "lan"
+    bind_host = "0.0.0.0" if is_lan else "127.0.0.1"
+
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", PORT), BackupServerHandler)
+        server = ThreadingHTTPServer((bind_host, PORT), BackupServerHandler)
+        server.daemon_threads = True
         global _server_instance
         _server_instance = server
     except OSError as e:
@@ -3194,23 +2270,91 @@ def run():
         return
 
     url = f"http://127.0.0.1:{PORT}"
-
-    append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Servidor iniciado en {url}")
+    if is_lan:
+        lan_ips = config.get_local_ip_addresses()
+        lan_host = lan_ips[0] if lan_ips else "0.0.0.0"
+        append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Modo Equipo LAN activo en {bind_host}:{PORT} (Acceso red: http://{lan_host}:{PORT})")
+    else:
+        append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Servidor iniciado en {url}")
 
     global _initial_total_msgs
     if accounts:
         _initial_total_msgs = sum(a.get("total_messages", 0) for a in accounts)
 
-    render_dashboard(url)
+    console_mode = "--console" in sys.argv
+    tray_instance = None
+    if console_mode:
+        render_dashboard(url)
+        start_keyboard_listener(url)
+        start_status_animator()
+    else:
+        print(f"\n========================================================================")
+        print(f"  WAckup 3.0 Activo")
+        print(f"  Servidor: {url}")
+        print(f"  Bandeja del sistema: Activa junto al reloj de Windows")
+        print(f"  (Usa 'python whatsapp_viewer.py --console' para atajos en terminal)")
+        print(f"========================================================================\n")
+        try:
+            from tray_manager import TrayManager
+            if TrayManager.is_available():
+                tray_instance = TrayManager(
+                    url=url,
+                    port=PORT,
+                    on_restart=restart_current_process,
+                    on_exit=lambda: os._exit(0)
+                )
+                tray_instance.start()
+            else:
+                render_dashboard(url)
+                start_keyboard_listener(url)
+                start_status_animator()
+        except Exception as e:
+            render_dashboard(url)
+            start_keyboard_listener(url)
+            start_status_animator()
 
-    start_keyboard_listener(url)
-    start_status_animator()
-    webbrowser.open(url)
+    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restart_flag")
+    has_client_flag = False
+    is_restart = os.environ.get("WACKUP_RESTARTED") == "1" or os.path.exists(flag_path)
+    if os.path.exists(flag_path):
+        try:
+            with open(flag_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            has_client_flag = (content == "has_client")
+            os.remove(flag_path)
+        except Exception:
+            pass
+    if "WACKUP_RESTARTED" in os.environ:
+        os.environ.pop("WACKUP_RESTARTED", None)
+
+    if not is_restart or (is_restart and not has_client_flag):
+        webbrowser.open(url)
+    else:
+        print("  [i] Pestaña activa detectada en el navegador: se actualizará automáticamente.")
+
     try:
         server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n\nServidor detenido correctamente.")
-        server.server_close()
+    except (KeyboardInterrupt, OSError):
+        pass
+    finally:
+        global _server_stopping
+        _server_stopping = True
+        try:
+            sse_hub.get_sse_hub().shutdown()
+        except Exception:
+            pass
+        if tray_instance:
+            try:
+                tray_instance.stop()
+            except Exception:
+                pass
+        try:
+            server.server_close()
+        except Exception:
+            pass
+
+    if _exit_code != 0:
+        os._exit(_exit_code)
 
 if __name__ == "__main__":
     run()
