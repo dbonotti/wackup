@@ -153,6 +153,17 @@ class TrayManager:
                     t.start()
 
                 self._is_running = True
+
+                # Notificación sutil en la bandeja del sistema de Windows
+                try:
+                    if hasattr(self.icon, "notify"):
+                        self.icon.notify(
+                            "WAckup está activo en segundo plano junto al reloj de Windows.",
+                            "WAckup 3.0"
+                        )
+                except Exception:
+                    pass
+
                 return True
             except Exception as e:
                 logger.warning(f"No se pudo iniciar el icono de la bandeja: {e}")

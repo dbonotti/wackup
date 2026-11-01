@@ -1,12 +1,16 @@
 ' ========================================================
 ' Iniciar_WAckup.vbs - Lanzador silencioso de WAckup 3.0
 ' Inicia el servidor en segundo plano sin ventana negra CMD
-' El control se realiza desde la Bandeja del Sistema y el Visor Web
+' Abre el Visor Web en el navegador y sitúa el control en
+' la Bandeja del Sistema junto al reloj.
 ' ========================================================
 
 Option Explicit
 
 Dim WshShell, fso, scriptDir, runtimePythonw, cmdToRun, exitCode
+Dim targetUrl
+
+targetUrl = "http://127.0.0.1:8080"
 
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -36,8 +40,13 @@ If Err.Number <> 0 Then
         MsgBox "No se encontró un entorno Python funcional para WAckup." & vbCrLf & vbCrLf & _
                "Por favor inicia WAckup usando el archivo 'iniciar_visor.bat'.", _
                vbExclamation, "WAckup 3.0"
+        WScript.Quit 1
     End If
 End If
+
+' 2. Esperar brevemente a que el servidor inicialice y abrir el navegador en primer plano
+WScript.Sleep 1500
+WshShell.Run targetUrl, 1, False
 
 Set WshShell = Nothing
 Set fso = Nothing
