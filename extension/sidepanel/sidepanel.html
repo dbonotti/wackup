@@ -7,30 +7,17 @@
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <!-- CABECERA FIJA SUPERIOR -->
+  <!-- CABECERA FIJA SUPERIOR COMPACTA -->
   <header class="app-header">
-    <div class="header-top-row">
+    <div class="header-main-row">
       <div class="brand">
         <span class="brand-title">WAckup</span>
-        <span class="status-indicator">
-          <span id="header-status-dot" class="status-dot"></span>
-          <span id="header-status-text" class="status-text">Conectando...</span>
-        </span>
+        <span id="header-status-dot" class="status-dot ready" title="Estado: Conectando..."></span>
       </div>
       <div class="header-actions">
-        <span id="profile-badge" class="badge-profile" title="Perfil de Espacio de Trabajo">CRM</span>
+        <span id="profile-badge" class="badge-profile" title="Perfil de Espacio de Trabajo (clic para cambiar)">CRM</span>
         <button id="btn-update-ext" class="btn-icon btn-update" style="display:none;" title="Actualizar extensión">🔄 Actualizar</button>
-        <button id="btn-sync-recent" class="btn-icon" title="Sincronizar mensajes recientes (Novedades)">🔄</button>
-        <button id="btn-sync-all" class="btn-icon" title="Sincronizar historial completo (Todo)">📥</button>
-      </div>
-    </div>
-    <div class="header-sub-row">
-      <div class="account-info">
-        <span id="header-account-name" class="account-name">Cuenta WhatsApp</span>
-        <span id="header-account-phone" class="account-phone"></span>
-      </div>
-      <div class="stats-info">
-        <span id="header-stats-msgs" class="stats-msgs">0 msgs</span>
+        <button id="btn-sync-recent" class="btn-icon" title="Sincronizar novedades (Shift+clic: historial completo)">🔄</button>
       </div>
     </div>
   </header>
@@ -79,20 +66,23 @@
           <span>👁️</span> <span id="presence-text"><b>Ana</b> está viendo este chat ahora</span>
         </div>
 
-        <!-- Tarjeta de Contacto Activo -->
+        <!-- Tarjeta de Contacto Activo (Diseño Compacto) -->
         <div class="contact-header-card">
-          <div class="contact-main">
-            <div id="contact-name" class="contact-title">Cargando contacto...</div>
-            <div id="contact-phone" class="contact-subtitle">--</div>
+          <div class="contact-row-top">
+            <div id="contact-name" class="contact-title" title="Nombre del contacto">Cargando contacto...</div>
+            <span id="contact-sla" class="sla-badge" style="display:none;" title="Tiempo promedio de respuesta (SLA)">-</span>
           </div>
-          <div class="contact-meta-badge">
-            <span id="contact-sla" class="sla-badge" title="Tiempo promedio de respuesta">-</span>
-          </div>
-          <div class="assigned-row">
-            <label for="select-assigned-to">👤 Responsable:</label>
-            <select id="select-assigned-to" class="select-sm">
-              <option value="">Sin asignar</option>
-            </select>
+          <div class="contact-row-bottom">
+            <button id="contact-phone" class="contact-phone-btn" type="button" title="Clic para copiar teléfono">
+              <span id="contact-phone-text">--</span>
+              <span class="copy-icon">📋</span>
+            </button>
+            <div class="assigned-wrapper" title="Operador asignado">
+              <label for="select-assigned-to" class="assigned-label">👤</label>
+              <select id="select-assigned-to" class="select-sm">
+                <option value="">Sin asignar</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -199,8 +189,14 @@
         <div class="section-card">
           <div class="card-title">🔍 Buscar en este Chat</div>
           <div class="search-input-group">
-            <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar palabras clave en mensajes...">
+            <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar palabras en este chat...">
+            <button id="btn-search-prev" class="btn-secondary btn-nav-search" title="Coincidencia anterior (más arriba en el chat) [Enter]" disabled>▲</button>
+            <button id="btn-search-next" class="btn-secondary btn-nav-search" title="Coincidencia siguiente (más abajo en el chat) [Shift+Enter]" disabled>▼</button>
             <button id="btn-search-chat" class="btn-primary">Buscar</button>
+          </div>
+          <div id="search-nav-bar" class="search-nav-bar" style="display: none;">
+            <span id="search-nav-count" class="search-nav-count">0 de 0</span>
+            <span id="search-nav-hint" class="search-nav-hint">Usa ▲ / ▼ para navegar</span>
           </div>
           <div id="chat-search-results" class="search-results-list"></div>
         </div>
@@ -250,6 +246,9 @@
             </div>
             <div class="form-actions">
               <button id="btn-save-cfg" class="btn-primary full-width">Guardar Configuración</button>
+            </div>
+            <div class="form-actions mt-2">
+              <button id="btn-sync-all-full" class="btn-secondary full-width" style="font-size: 11px;">📥 Sincronizar Historial Completo</button>
             </div>
             <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
           </div>

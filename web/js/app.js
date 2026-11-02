@@ -593,6 +593,23 @@
       connectSSE();
       // Si todavía no hay chats respaldados, consultar cada 2s para que la pantalla se actualice de inmediato al conectar WhatsApp Web
       startSyncPolling((!allChats || allChats.length === 0) ? 2000 : 4000);
+
+      // Soporte para abrir chat y mensaje específico desde URL (?chat_id=...&msg_id=...)
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlChatId = urlParams.get('chat_id');
+        const urlMsgId = urlParams.get('msg_id');
+        if (urlChatId && Array.isArray(allChats)) {
+          const matchedChat = allChats.find(c => c.chat_id === urlChatId || (c.canonical_id && c.canonical_id === urlChatId));
+          if (matchedChat) {
+            selectChat(matchedChat, urlMsgId);
+          } else {
+            selectChat({ chat_id: urlChatId, nombre: urlChatId }, urlMsgId);
+          }
+        }
+      } catch (e) {
+        console.warn('Error procesando parámetros de URL en el visor:', e);
+      }
     }
 
     let selectedOnboardingProfile = 'full';
@@ -804,11 +821,55 @@
 
     let currentServerSessionId = null;
     let wasServerOffline = false;
+    let offlineReconnectWorker = null;
+    let offlineProbeInFlight = false;
+
+    function stopOfflineReconnectWorker() {
+      if (offlineReconnectWorker) {
+        try { offlineReconnectWorker.terminate(); } catch (e) {}
+        offlineReconnectWorker = null;
+      }
+    }
+
+    function startOfflineReconnectWorker() {
+      if (offlineReconnectWorker) return;
+      const probeOnce = async () => {
+        if (offlineProbeInFlight) return;
+        offlineProbeInFlight = true;
+        try {
+          const res = await fetch(withAccount(`/api/sync/status?viewer=1&client_id=${encodeURIComponent(myClientId)}`), { cache: 'no-store' });
+          if (res && res.ok) {
+            stopOfflineReconnectWorker();
+            updateSyncStatus();
+          }
+        } catch (e) {
+          // El servidor sigue apagado; reintentará en el próximo pulso
+        } finally {
+          offlineProbeInFlight = false;
+        }
+      };
+
+      try {
+        // Un Web Worker dedicado no sufre el throttling de 60s de Chrome en pestañas en segundo plano
+        const blob = new Blob(
+          ['setInterval(function(){ postMessage("tick"); }, 800);'],
+          { type: 'application/javascript' }
+        );
+        const workerUrl = URL.createObjectURL(blob);
+        offlineReconnectWorker = new Worker(workerUrl);
+        URL.revokeObjectURL(workerUrl);
+        offlineReconnectWorker.onmessage = probeOnce;
+      } catch (e) {
+        const fallbackId = setInterval(probeOnce, 1000);
+        offlineReconnectWorker = { terminate: () => clearInterval(fallbackId) };
+      }
+    }
 
     async function updateSyncStatus() {
       try {
-        const res = await fetch(withAccount('/api/sync/status'));
+        const res = await fetch(withAccount(`/api/sync/status?viewer=1&client_id=${encodeURIComponent(myClientId)}`));
         const data = await res.json();
+        stopOfflineReconnectWorker();
 
         // Detección de reinicio del servidor: recargar la pestaña activa en vez de duplicarla
         if (data && data.server_session_id) {
@@ -884,6 +945,7 @@
         }
       } catch (e) {
         wasServerOffline = true;
+        startOfflineReconnectWorker();
         console.error('Error al actualizar estado:', e);
         const syncStatusEl = document.getElementById('syncStatusText');
         if (syncStatusEl) syncStatusEl.textContent = 'Desconectado';
@@ -1086,15 +1148,46 @@
       });
     }
 
-        function setSearchMode(mode) {
+    function setSearchMode(mode) {
       currentMode = mode;
       handleSearchInput();
     }
 
-    function clearSearchInput() {
+    function closeSearchAndRestoreChats(targetChatId = null) {
       const input = document.getElementById('searchInput');
       if (input) input.value = '';
-      handleSearchInput();
+      const clearBtn = document.getElementById('searchClearBtn');
+      if (clearBtn) clearBtn.style.display = 'none';
+
+      const chatList = document.getElementById('chat-list');
+      const unifiedResults = document.getElementById('unified-search-results');
+      const contactsList = document.getElementById('unified-contacts-list');
+      const messagesList = document.getElementById('search-results-list');
+
+      if (unifiedResults) unifiedResults.style.display = 'none';
+      if (contactsList) contactsList.innerHTML = '';
+      if (messagesList) messagesList.innerHTML = '';
+      if (chatList) {
+        chatList.style.display = 'block';
+        if (chatList.children.length === 0 && allChats && allChats.length > 0) {
+          renderChats(allChats);
+        }
+      }
+
+      const activeId = targetChatId || selectedChatId;
+      if (activeId) {
+        document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+        const activeEl = document.getElementById(safeDomId('chat-', activeId));
+        if (activeEl) {
+          activeEl.classList.add('active');
+          activeEl.scrollIntoView({ block: 'nearest' });
+        }
+      }
+    }
+
+    function clearSearchInput() {
+      closeSearchAndRestoreChats(selectedChatId);
+      const input = document.getElementById('searchInput');
       if (input) input.focus();
     }
 
@@ -1113,10 +1206,7 @@
       const messagesList = document.getElementById('search-results-list');
 
       if (!query) {
-        if (chatList) chatList.style.display = 'block';
-        if (unifiedResults) unifiedResults.style.display = 'none';
-        if (contactsList) contactsList.innerHTML = '';
-        if (messagesList) messagesList.innerHTML = '';
+        closeSearchAndRestoreChats(selectedChatId);
         return;
       }
 
@@ -1146,6 +1236,7 @@
             const initial = title ? title.charAt(0).toUpperCase() : '?';
             const color = getColorForName(title);
             li.onclick = () => {
+              closeSearchAndRestoreChats(chat.chat_id);
               selectChat(chat);
             };
             li.innerHTML = `
@@ -1184,7 +1275,19 @@
           li.className = 'search-item';
           const title = formatFriendlyName(item.chat_nombre, item.chat_id);
           li.onclick = () => {
-            const chat = allChats.find(c => c.chat_id === item.chat_id) || { chat_id: item.chat_id, display_name: title };
+            let chat = allChats.find(c => c.chat_id === item.chat_id);
+            if (!chat) {
+              chat = {
+                chat_id: item.chat_id,
+                display_name: title,
+                last_msg: item.contenido,
+                last_ts: item.timestamp,
+                last_tipo: item.tipo
+              };
+              allChats.unshift(chat);
+              renderChats(allChats);
+            }
+            closeSearchAndRestoreChats(chat.chat_id);
             selectChat(chat, item.msg_id);
           };
           li.innerHTML = `
@@ -1200,6 +1303,14 @@
     }
 
     async function selectChat(chat, scrollToMsgId = null) {
+      if (!chat || !chat.chat_id) return;
+
+      // Asegurar que si la búsqueda estaba abierta o con texto, se cierre y restaure la lista de chats
+      const searchInputEl = document.getElementById('searchInput');
+      if (searchInputEl && searchInputEl.value.trim().length > 0) {
+        closeSearchAndRestoreChats(chat.chat_id);
+      }
+
       selectedChatId = chat.chat_id;
       startPresenceHeartbeat(chat.chat_id);
       updatePresenceBanners();
@@ -1211,8 +1322,18 @@
       if (menuText) menuText.textContent = 'Buscar por fecha y multimedia';
 
       document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
-      const activeEl = document.getElementById(safeDomId('chat-', chat.chat_id));
-      if (activeEl) activeEl.classList.add('active');
+      let activeEl = document.getElementById(safeDomId('chat-', chat.chat_id));
+      if (!activeEl && allChats) {
+        if (!allChats.some(c => c.chat_id === chat.chat_id)) {
+          allChats.unshift(chat);
+        }
+        renderChats(allChats);
+        activeEl = document.getElementById(safeDomId('chat-', chat.chat_id));
+      }
+      if (activeEl) {
+        activeEl.classList.add('active');
+        activeEl.scrollIntoView({ block: 'nearest' });
+      }
 
       document.getElementById('empty-state').style.display = 'none';
       document.getElementById('chat-header').style.display = 'flex';
@@ -1300,7 +1421,16 @@
 
     function highlightBubble(el) {
       if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const container = document.getElementById('messages-container');
+      if (container) {
+        const containerRect = container.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const currentScrollTop = container.scrollTop;
+        const targetScrollTop = currentScrollTop + (elRect.top - containerRect.top) - (containerRect.height / 2) + (elRect.height / 2);
+        container.scrollTo({ top: Math.max(0, targetScrollTop), behavior: 'smooth' });
+      } else {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      }
       el.style.transition = 'outline 0.2s ease, box-shadow 0.2s ease';
       el.style.outline = '3px solid var(--accent)';
       el.style.boxShadow = '0 0 16px rgba(0, 168, 132, 0.6)';
@@ -1739,6 +1869,10 @@
     let copilotCurrentStage = 'none';
 
     function toggleChatCopilot(forceState = null) {
+      if (currentProfile === 'backup_only') {
+        showToast('ℹ️ El Copiloto CRM no está disponible en el perfil "Solo Respaldo".');
+        return;
+      }
       if (forceState !== null) {
         isChatCopilotOpen = forceState;
       } else {
@@ -2578,7 +2712,9 @@
       const activeBtn = document.getElementById(activeBtnId);
       if (activeBtn) activeBtn.classList.add('active');
 
-      if (viewId === 'crm') {
+      if (viewId === 'conversations') {
+        closeSearchAndRestoreChats(selectedChatId);
+      } else if (viewId === 'crm') {
         loadCrmDashboard();
       } else if (viewId === 'templates') {
         loadTemplatesWorkspace();
@@ -3161,6 +3297,10 @@
 
         sseEventSource.onopen = () => {
           console.log('[SSE] Conectado a canal de eventos en tiempo real');
+          stopOfflineReconnectWorker();
+          if (wasServerOffline) {
+            updateSyncStatus();
+          }
         };
 
         const onEvent = (e) => {
@@ -3176,23 +3316,97 @@
         sseEventSource.addEventListener('crm_update', onEvent);
         sseEventSource.addEventListener('sync_update', onEvent);
         sseEventSource.addEventListener('profile_update', onEvent);
+        sseEventSource.addEventListener('focus_viewer', () => {
+          try { window.focus(); } catch (e) {}
+          try {
+            window.postMessage({ source: 'wackup-viewer', action: 'focus_my_tab' }, '*');
+          } catch (e) {}
+        });
 
         sseEventSource.onerror = () => {
-          // EventSource reintenta automáticamente
+          // EventSource reintenta automáticamente; activar sondeo rápido en Worker para que el servidor detecte la pestaña al volver
+          wasServerOffline = true;
+          startOfflineReconnectWorker();
         };
       } catch (err) {
         console.warn('[SSE] EventSource no disponible:', err);
       }
     }
 
+    // Confirmar al servidor cuando la extensión activó y enfocó esta pestaña exitosamente
+    window.addEventListener('message', (ev) => {
+      if (ev.source !== window || !ev.data || ev.data.source !== 'wackup-viewer-ext') return;
+      if (ev.data.action === 'tab_focused_ok') {
+        fetch('/api/viewer/focused', { method: 'POST' }).catch(() => {});
+      }
+    });
+
+    // Coordinación entre pestañas cuando se abre desde System Tray (?from_tray=1) en navegadores sin extensión
+    (function setupSingleViewerTrayChannel() {
+      try {
+        if (typeof BroadcastChannel === 'undefined') return;
+        const bc = new BroadcastChannel('wackup_viewer_channel');
+        bc.onmessage = (ev) => {
+          if (ev.data && ev.data.type === 'tray_claimed_viewer' && ev.data.clientId !== myClientId) {
+            stopOfflineReconnectWorker();
+            if (sseEventSource) {
+              try { sseEventSource.close(); } catch (e) {}
+              sseEventSource = null;
+            }
+            if (syncIntervalId) {
+              clearInterval(syncIntervalId);
+              syncIntervalId = null;
+            }
+            try { window.close(); } catch (e) {}
+          }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('from_tray') === '1') {
+          bc.postMessage({ type: 'tray_claimed_viewer', clientId: myClientId });
+          params.delete('from_tray');
+          const cleanQs = params.toString();
+          const cleanUrl = window.location.pathname + (cleanQs ? '?' + cleanQs : '') + window.location.hash;
+          window.history.replaceState(null, '', cleanUrl);
+        }
+      } catch (e) {}
+    })();
+
+    // Notificar inmediatamente al servidor si el usuario cierra la pestaña del Visor Web
+    window.addEventListener('pagehide', () => {
+      try {
+        if (navigator.sendBeacon) {
+          const leaveUrl = '/api/presence/leave' + (myOfficePin ? '?pin=' + encodeURIComponent(myOfficePin) : '');
+          const payload = JSON.stringify({
+            client_id: myClientId,
+            chat_id: selectedChatId || null,
+            tab_closed: true
+          });
+          navigator.sendBeacon(leaveUrl, new Blob([payload], { type: 'application/json' }));
+        }
+      } catch (e) {}
+    });
+
     function handleSSEEvent(msg) {
       if (!msg || !msg.event) return;
 
       switch (msg.event) {
         case 'connected':
+          if (msg.profile && (!msg.account_id || msg.account_id === currentAccountId)) {
+            const label = msg.profile_label || msg.profile;
+            updateProfileUIElements(msg.profile, label);
+            if (typeof availableAccounts !== 'undefined' && availableAccounts) {
+              const acc = availableAccounts.find(a => a.id === (msg.account_id || currentAccountId));
+              if (acc) {
+                acc.workspace_profile = msg.profile;
+                acc.workspace_profile_label = label;
+              }
+            }
+          }
         case 'presence_update':
           activePresenceMap = msg.active_presence || msg.presence || {};
           updatePresenceBanners();
+          renderTeamOperatorsList();
           break;
 
         case 'crm_update': {
@@ -3281,18 +3495,194 @@
 
         knownOperatorsList = data.known_operators || [];
         updateCopilotOperatorOptions();
+        renderTeamOperatorsList();
 
       } catch (err) {
         console.error('Error al cargar configuración de red:', err);
       }
     }
 
+    function isOperatorOnline(opName) {
+      if (!activePresenceMap || !opName) return false;
+      const cleanTarget = opName.trim().toLowerCase();
+      for (const chatId in activePresenceMap) {
+        const entry = activePresenceMap[chatId];
+        if (!entry) continue;
+        const viewers = Array.isArray(entry) ? entry : (Array.isArray(entry.viewers) ? entry.viewers : [entry]);
+        for (const v of viewers) {
+          if (v && v.operator && v.operator.trim().toLowerCase() === cleanTarget) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function renderTeamOperatorsList() {
+      const tbody = document.getElementById('teamOperatorsTableBody');
+      if (!tbody) return;
+
+      if (!knownOperatorsList || knownOperatorsList.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 22px;">
+              No hay operadores registrados aún.<br>
+              <span style="font-size: 11.5px;">Haz clic en <b>"+ Nuevo Operador"</b> para dar de alta al equipo.</span>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = knownOperatorsList.map(op => {
+        const isThisPc = (myOperatorName && myOperatorName.trim().toLowerCase() === op.trim().toLowerCase());
+        const online = isOperatorOnline(op);
+        const presenceBadge = online
+          ? '<span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; color:#10b981; font-weight:600;"><span style="width:8px; height:8px; border-radius:50%; background:#10b981; display:inline-block;"></span> En línea</span>'
+          : '<span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--text-muted);"><span style="width:8px; height:8px; border-radius:50%; background:var(--text-muted); opacity:0.6; display:inline-block;"></span> Inactivo</span>';
+
+        const pcBadge = isThisPc
+          ? '<span style="background:rgba(0,168,132,0.15); color:#00a884; border:1px solid rgba(0,168,132,0.3); padding:3px 10px; border-radius:12px; font-size:11.5px; font-weight:600;">✓ Activo en esta PC</span>'
+          : `<button type="button" class="btn-card-action" style="padding:3px 10px; font-size:11.5px;" onclick="setThisPcOperator('${escapeHtml(op)}')">Usar aquí</button>`;
+
+        return `
+          <tr>
+            <td style="text-align: center; font-size: 16px;">👤</td>
+            <td style="font-weight: 600; color: var(--text-primary); font-size: 13.5px;">${escapeHtml(op)}</td>
+            <td>${presenceBadge}</td>
+            <td>${pcBadge}</td>
+            <td style="text-align: right; white-space: nowrap;">
+              <button type="button" class="btn-card-action" title="Renombrar operador" style="padding:4px 8px; font-size:12px; margin-right:4px;" onclick="openEditOperatorDialog('${escapeHtml(op)}')">✏️</button>
+              <button type="button" class="btn-card-action btn-danger-action" title="Eliminar operador" style="padding:4px 8px; font-size:12px; color:#ef4444;" onclick="deleteOperator('${escapeHtml(op)}')">🗑️</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function openAddOperatorDialog() {
+      const name = prompt('Nombre o alias del nuevo operador (ej. Carolina):');
+      if (!name || !name.trim()) return;
+      const cleanName = name.trim();
+
+      if (knownOperatorsList.some(o => o.toLowerCase() === cleanName.toLowerCase())) {
+        alert('Ya existe un operador registrado con el nombre "' + cleanName + '".');
+        return;
+      }
+
+      try {
+        const res = await authFetch('/api/system/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ add_operator: cleanName })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          knownOperatorsList = data.settings?.known_operators || [];
+          if (!myOperatorName || myOperatorName === 'Operador') {
+            setThisPcOperator(cleanName, false);
+          }
+          renderTeamOperatorsList();
+          updateCopilotOperatorOptions();
+          showToast('✓ Operador agregado: ' + cleanName);
+        } else {
+          showToast(data.error || 'Error al agregar operador');
+        }
+      } catch (err) {
+        showToast('Error de comunicación con el servidor');
+      }
+    }
+
+    async function openEditOperatorDialog(oldName) {
+      const newName = prompt(`Modificar nombre de "${oldName}" a:`, oldName);
+      if (!newName || !newName.trim() || newName.trim() === oldName) return;
+      const cleanNewName = newName.trim();
+
+      if (knownOperatorsList.some(o => o.toLowerCase() === cleanNewName.toLowerCase() && o.toLowerCase() !== oldName.toLowerCase())) {
+        alert('Ya existe otro operador registrado con el nombre "' + cleanNewName + '".');
+        return;
+      }
+
+      try {
+        const res = await authFetch('/api/system/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rename_operator: { old: oldName, new: cleanNewName }
+          })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          knownOperatorsList = data.settings?.known_operators || [];
+          if (myOperatorName && myOperatorName.toLowerCase() === oldName.toLowerCase()) {
+            myOperatorName = cleanNewName;
+            localStorage.setItem('wackup_operator_name', myOperatorName);
+            const opEl = document.getElementById('myOperatorNameDisplay');
+            if (opEl) opEl.textContent = myOperatorName;
+          }
+          renderTeamOperatorsList();
+          updateCopilotOperatorOptions();
+          showToast(`✓ Operador renombrado a "${cleanNewName}"`);
+          if (selectedChatId) sendPresenceHeartbeat(selectedChatId);
+        } else {
+          showToast(data.error || 'Error al modificar operador');
+        }
+      } catch (err) {
+        showToast('Error de comunicación con el servidor');
+      }
+    }
+
+    async function deleteOperator(opName) {
+      if (!confirm(`¿Estás seguro de que deseas eliminar al operador "${opName}" del equipo?\nYa no aparecerá en el Copiloto ni se podrá seleccionar al ingresar por red.`)) {
+        return;
+      }
+
+      try {
+        const res = await authFetch('/api/system/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remove_operator: opName })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          knownOperatorsList = data.settings?.known_operators || [];
+          if (myOperatorName && myOperatorName.toLowerCase() === opName.toLowerCase()) {
+            myOperatorName = knownOperatorsList.length > 0 ? knownOperatorsList[0] : 'Operador';
+            localStorage.setItem('wackup_operator_name', myOperatorName);
+            const opEl = document.getElementById('myOperatorNameDisplay');
+            if (opEl) opEl.textContent = myOperatorName;
+          }
+          renderTeamOperatorsList();
+          updateCopilotOperatorOptions();
+          showToast(`✓ Operador "${opName}" eliminado`);
+        } else {
+          showToast(data.error || 'Error al eliminar operador');
+        }
+      } catch (err) {
+        showToast('Error de comunicación con el servidor');
+      }
+    }
+
+    function setThisPcOperator(opName, notify = true) {
+      if (!opName) return;
+      myOperatorName = opName;
+      localStorage.setItem('wackup_operator_name', myOperatorName);
+      const opEl = document.getElementById('myOperatorNameDisplay');
+      if (opEl) opEl.textContent = myOperatorName;
+      renderTeamOperatorsList();
+      updateCopilotOperatorOptions();
+      if (notify) showToast(`✓ Operador activo en esta PC: ${myOperatorName}`);
+      if (selectedChatId) sendPresenceHeartbeat(selectedChatId);
+    }
+
     function updateCopilotOperatorOptions() {
       const sel = document.getElementById('copilotAssignedSelect');
       if (!sel) return;
       const currentVal = sel.value;
-      const ops = new Set(knownOperatorsList);
-      if (myOperatorName && myOperatorName !== 'Operador') ops.add(myOperatorName);
+      const ops = [...knownOperatorsList];
+      if (myOperatorName && myOperatorName !== 'Operador' && !ops.some(o => o.toLowerCase() === myOperatorName.toLowerCase())) {
+        ops.unshift(myOperatorName);
+      }
 
       let html = '<option value="">Sin asignar</option>';
       ops.forEach(op => {
@@ -3361,30 +3751,61 @@
     }
 
     function promptSetMyOperator() {
-      const newName = prompt('Tu nombre o alias de operador (ej. Ana, Lucas):', myOperatorName);
-      if (!newName || !newName.trim()) return;
+      if (!knownOperatorsList || knownOperatorsList.length === 0) {
+        alert('No hay operadores dados de alta aún.\nPor favor agrega primero operadores en la sección "Operadores y Equipo de Trabajo".');
+        const card = document.getElementById('cardTeamOperators');
+        if (card) card.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
 
-      myOperatorName = newName.trim();
-      localStorage.setItem('wackup_operator_name', myOperatorName);
-      const opEl = document.getElementById('myOperatorNameDisplay');
-      if (opEl) opEl.textContent = myOperatorName;
-      updateCopilotOperatorOptions();
-      showToast('✓ Nombre de operador guardado: ' + myOperatorName);
+      const listStr = knownOperatorsList.map((op, idx) => `${idx + 1}. ${op}`).join('\n');
+      const ans = prompt(`Selecciona el operador de esta PC:\n\n${listStr}\n\nIngresa el número o nombre:`, myOperatorName);
+      if (!ans || !ans.trim()) return;
 
-      if (selectedChatId) {
-        sendPresenceHeartbeat(selectedChatId);
+      const num = parseInt(ans.trim(), 10);
+      let selected = null;
+      if (!isNaN(num) && num >= 1 && num <= knownOperatorsList.length) {
+        selected = knownOperatorsList[num - 1];
+      } else {
+        selected = knownOperatorsList.find(o => o.toLowerCase() === ans.trim().toLowerCase());
+      }
+
+      if (selected) {
+        setThisPcOperator(selected);
+      } else {
+        alert('Operador no encontrado en la lista de operadores registrados.');
       }
     }
 
-    function showLanPinModal(errMsg = '') {
+    async function showLanPinModal(errMsg = '') {
       const modal = document.getElementById('lanPinModal');
       const pinInput = document.getElementById('modalLanPinInput');
-      const opInput = document.getElementById('modalOperatorNameInput');
+      const opSelect = document.getElementById('modalOperatorSelect');
       const errEl = document.getElementById('lanPinErrorMsg');
 
       if (modal) modal.style.display = 'flex';
       if (pinInput && !pinInput.value) pinInput.value = myOfficePin;
-      if (opInput && !opInput.value) opInput.value = (myOperatorName !== 'Operador') ? myOperatorName : '';
+
+      try {
+        const res = await _origFetch('/api/system/network');
+        const netData = await res.json();
+        if (netData && Array.isArray(netData.known_operators)) {
+          knownOperatorsList = netData.known_operators;
+        }
+      } catch (e) {}
+
+      if (opSelect) {
+        if (!knownOperatorsList || knownOperatorsList.length === 0) {
+          opSelect.innerHTML = '<option value="">(Sin operadores dados de alta en PC principal)</option>';
+        } else {
+          opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>' +
+            knownOperatorsList.map(op => `<option value="${escapeHtml(op)}">${escapeHtml(op)}</option>`).join('');
+          if (myOperatorName && knownOperatorsList.some(o => o.toLowerCase() === myOperatorName.toLowerCase())) {
+            opSelect.value = myOperatorName;
+          }
+        }
+      }
+
       if (errEl) {
         if (errMsg) {
           errEl.textContent = errMsg;
@@ -3402,11 +3823,19 @@
 
     async function submitLanPinAuth() {
       const pinInput = document.getElementById('modalLanPinInput');
-      const opInput = document.getElementById('modalOperatorNameInput');
+      const opSelect = document.getElementById('modalOperatorSelect');
       const errEl = document.getElementById('lanPinErrorMsg');
 
       const pin = pinInput ? pinInput.value.trim() : '';
-      const op = opInput ? opInput.value.trim() : '';
+      const op = opSelect ? opSelect.value.trim() : '';
+
+      if (!op) {
+        if (errEl) {
+          errEl.textContent = 'Por favor selecciona tu nombre de operador de la lista.';
+          errEl.style.display = 'block';
+        }
+        return;
+      }
 
       if (!pin) {
         if (errEl) {
@@ -3425,11 +3854,11 @@
         const data = await res.json();
         if (data && data.ok) {
           myOfficePin = pin;
-          myOperatorName = op || 'Operador';
+          myOperatorName = op;
           localStorage.setItem('wackup_office_pin', myOfficePin);
           localStorage.setItem('wackup_operator_name', myOperatorName);
           hideLanPinModal();
-          showToast('✓ Conectado exitosamente');
+          showToast('✓ Conectado exitosamente como ' + myOperatorName);
           connectSSE();
           init();
         } else {

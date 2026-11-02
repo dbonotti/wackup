@@ -46,8 +46,8 @@ if not exist "%~dp0runtime\python\python.exe" (
 
 rem 3. Ciclo de ejecución del servidor con soporte de reinicio en caliente
 set "WACKUP_SUPERVISED=1"
-:start_server
 if exist ".restart_flag" del /f /q ".restart_flag" >nul 2>&1
+:start_server
 
 echo Iniciando servidor WAckup 3.0...
 %PYTHON_BIN% whatsapp_viewer.py %*

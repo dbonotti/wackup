@@ -246,6 +246,196 @@ _server_instance = None
 _exit_code = 0
 SERVER_SESSION_ID = f"sess_{int(time.time() * 1000)}"
 _last_client_ping = 0
+_viewer_lock = threading.Lock()
+_active_web_sse_clients = 0
+_active_web_viewers = {}
+_web_sse_queues = {}
+_last_web_viewer_ping = 0.0
+
+def record_web_viewer_ping(client_id=None):
+    """Registra actividad reciente proveniente específicamente de una pestaña abierta del Visor Web."""
+    global _last_web_viewer_ping
+    now = time.time()
+    with _viewer_lock:
+        _last_web_viewer_ping = now
+        if client_id:
+            _active_web_viewers[client_id] = now
+
+def remove_web_viewer(client_id):
+    """Da de baja inmediatamente una pestaña del Visor Web cuando se cierra en el navegador."""
+    global _last_web_viewer_ping
+    if not client_id:
+        return
+    q_to_wake = None
+    with _viewer_lock:
+        _active_web_viewers.pop(client_id, None)
+        q_to_wake = _web_sse_queues.pop(client_id, None)
+        now = time.time()
+        stale = [cid for cid, ts in _active_web_viewers.items() if (now - ts) > 15.0]
+        for cid in stale:
+            _active_web_viewers.pop(cid, None)
+        if not _active_web_viewers and not _web_sse_queues and _active_web_sse_clients <= 0:
+            _last_web_viewer_ping = 0.0
+    if q_to_wake is not None:
+        try:
+            q_to_wake.put_nowait(None)
+        except Exception:
+            pass
+
+def has_active_web_viewer(max_age=15.0):
+    """Indica si existe al menos una pestaña del Visor Web conectada por SSE o activa recientemente."""
+    now = time.time()
+    with _viewer_lock:
+        stale = [cid for cid, ts in _active_web_viewers.items() if (now - ts) > max_age]
+        for cid in stale:
+            _active_web_viewers.pop(cid, None)
+        if _active_web_sse_clients > 0 or len(_web_sse_queues) > 0 or len(_active_web_viewers) > 0:
+            return True
+        return _last_web_viewer_ping > 0 and (now - _last_web_viewer_ping) <= max_age
+
+_last_viewer_focused_ack = 0.0
+
+def record_viewer_focused_ack():
+    global _last_viewer_focused_ack
+    with _viewer_lock:
+        _last_viewer_focused_ack = time.time()
+
+def focus_viewer_window_win32():
+    """
+    Trae al frente la ventana del navegador cuya pestaña activa sea 'WAckup - Visor'.
+    Usa firmas Win32 de 64 bits explícitas y AttachThreadInput para sortear el bloqueo de foco de Windows.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+        user32.EnumWindows.restype = wintypes.BOOL
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+        user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.IsIconic.argtypes = [wintypes.HWND]
+        user32.IsIconic.restype = wintypes.BOOL
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        user32.AttachThreadInput.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        user32.BringWindowToTop.restype = wintypes.BOOL
+        kernel32.GetCurrentThreadId.argtypes = []
+        kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+        exact_matches = []
+
+        def _enum_cb(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            title_buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buf, length + 1)
+            title = (title_buf.value or "").lower()
+
+            # Coincidir exclusivamente con el título real del Visor Web (<title>WAckup - Visor</title>)
+            if "wackup - visor" in title:
+                exact_matches.append(hwnd)
+            return True
+
+        cb_ref = WNDENUMPROC(_enum_cb)
+        user32.EnumWindows(cb_ref, 0)
+
+        if not exact_matches:
+            return False
+
+        target_hwnd = exact_matches[0]
+        SW_RESTORE = 9
+        if user32.IsIconic(target_hwnd):
+            user32.ShowWindow(target_hwnd, SW_RESTORE)
+
+        fg_hwnd = user32.GetForegroundWindow()
+        cur_tid = kernel32.GetCurrentThreadId()
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+        attached = False
+        try:
+            if fg_tid and fg_tid != cur_tid:
+                attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+            user32.keybd_event(0, 0, 0, 0)
+            user32.SetForegroundWindow(target_hwnd)
+            user32.BringWindowToTop(target_hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(cur_tid, fg_tid, False)
+        return True
+    except Exception:
+        return False
+
+def open_or_focus_viewer(url):
+    """
+    Muestra el Visor Web de forma 100% determinista y sin acumular pestañas:
+    1) Si 'WAckup - Visor' ya es la pestaña visible en alguna ventana del navegador -> la trae al frente al instante.
+    2) Si está abierta en segundo plano detrás de otra pestaña -> solicita a la extensión activar esa pestaña y enfoca la ventana.
+    3) Si tras 320 ms no pudo enfocarse (ej. navegador sin extensión o pestaña cerrada) -> abre con '?from_tray=1' y cierra cualquier pestaña previa oculta vía BroadcastChannel.
+    """
+    base_url = url.rstrip("/")
+    if not has_active_web_viewer(max_age=15.0):
+        webbrowser.open(base_url, new=0, autoraise=True)
+        return True
+
+    # Caso 1: La pestaña del visor ya es la pestaña activa en su ventana del navegador
+    if focus_viewer_window_win32():
+        return False
+
+    # Caso 2: Está oculta detrás de otra pestaña -> pedir cambio de pestaña vía SSE + extensión
+    req_ts = time.time()
+    try:
+        sse_hub.get_sse_hub().broadcast("focus_viewer", {"timestamp": int(req_ts * 1000)})
+    except Exception:
+        pass
+
+    deadline = time.time() + 0.35
+    while time.time() < deadline:
+        time.sleep(0.05)
+        with _viewer_lock:
+            acked = (_last_viewer_focused_ack >= req_ts)
+        if focus_viewer_window_win32() or acked:
+            focus_viewer_window_win32()
+            return False
+
+    # Caso 3: Fallback garantizado -> abrir en primer plano y pedir por BroadcastChannel cerrar la pestaña oculta anterior
+    webbrowser.open(f"{base_url}/?from_tray=1", new=0, autoraise=True)
+    return True
+
+def _running_instance_has_active_viewer(port):
+    """Consulta a una instancia ya activa en `port` si ya tiene una pestaña del visor abierta."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/sync/status?internal_probe=1",
+            headers={"Origin": f"http://127.0.0.1:{port}"}
+        )
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status == 200:
+                payload = json.loads(resp.read().decode("utf-8"))
+                return bool(payload.get("active_web_viewer"))
+    except Exception:
+        pass
+    return False
 
 def get_disk_extension_version():
     """Lee la versión de la extensión declarada en extension/manifest.json."""
@@ -555,7 +745,7 @@ def restart_current_process():
     _server_stopping = True
     append_sync_log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Servidor] Iniciando reinicio de proceso...")
     try:
-        has_recent_client = (_last_client_ping > 0 and (time.time() - _last_client_ping) < 15.0)
+        has_recent_client = has_active_web_viewer(max_age=15.0)
         flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restart_flag")
         with open(flag_path, "w", encoding="utf-8") as f:
             f.write("has_client" if has_recent_client else "no_client")
@@ -615,7 +805,7 @@ def start_keyboard_listener(url):
                         if ch in (b"l", b"L"):
                             open_logs_window()
                         elif ch in (b"v", b"V"):
-                            webbrowser.open(url)
+                            open_or_focus_viewer(url)
                         elif ch in (b"u", b"U"):
                             check_and_apply_update(url)
                         elif ch in (b"r", b"R"):
@@ -917,6 +1107,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
 
         if url.path in ["/", "/index.html"]:
+            record_web_viewer_ping()
             index_path = os.path.join(WEB_DIR, "index.html")
             if os.path.isfile(index_path):
                 with open(index_path, "rb") as f:
@@ -1015,6 +1206,11 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return
 
         elif url.path == "/api/events":
+            global _active_web_sse_clients
+            ev_params = parse_qs(url.query)
+            ev_client_id = (ev_params.get("client_id", [""])[0] or "").strip()
+            is_web_tab = ev_client_id.startswith("web_")
+
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache, no-transform")
@@ -1030,20 +1226,26 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             hub = sse_hub.get_sse_hub()
             client_q = hub.subscribe()
 
+            if is_web_tab:
+                with _viewer_lock:
+                    _active_web_sse_clients += 1
+                    if ev_client_id:
+                        _web_sse_queues[ev_client_id] = client_q
+                record_web_viewer_ping(ev_client_id)
+
             try:
+                active_prof = config.get_account_profile()
                 init_payload = {
                     "connected": True,
                     "timestamp": int(time.time()),
-                    "active_presence": hub.get_active_presence()
+                    "active_presence": hub.get_active_presence(),
+                    "profile": active_prof,
+                    "profile_label": config.WORKSPACE_PROFILE_NAMES.get(active_prof, active_prof)
                 }
                 init_msg = f"event: connected\ndata: {json.dumps(init_payload, ensure_ascii=False)}\n\n"
                 self.wfile.write(init_msg.encode("utf-8"))
                 self.wfile.flush()
-            except Exception:
-                hub.unsubscribe(client_q)
-                return
 
-            try:
                 while not _server_stopping:
                     try:
                         msg = client_q.get(timeout=20.0)
@@ -1057,10 +1259,19 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                             self.wfile.flush()
                         except (BrokenPipeError, ConnectionResetError, OSError):
                             break
-            except (BrokenPipeError, ConnectionResetError, OSError):
+                    if is_web_tab:
+                        record_web_viewer_ping(ev_client_id)
+            except (BrokenPipeError, ConnectionResetError, OSError, Exception):
                 pass
             finally:
                 hub.unsubscribe(client_q)
+                if is_web_tab:
+                    with _viewer_lock:
+                        _active_web_sse_clients = max(0, _active_web_sse_clients - 1)
+                        if ev_client_id and _web_sse_queues.get(ev_client_id) is client_q:
+                            _web_sse_queues.pop(ev_client_id, None)
+                        if not _server_stopping and ev_client_id:
+                            _active_web_viewers.pop(ev_client_id, None)
             return
 
         elif url.path == "/api/presence":
@@ -1243,8 +1454,23 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return
 
         elif url.path == "/api/sync/status":
-            _last_client_ping = time.time()
             params = parse_qs(url.query)
+            is_internal_probe = params.get("internal_probe", ["0"])[0] == "1"
+            if not is_internal_probe:
+                _last_client_ping = time.time()
+                origin_hdr = (self.headers.get("Origin") or "").lower()
+                referer_hdr = (self.headers.get("Referer") or "").lower()
+                is_viewer_req = (
+                    params.get("viewer", ["0"])[0] == "1"
+                    or (
+                        not origin_hdr.startswith("chrome-extension://")
+                        and not origin_hdr.startswith("https://web.whatsapp.com")
+                        and (f":{PORT}" in referer_hdr or "127.0.0.1" in referer_hdr or "localhost" in referer_hdr)
+                    )
+                )
+                if is_viewer_req:
+                    req_cid = (params.get("client_id", [""])[0] or "").strip() or None
+                    record_web_viewer_ping(req_cid)
             account_id, db_path, _ = self._resolve_account_params(params)
             include_ids = params.get("include_ids", ["0"])[0] == "1"
             status = db_manager.get_sync_status(db_path=db_path, include_ids=include_ids)
@@ -1252,6 +1478,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             status["extension_version"] = get_disk_extension_version()
             status["server_session_id"] = SERVER_SESSION_ID
             status["last_sync_epoch"] = _last_sync_epoch
+            status["active_web_viewer"] = has_active_web_viewer()
             self.send_json(200, status)
             return
 
@@ -1260,7 +1487,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             _, db_path, _ = self._resolve_account_params(params)
             q = params.get("q", [""])[0]
             chat_id = params.get("chat_id", [None])[0]
-            results = db_manager.search_full_text(q, chat_id=chat_id, limit=50, db_path=db_path)
+            try:
+                limit = int(params.get("limit", [100])[0])
+            except Exception:
+                limit = 100
+            limit = max(1, min(limit, 500))
+            results = db_manager.search_full_text(q, chat_id=chat_id, limit=limit, db_path=db_path)
             self.send_json(200, results)
             return
 
@@ -1566,20 +1798,42 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 settings = config.get_system_settings()
                 expected_pin = str(settings.get("lan_pin", "")).strip()
 
-                if pin and pin == expected_pin:
-                    if operator_name:
-                        config.update_system_settings(add_operator=operator_name)
-                    self.send_json(200, {
-                        "ok": True,
-                        "operator_name": operator_name,
-                        "message": "PIN verificado correctamente"
-                    })
-                else:
+                if not pin or pin != expected_pin:
                     self.send_json(401, {
                         "ok": False,
                         "error": "PIN de oficina incorrecto",
                         "needs_pin": True
                     })
+                    return
+
+                if not operator_name:
+                    self.send_json(400, {
+                        "ok": False,
+                        "error": "Por favor selecciona un operador de la lista.",
+                        "needs_pin": True
+                    })
+                    return
+
+                known_ops = settings.get("known_operators", [])
+                if known_ops:
+                    matched_op = next((existing for existing in known_ops if existing.lower() == operator_name.lower()), None)
+                    if not matched_op:
+                        self.send_json(400, {
+                            "ok": False,
+                            "error": "El operador seleccionado no está dado de alta. Debe registrarse previamente desde Configuración en la PC principal.",
+                            "needs_pin": True
+                        })
+                        return
+                    operator_name = matched_op
+                else:
+                    # Si no hay operadores en el sistema, darlo de alta automáticamente
+                    config.update_system_settings(add_operator=operator_name)
+
+                self.send_json(200, {
+                    "ok": True,
+                    "operator_name": operator_name,
+                    "message": "PIN verificado correctamente"
+                })
                 return
 
             elif url.path == "/api/system/network":
@@ -1594,12 +1848,14 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 lan_pin = payload.get("lan_pin")
                 add_op = payload.get("operator_name") or payload.get("add_operator")
                 remove_op = payload.get("remove_operator")
+                rename_op = payload.get("rename_operator") or payload.get("update_operator")
 
                 updated = config.update_system_settings(
                     network_mode=net_mode,
                     lan_pin=lan_pin,
                     add_operator=add_op,
-                    remove_operator=remove_op
+                    remove_operator=remove_op,
+                    rename_operator=rename_op
                 )
                 ips = config.get_local_ip_addresses()
                 self.send_json(200, {
@@ -1634,11 +1890,6 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
                 hub = sse_hub.get_sse_hub()
                 hub.record_presence(chat_id, operator, client_id, source=source)
-                if operator and operator != "Operador":
-                    try:
-                        config.update_system_settings(add_operator=operator)
-                    except Exception:
-                        pass
                 self.send_json(200, {"ok": True, "canonical_chat_id": chat_id})
                 return
 
@@ -1653,6 +1904,16 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 client_id = payload.get("client_id")
                 if client_id:
                     sse_hub.get_sse_hub().remove_presence(client_id, chat_id=chat_id)
+                    if payload.get("tab_closed"):
+                        remove_web_viewer(client_id)
+                self.send_json(200, {"ok": True})
+                return
+
+            elif url.path == "/api/viewer/focused":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length > 0:
+                    _ = self.rfile.read(content_length)
+                record_viewer_focused_ack()
                 self.send_json(200, {"ok": True})
                 return
 
@@ -2300,6 +2561,8 @@ def run():
     is_lan = settings.get("network_mode") == "lan"
     bind_host = "0.0.0.0" if is_lan else "127.0.0.1"
 
+    no_browser = ("--no-browser" in sys.argv) or (os.environ.get("WACKUP_NO_BROWSER") == "1")
+
     server = None
     bind_attempts = 15 if is_restart else 1
     for attempt in range(bind_attempts):
@@ -2314,11 +2577,16 @@ def run():
                 time.sleep(0.3)
             else:
                 url = f"http://127.0.0.1:{PORT}"
+                already_open = _running_instance_has_active_viewer(PORT)
                 print(f"\n========================================================================")
                 print(f"  [AVISO] Ya existe una instancia de WAckup activa en el puerto {PORT}.")
-                print(f"  Abriendo el visor en tu navegador: {url}")
+                if already_open or no_browser:
+                    print(f"  El visor ya se encuentra abierto en tu navegador ({url}).")
+                else:
+                    print(f"  Abriendo el visor en tu navegador: {url}")
                 print(f"========================================================================\n")
-                webbrowser.open(url)
+                if not already_open and not no_browser:
+                    webbrowser.open(url, new=0, autoraise=True)
                 return
 
     url = f"http://127.0.0.1:{PORT}"
@@ -2353,7 +2621,8 @@ def run():
                     url=url,
                     port=PORT,
                     on_restart=restart_current_process,
-                    on_exit=lambda: os._exit(0)
+                    on_exit=lambda: os._exit(0),
+                    on_open=lambda: open_or_focus_viewer(url)
                 )
                 tray_instance.start()
             else:
@@ -2365,10 +2634,27 @@ def run():
             start_keyboard_listener(url)
             start_status_animator()
 
-    if not is_restart or (is_restart and not has_client_flag):
-        webbrowser.open(url)
+    if no_browser:
+        pass
+    elif is_restart and has_client_flag:
+        if not console_mode:
+            print("  [i] Pestaña activa detectada en el navegador: se actualizará automáticamente.")
     else:
-        print("  [i] Pestaña activa detectada en el navegador: se actualizará automáticamente.")
+        def _smart_open_browser():
+            # Dar margen a que una pestaña ya abierta reconecte antes de abrir otra nueva
+            deadline = time.time() + 2.2
+            while time.time() < deadline:
+                if _server_stopping:
+                    return
+                if has_active_web_viewer(max_age=12.0):
+                    if not console_mode:
+                        print("  [i] Pestaña activa detectada en el navegador: reutilizando ventana existente.")
+                    return
+                time.sleep(0.1)
+            if not _server_stopping and not has_active_web_viewer(max_age=12.0):
+                webbrowser.open(url, new=0, autoraise=True)
+
+        threading.Thread(target=_smart_open_browser, daemon=True).start()
 
     try:
         server.serve_forever()

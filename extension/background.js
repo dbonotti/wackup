@@ -81,8 +81,8 @@ const ALLOWED_ENDPOINTS = [
   { method: "POST", pattern: /^\/api\/sync\/?$/ },
   { method: "GET", pattern: /^\/api\/accounts(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/profile(\?.*)?$/ },
-  { method: "POST", pattern: /^\/api\/profile\/?$/ },
-  { method: "POST", pattern: /^\/api\/profile\/cycle\/?$/ },
+  { method: "POST", pattern: /^\/api\/profile(\?.*)?$/ },
+  { method: "POST", pattern: /^\/api\/profile\/cycle(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/copilot\/context(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/copilot\/notes\/?$/ },
   { method: "POST", pattern: /^\/api\/copilot\/tags\/?$/ },
@@ -199,6 +199,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           action: "trigger_manual_sync",
           forceAll: Boolean(request.forceAll)
         }).catch(() => {});
+      }
+    });
+    sendResponse({ ok: true });
+    return;
+  }
+
+  // Enfocar pestaña remitente del Visor Web (desde viewer_bridge.js, incluso con SidePanel cerrado)
+  if (request.action === "focus_my_tab") {
+    if (sender && sender.tab && sender.tab.id) {
+      chrome.tabs.update(sender.tab.id, { active: true }, () => {
+        if (sender.tab.windowId) {
+          chrome.windows.update(sender.tab.windowId, { focused: true }).catch(() => {});
+        }
+        sendResponse({ ok: true });
+      });
+      return true;
+    }
+    sendResponse({ ok: false });
+    return;
+  }
+
+  // Enfocar pestaña existente del Visor Web sin abrir duplicados
+  if (request.action === "focus_viewer_tab") {
+    const base = (config.serverUrl || "http://127.0.0.1:8080").replace(/\/+$/, "");
+    chrome.tabs.query({ url: ["http://127.0.0.1/*", "http://localhost/*"] }, (tabs) => {
+      const list = Array.isArray(tabs) ? tabs : [];
+      const match = list.find(t => t.url && t.url.startsWith(base)) || list[0];
+      if (match && match.id) {
+        chrome.tabs.update(match.id, { active: true }, () => {
+          if (match.windowId) {
+            chrome.windows.update(match.windowId, { focused: true }).catch(() => {});
+          }
+        });
       }
     });
     sendResponse({ ok: true });

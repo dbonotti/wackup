@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+import copy
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from http.server import ThreadingHTTPServer
@@ -58,13 +59,34 @@ def test_system_settings_and_network_config():
     assert config.is_private_ip("8.8.8.8") is False, "8.8.8.8 no debe ser privada"
     assert config.is_private_ip("1.1.1.1") is False, "1.1.1.1 no debe ser privada"
 
-    # Verificar actualizacion idempotente de settings
+    # Verificar actualizacion idempotente de settings y CRUD de operadores
     orig_mode = settings.get("network_mode", "local")
+    orig_ops = list(settings.get("known_operators", []))
     try:
         config.update_system_settings(network_mode="lan")
         assert config.get_system_settings()["network_mode"] == "lan"
+
+        # Test operador CRUD en config
+        config.update_system_settings(add_operator="TestOp1")
+        assert "TestOp1" in config.get_system_settings()["known_operators"]
+        # No duplicados case-insensitive
+        config.update_system_settings(add_operator="testop1")
+        ops = [x for x in config.get_system_settings()["known_operators"] if x.lower() == "testop1"]
+        assert len(ops) == 1, "No debe permitir duplicar operadores sin importar mayusculas/minusculas"
+
+        # Rename
+        config.update_system_settings(rename_operator={"old": "TestOp1", "new": "TestOpRenamed"})
+        assert "TestOpRenamed" in config.get_system_settings()["known_operators"]
+        assert "TestOp1" not in config.get_system_settings()["known_operators"]
+
+        # Remove
+        config.update_system_settings(remove_operator="TestOpRenamed")
+        assert "TestOpRenamed" not in config.get_system_settings()["known_operators"]
     finally:
         config.update_system_settings(network_mode=orig_mode)
+        current = config.get_system_settings()
+        current["known_operators"] = orig_ops
+        config.save_system_settings(current)
 
     print("  -> Configuracion de red e IPs OK")
 
@@ -83,8 +105,12 @@ def test_lan_security_and_pin_auth():
     test_pin = "852963"
 
     # Configurar temporalmente modo LAN y PIN conocido
-    orig_settings = config.get_system_settings()
-    config.update_system_settings(network_mode="lan", lan_pin=test_pin)
+    orig_settings = copy.deepcopy(config.get_system_settings())
+    temp_settings = copy.deepcopy(orig_settings)
+    temp_settings["network_mode"] = "lan"
+    temp_settings["lan_pin"] = test_pin
+    temp_settings["known_operators"] = ["Ana"]
+    config.save_system_settings(temp_settings)
 
     try:
         # 1. Peticion local autentica (sin headers remotos): debe pasar sin PIN
@@ -155,6 +181,39 @@ def test_lan_security_and_pin_auth():
         updated_settings = config.get_system_settings()
         assert "Ana" in updated_settings.get("known_operators", [])
 
+        # 5c. Intentar conectar con un operador no dado de alta: debe rechazar con 400
+        unlisted_payload = json.dumps({"pin": test_pin, "operator": "Intruso"}).encode("utf-8")
+        req_verify_unlisted = Request(f"{base_url}/api/auth/verify_pin", data=unlisted_payload, headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(req_verify_unlisted) as resp:
+                assert False, "Operador no registrado debio ser rechazado con HTTP 400"
+        except HTTPError as e:
+            assert e.code == 400
+
+        # 5d. Modificar operador via /api/system/network (POST rename_operator)
+        rename_payload = json.dumps({
+            "rename_operator": {"old": "Ana", "new": "Anita"}
+        }).encode("utf-8")
+        req_rename = Request(f"{base_url}/api/system/network", data=rename_payload, headers={"Content-Type": "application/json"})
+        with urlopen(req_rename) as resp:
+            assert resp.status == 200
+            res_rename = json.loads(resp.read().decode("utf-8"))
+            assert "Anita" in res_rename["settings"]["known_operators"]
+            assert "Ana" not in res_rename["settings"]["known_operators"]
+
+        # 5e. Conectar como "Anita" ahora tiene exito
+        anita_payload = json.dumps({"pin": test_pin, "operator": "Anita"}).encode("utf-8")
+        req_anita = Request(f"{base_url}/api/auth/verify_pin", data=anita_payload, headers={"Content-Type": "application/json"})
+        with urlopen(req_anita) as resp:
+            assert resp.status == 200
+
+        # 5f. Heartbeat de presencia no debe dar de alta operadores desconocidos por tipeo
+        hb_payload = json.dumps({"chat_id": "test_hb@c.us", "operator": "OperadorFantasma", "client_id": "test_c1"}).encode("utf-8")
+        req_hb = Request(f"{base_url}/api/presence/heartbeat", data=hb_payload, headers={"Content-Type": "application/json"})
+        with urlopen(req_hb) as resp:
+            assert resp.status == 200
+        assert "OperadorFantasma" not in config.get_system_settings().get("known_operators", [])
+
         # 6. Anti-spoofing: un socket remoto real (client_address != 127.0.0.1) JAMAS puede suplantar X-Forwarded-For: 127.0.0.1
         class DummyRemoteHandler:
             client_address = ("192.168.1.250", 54321)
@@ -174,6 +233,7 @@ def test_lan_security_and_pin_auth():
 
 def test_sse_and_presence_tracking():
     print("[3/5] Verificando canal SSE en tiempo real y Semaforo de Presencia...")
+    orig_settings = copy.deepcopy(config.get_system_settings())
 
     test_port = 8995
     ThreadingHTTPServer.daemon_threads = True
@@ -255,6 +315,7 @@ def test_sse_and_presence_tracking():
                 assert not any(v.get("client_id") == "operator_ana_pc" for v in viewers_after)
 
     finally:
+        config.save_system_settings(orig_settings)
         sse_stop_event.set()
         sse_hub.get_sse_hub().shutdown()
         server.shutdown()
@@ -265,6 +326,7 @@ def test_sse_and_presence_tracking():
 
 def test_optimistic_locking_and_collaborative_crm():
     print("[4/5] Verificando Concurrencia Optimista (409 Conflict), Bitácora y Asignación...")
+    orig_settings = copy.deepcopy(config.get_system_settings())
 
     test_port = 8996
     ThreadingHTTPServer.daemon_threads = True
@@ -385,6 +447,7 @@ def test_optimistic_locking_and_collaborative_crm():
             assert ctx.get("crm", {}).get("assigned_to") == "Ana"
 
     finally:
+        config.save_system_settings(orig_settings)
         sse_hub.get_sse_hub().shutdown()
         server.shutdown()
         server.server_close()

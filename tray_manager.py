@@ -5,6 +5,7 @@ Permite la ejecución silenciosa de WAckup en segundo plano sin ventana de conso
 
 import os
 import sys
+import time
 import subprocess
 import threading
 import webbrowser
@@ -66,13 +67,15 @@ def load_tray_icon_image():
 class TrayManager:
     """Administra el ciclo de vida del icono de WAckup en la bandeja del sistema."""
 
-    def __init__(self, url="http://127.0.0.1:8080", port=8080, on_restart=None, on_exit=None):
+    def __init__(self, url="http://127.0.0.1:8080", port=8080, on_restart=None, on_exit=None, on_open=None):
         self.url = url
         self.port = port
         self.on_restart = on_restart
         self.on_exit = on_exit
+        self.on_open = on_open
         self.icon = None
         self._is_running = False
+        self._open_busy = False
         self._lock = threading.Lock()
 
     @staticmethod
@@ -81,14 +84,28 @@ class TrayManager:
         return HAS_TRAY_DEPS
 
     def _on_open_clicked(self, icon=None, item=None):
-        try:
-            webbrowser.open(self.url)
-        except Exception as e:
-            logger.error(f"Error abriendo navegador desde tray: {e}")
+        # Ejecutar fuera del hilo WndProc de pystray y dar margen a que el menú contextual de Windows cierre y libere el foco
+        if self._open_busy:
+            return
+        self._open_busy = True
+
+        def _worker():
+            try:
+                time.sleep(0.12)
+                if callable(self.on_open):
+                    self.on_open()
+                else:
+                    webbrowser.open(self.url, new=0, autoraise=True)
+            except Exception as e:
+                logger.error(f"Error abriendo navegador desde tray: {e}")
+            finally:
+                self._open_busy = False
+
+        threading.Thread(target=_worker, daemon=True, name="WAckup-TrayOpen").start()
 
     def _on_restart_clicked(self, icon=None, item=None):
         if callable(self.on_restart):
-            self.on_restart()
+            threading.Thread(target=self.on_restart, daemon=True, name="WAckup-TrayRestart").start()
 
     def _on_exit_clicked(self, icon=None, item=None):
         self.stop()

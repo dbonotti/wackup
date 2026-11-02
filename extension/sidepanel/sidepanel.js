@@ -114,15 +114,32 @@
   }
 
   // =========================================================================
-  // ESTADO DE SINCRONIZACIÓN Y CABECERA
+  // ESTADO DE SINCRONIZACIÓN Y CABECERA (COMPACTA)
   // =========================================================================
+  let lastSyncState = "ready";
+  let lastSyncMessage = "Conectando...";
+  let lastTotalSaved = null;
+
   function updateHeaderStatus(state, message, totalSaved = null) {
+    if (state) lastSyncState = state;
+    if (message) lastSyncMessage = message;
+    if (totalSaved !== null && totalSaved !== undefined) lastTotalSaved = totalSaved;
+
     const dot = document.getElementById("header-status-dot");
     const text = document.getElementById("header-status-text");
     const msgs = document.getElementById("header-stats-msgs");
 
     if (dot) {
-      dot.className = "status-dot " + (state || "ready");
+      dot.className = "status-dot " + (lastSyncState || "ready");
+      const tooltipParts = [];
+      if (lastSyncMessage) tooltipParts.push(lastSyncMessage);
+      if (lastTotalSaved !== null && lastTotalSaved !== undefined && Number(lastTotalSaved) > 0) {
+        tooltipParts.push(`${Number(lastTotalSaved).toLocaleString()} msgs`);
+      }
+      if (currentAccountPhone) {
+        tooltipParts.push(`Cuenta: +${currentAccountPhone}`);
+      }
+      dot.title = tooltipParts.join(" · ") || "Estado: Listo";
     }
     if (text && message) {
       text.textContent = message;
@@ -144,6 +161,9 @@
 
     if (nameEl) nameEl.textContent = currentAccountName || (currentAccountPhone ? `+${currentAccountPhone}` : "Cuenta WhatsApp");
     if (phoneEl) phoneEl.textContent = currentAccountPhone ? `(+${currentAccountPhone})` : "";
+
+    // Actualizar tooltip del punto de estado con los datos de cuenta
+    updateHeaderStatus(lastSyncState, lastSyncMessage, lastTotalSaved);
 
     if (info.id && (prevId === "default" || prevId !== info.id)) {
       loadWorkspaceProfile();
@@ -218,25 +238,51 @@
       // Actualizar tarjeta de contacto
       const nameEl = document.getElementById("contact-name");
       const phoneEl = document.getElementById("contact-phone");
+      const phoneTextEl = document.getElementById("contact-phone-text");
       const slaEl = document.getElementById("contact-sla");
 
       const displayName = data.display_name || data.contact_name || chatQuery;
       const phoneNum = data.phone_number || data.contact_number || "";
       currentContactDisplayName = displayName;
 
-      if (nameEl) nameEl.textContent = displayName;
-      if (phoneEl) phoneEl.textContent = phoneNum ? `+${String(phoneNum).replace(/^\+/, "")}` : (data.chat_id || "");
+      const formattedPhone = phoneNum ? `+${String(phoneNum).replace(/^\+/, "")}` : (data.chat_id || "");
+      if (nameEl) {
+        nameEl.textContent = displayName;
+        nameEl.title = displayName;
+      }
+      if (phoneTextEl) {
+        phoneTextEl.textContent = formattedPhone;
+      } else if (phoneEl) {
+        phoneEl.textContent = formattedPhone;
+      }
+      if (phoneEl) {
+        phoneEl.setAttribute("data-phone", formattedPhone);
+        phoneEl.title = `Clic para copiar teléfono: ${formattedPhone}`;
+      }
 
       if (slaEl) {
         const slaLabel = data.sla || (data.sla_minutes !== null && data.sla_minutes !== undefined ? `~${data.sla_minutes}m` : null);
         if (slaLabel && !String(slaLabel).toLowerCase().includes("sin datos")) {
           currentSlaMinutes = data.sla_minutes;
-          slaEl.textContent = `SLA: ${slaLabel}`;
+          const cleanSla = String(slaLabel).replace(/^SLA:\s*/i, "").trim();
+          slaEl.textContent = `⏱️ ${cleanSla}`;
+          slaEl.title = `Tiempo promedio de respuesta (SLA): ${cleanSla}`;
           slaEl.style.display = "inline-block";
         } else {
           slaEl.style.display = "none";
         }
       }
+
+      // Limpiar búsqueda anterior del chat
+      const searchInput = document.getElementById("input-search-chat");
+      const searchRes = document.getElementById("chat-search-results");
+      const navBar = document.getElementById("search-nav-bar");
+      if (searchInput) searchInput.value = "";
+      if (searchRes) searchRes.innerHTML = "";
+      if (navBar) navBar.style.display = "none";
+      currentSearchResults = [];
+      currentSearchIndex = -1;
+      currentSearchQuery = "";
 
       // Perfil si vino en contexto
       if (data.profile && data.profile !== currentProfile) {
@@ -510,6 +556,22 @@
     }
   }
 
+  function setupContactPhoneCopy() {
+    const phoneBtn = document.getElementById("contact-phone");
+    if (!phoneBtn) return;
+    phoneBtn.addEventListener("click", () => {
+      const phoneTextEl = document.getElementById("contact-phone-text");
+      const phoneToCopy = phoneBtn.getAttribute("data-phone") || (phoneTextEl ? phoneTextEl.textContent : phoneBtn.textContent).trim();
+      if (phoneToCopy && phoneToCopy !== "--" && !phoneToCopy.includes("Cargando")) {
+        copyToClipboard(phoneToCopy, `Teléfono copiado: ${phoneToCopy}`);
+        phoneBtn.classList.add("copied");
+        setTimeout(() => {
+          phoneBtn.classList.remove("copied");
+        }, 1200);
+      }
+    });
+  }
+
   function setupAssignmentSelect() {
     const sel = document.getElementById("select-assigned-to");
     if (!sel) return;
@@ -583,6 +645,10 @@
           if (msg.event === "connected" || msg.event === "presence_update") {
             activePresenceMap = msg.active_presence || msg.presence || {};
             updatePresenceBanner(activePresenceMap);
+            if (msg.event === "connected" && msg.profile && msg.profile !== currentProfile) {
+              currentProfile = msg.profile;
+              applyProfileUI();
+            }
           } else if (msg.event === "crm_update") {
             const matchesCurrent = currentChatId && (
               !msg.chat_id ||
@@ -618,6 +684,11 @@
       sseSource.addEventListener("crm_update", handleEvt);
       sseSource.addEventListener("sync_update", handleEvt);
       sseSource.addEventListener("profile_update", handleEvt);
+      sseSource.addEventListener("focus_viewer", () => {
+        chrome.runtime.sendMessage({ action: "focus_viewer_tab" }, () => {
+          void chrome.runtime.lastError;
+        });
+      });
       sseSource.onerror = () => {};
     } catch (e) {}
   }
@@ -862,27 +933,121 @@
     });
   }
 
+  let currentSearchResults = [];
+  let currentSearchIndex = -1;
+  let currentSearchQuery = "";
+
   function setupChatSearch() {
     const input = document.getElementById("input-search-chat");
     const btn = document.getElementById("btn-search-chat");
+    const btnPrev = document.getElementById("btn-search-prev");
+    const btnNext = document.getElementById("btn-search-next");
     const resultsContainer = document.getElementById("chat-search-results");
+    const navBar = document.getElementById("search-nav-bar");
+    const navCount = document.getElementById("search-nav-count");
 
-    const doSearch = async () => {
-      const q = (input && input.value || "").trim();
-      if (!q || !currentChatId) return;
+    const updateNavUI = () => {
+      if (!navBar || !navCount) return;
+      if (!currentSearchResults || currentSearchResults.length === 0) {
+        navBar.style.display = "none";
+        if (btnPrev) btnPrev.disabled = true;
+        if (btnNext) btnNext.disabled = true;
+        return;
+      }
+      navBar.style.display = "flex";
+      navCount.textContent = `Coincidencia ${currentSearchIndex + 1} de ${currentSearchResults.length}`;
+      if (btnPrev) btnPrev.disabled = (currentSearchIndex >= currentSearchResults.length - 1);
+      if (btnNext) btnNext.disabled = (currentSearchIndex <= 0);
 
-      resultsContainer.innerHTML = '<div class="empty-subtext">Buscando...</div>';
-      try {
-        const data = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&chat_id=${encodeURIComponent(currentChatId)}&account_id=${encodeURIComponent(currentAccountId)}`);
-        const matches = Array.isArray(data) ? data : (data && data.results ? data.results : []);
-        renderSearchResults(matches, q);
-      } catch (e) {
-        resultsContainer.innerHTML = '<div class="empty-subtext">Error en la búsqueda.</div>';
+      // Resaltar elemento activo en la lista y scrollear suavemente hacia él
+      if (resultsContainer) {
+        const items = resultsContainer.querySelectorAll(".search-result-item");
+        items.forEach((it, idx) => {
+          if (idx === currentSearchIndex) {
+            it.classList.add("active-match");
+            it.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          } else {
+            it.classList.remove("active-match");
+          }
+        });
       }
     };
 
-    if (btn) btn.addEventListener("click", doSearch);
-    if (input) input.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+    const navigateMatch = (direction) => {
+      if (!currentSearchResults || currentSearchResults.length === 0) return;
+      if (direction === "prev" || direction === "up") {
+        // Hacia arriba en el tiempo (más antiguo) -> siguiente en la lista ordenada desc
+        if (currentSearchIndex < currentSearchResults.length - 1) {
+          currentSearchIndex++;
+          updateNavUI();
+        }
+      } else if (direction === "next" || direction === "down") {
+        // Hacia abajo en el tiempo (más reciente) -> anterior en la lista ordenada desc
+        if (currentSearchIndex > 0) {
+          currentSearchIndex--;
+          updateNavUI();
+        }
+      }
+    };
+
+    const doSearch = async (forceNew = false) => {
+      const q = (input && input.value || "").trim();
+      if (!q) {
+        if (resultsContainer) resultsContainer.innerHTML = '<div class="empty-subtext">Ingresa una palabra o término para buscar.</div>';
+        currentSearchResults = [];
+        currentSearchIndex = -1;
+        updateNavUI();
+        return;
+      }
+
+      // Si es la misma consulta y ya tenemos resultados, Enter navega a la siguiente coincidencia hacia arriba
+      if (!forceNew && q.toLowerCase() === currentSearchQuery.toLowerCase() && currentSearchResults.length > 0) {
+        navigateMatch("prev");
+        return;
+      }
+
+      currentSearchQuery = q;
+      const targetChat = (currentAssociatedIds && currentAssociatedIds.length > 0)
+        ? currentAssociatedIds.join(",")
+        : (currentChatId || currentChatQuery || "");
+
+      if (!targetChat) {
+        if (resultsContainer) resultsContainer.innerHTML = '<div class="empty-subtext">Abre una conversación en WhatsApp Web para buscar en sus mensajes.</div>';
+        return;
+      }
+
+      if (resultsContainer) resultsContainer.innerHTML = '<div class="empty-subtext">Buscando...</div>';
+      try {
+        const data = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&chat_id=${encodeURIComponent(targetChat)}&account_id=${encodeURIComponent(currentAccountId)}&limit=100`);
+        const matches = Array.isArray(data) ? data : (data && data.results ? data.results : []);
+        currentSearchResults = matches;
+        currentSearchIndex = matches.length > 0 ? 0 : -1;
+        renderSearchResults(matches, q);
+        updateNavUI();
+      } catch (e) {
+        if (resultsContainer) resultsContainer.innerHTML = `<div class="empty-subtext">Error en la búsqueda: ${escapeHtml(e.message || "No se pudo conectar")}</div>`;
+        currentSearchResults = [];
+        currentSearchIndex = -1;
+        updateNavUI();
+      }
+    };
+
+    if (btn) btn.addEventListener("click", () => doSearch(true));
+    if (btnPrev) btnPrev.addEventListener("click", () => navigateMatch("prev"));
+    if (btnNext) btnNext.addEventListener("click", () => navigateMatch("next"));
+
+    if (input) {
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            navigateMatch("next");
+          } else {
+            doSearch(false);
+          }
+        }
+      });
+    }
   }
 
   function renderSearchResults(results, query) {
@@ -891,29 +1056,83 @@
     container.innerHTML = "";
 
     if (!Array.isArray(results) || results.length === 0) {
-      container.innerHTML = '<div class="empty-subtext">No se encontraron mensajes que coincidan.</div>';
+      container.innerHTML = '<div class="empty-subtext">No se encontraron mensajes que coincidan en esta conversación.</div>';
       return;
     }
 
-    results.forEach(m => {
+    const infoHeader = document.createElement("div");
+    infoHeader.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:11px; color:var(--text-muted);">
+        <span>Se encontraron <strong>${results.length}</strong> mensaje(s):</span>
+        <span style="font-size:10px; color:var(--text-dim);">▲ Recientes a antiguos ▼</span>
+      </div>
+    `;
+    container.appendChild(infoHeader);
+
+    results.forEach((m, idx) => {
       const item = document.createElement("div");
-      item.className = "search-result-item";
-      const sender = m.es_mio ? "Tú" : (m.sender_name || "Contacto");
+      item.className = "search-result-item" + (idx === currentSearchIndex ? " active-match" : "");
+      item.dataset.index = idx;
+
+      const sender = m.es_mio ? "Tú" : (m.remitente_nombre || m.sender_name || currentContactDisplayName || "Contacto");
       const dateStr = m.timestamp ? new Date(m.timestamp * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "";
       const text = m.contenido || m.snippet || "";
+      const displaySnippet = m.snippet || m.contenido || "";
+      const rawChatId = m.chat_id || currentChatId || "";
 
       item.innerHTML = `
         <div class="search-result-meta">
           <strong>${escapeHtml(sender)}</strong>
           <span>${escapeHtml(dateStr)}</span>
         </div>
-        <div class="search-result-snippet">${highlightQuery(text, query)}</div>
+        <div class="search-result-snippet">${highlightQuery(displaySnippet, query)}</div>
+        <div class="search-result-actions">
+          <button type="button" class="btn-res-action btn-res-copy" title="Copiar texto al portapapeles">📋 Copiar</button>
+          <button type="button" class="btn-res-action btn-res-open" title="Ver conversación completa y contexto en el Visor Web">↗ Ver en Visor</button>
+        </div>
       `;
+
+      const copyBtn = item.querySelector(".btn-res-copy");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          copyToClipboard(text, "Mensaje copiado al portapapeles ✓");
+        });
+      }
+
+      const openBtn = item.querySelector(".btn-res-open");
+      if (openBtn) {
+        openBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const serverUrl = currentServerUrl || "http://127.0.0.1:8080";
+          const viewerUrl = `${serverUrl}/index.html?chat_id=${encodeURIComponent(rawChatId)}&msg_id=${encodeURIComponent(m.msg_id)}&account_id=${encodeURIComponent(currentAccountId)}`;
+          window.open(viewerUrl, "_blank");
+        });
+      }
+
       item.addEventListener("click", () => {
-        copyToClipboard(text, "Mensaje copiado al portapapeles");
+        currentSearchIndex = idx;
+        const navCount = document.getElementById("search-nav-count");
+        if (navCount) navCount.textContent = `Coincidencia ${idx + 1} de ${results.length}`;
+        const btnPrev = document.getElementById("btn-search-prev");
+        const btnNext = document.getElementById("btn-search-next");
+        if (btnPrev) btnPrev.disabled = (idx >= results.length - 1);
+        if (btnNext) btnNext.disabled = (idx <= 0);
+        container.querySelectorAll(".search-result-item").forEach((el, i) => {
+          el.classList.toggle("active-match", i === idx);
+        });
       });
+
       container.appendChild(item);
     });
+
+    // Consejo útil al pie sobre scroll en WhatsApp Web para cargar más historial
+    const hintFooter = document.createElement("div");
+    hintFooter.className = "search-results-footer-hint";
+    hintFooter.innerHTML = `
+      <span>💡 <em>¿Buscas mensajes más antiguos?</em> Haz scroll hacia arriba en el chat de WhatsApp Web para que descargue el historial previo y se respalde automáticamente.</span>
+    `;
+    container.appendChild(hintFooter);
   }
 
   // =========================================================================
@@ -1143,12 +1362,20 @@
   // BOTONES RÁPIDOS DE CABECERA Y ACTUALIZACIÓN
   // =========================================================================
   function setupHeaderButtons() {
+    const dot = document.getElementById("header-status-dot");
     const btnSyncRecent = document.getElementById("btn-sync-recent");
     const btnSyncAll = document.getElementById("btn-sync-all");
+    const btnSyncAllFull = document.getElementById("btn-sync-all-full");
     const btnBackupManual = document.getElementById("btn-backup-manual");
     const btnUpdateExt = document.getElementById("btn-update-ext");
     const btnAddTag = document.getElementById("btn-add-tag");
     const badgeProfile = document.getElementById("profile-badge");
+
+    if (dot) {
+      dot.addEventListener("click", () => {
+        showToast(dot.title || `Estado: ${lastSyncMessage}`);
+      });
+    }
 
     if (badgeProfile) {
       badgeProfile.style.cursor = "pointer";
@@ -1174,14 +1401,22 @@
     }
 
     if (btnSyncRecent) {
-      btnSyncRecent.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: false });
-        showToast("Sincronizando novedades...");
+      btnSyncRecent.addEventListener("click", (e) => {
+        const forceAll = Boolean(e.shiftKey);
+        chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll });
+        showToast(forceAll ? "Sincronizando historial completo..." : "Sincronizando novedades...");
       });
     }
 
     if (btnSyncAll) {
       btnSyncAll.addEventListener("click", () => {
+        chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: true });
+        showToast("Sincronizando historial completo...");
+      });
+    }
+
+    if (btnSyncAllFull) {
+      btnSyncAllFull.addEventListener("click", () => {
         chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: true });
         showToast("Sincronizando historial completo...");
       });
@@ -1266,11 +1501,22 @@
 
   function highlightQuery(text, query) {
     if (!text) return "";
+    // Si el texto ya contiene marcas HTML de resaltado (<mark> de snippet FTS5), preservarlas directamente
+    if (text.includes("<mark>") && text.includes("</mark>")) {
+      return text;
+    }
     const escaped = escapeHtml(text);
     if (!query) return escaped;
-    const cleanQ = escapeHtml(query.trim());
-    const reg = new RegExp(`(${cleanQ})`, "gi");
-    return escaped.replace(reg, "<mark>$1</mark>");
+    const cleanQ = query.trim();
+    if (!cleanQ) return escaped;
+    // Escapar caracteres especiales de regex para evitar SyntaxError al buscar signos, precios, etc.
+    const escapedRegex = cleanQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    try {
+      const reg = new RegExp(`(${escapeHtml(cleanQ)}|${escapedRegex})`, "gi");
+      return escaped.replace(reg, "<mark>$1</mark>");
+    } catch (e) {
+      return escaped;
+    }
   }
 
   // =========================================================================
@@ -1281,6 +1527,7 @@
     setupHeaderButtons();
     setupNotesDebounce();
     setupNotesLogInput();
+    setupContactPhoneCopy();
     setupAssignmentSelect();
     setupTicketButtons();
     setupPipelineInputs();

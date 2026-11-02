@@ -737,16 +737,12 @@ def extract_base64_jpeg(text):
     return None
 
 def clean_protobuf_text(text):
-    """Limpia prefijos residuales de cabeceras Protobuf (ej. 'a\\n9Texto' o 'r\\nJTexto')."""
+    """Normaliza saltos de línea suaves y limpia caracteres de control no imprimibles sin alterar texto válido."""
     if not text or not isinstance(text, str):
         return ""
     t = text.replace("\ufffd", "")
-    t = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', t).strip()
-    # Si empieza con 1-2 caracteres ASCII + salto de línea + 1 byte de longitud ASCII pegado al texto real:
-    # Caso 1: el byte de longitud es dígito/símbolo seguido de letra/emoji/signo (ej. "a\n9Ya en la camita!", "I\n!Muy buenas", "S\n+Nos quedamos")
-    t = re.sub(r'^[A-Za-z0-9]{1,2}\r?\n[0-9!-/:-@\[-`{-~](?=[A-Za-zÁÉÍÓÚáéíóúÑñ¿¡"\'\U00010000-\U0010ffff])', '', t)
-    # Caso 2: el byte de longitud es una letra (ej. 'J' = 74 bytes, 'M' = 77 bytes) seguida inmediatamente de mayúscula + minúscula (ej. "r\nJAcá todo", "u\nMSe va")
-    t = re.sub(r'^[A-Za-z0-9]{1,2}\r?\n[A-Za-z](?=[A-ZÁÉÍÓÚÑ¿¡][a-záéíóúñ])', '', t)
+    t = re.sub(r'[\x0b\x0c]', '\n', t)
+    t = re.sub(r'[\x00-\x08\x0e-\x1f\x7f]', '', t)
     return t.strip()
 
 def build_contact_map(cur):
@@ -782,59 +778,52 @@ def is_binary_or_base64_content(tipo, text):
     if not t:
         return True
 
-    # 1. Miniatura o imagen en base64
-    if "/9j/" in t or t.startswith("data:image"):
+    # 1. Miniatura o imagen en base64 (JPEG /9j/, PNG iVBOR, WebP UklGR, data URI)
+    if (
+        t.startswith("data:image") or
+        t.startswith("/9j/") or
+        t.startswith("iVBORw0KGgo") or
+        t.startswith("UklGR") or
+        extract_base64_jpeg(t) is not None
+    ):
         return True
 
     # 2. Identificadores JID de WhatsApp filtrados como texto (ej. "258741781934082@lid")
     if re.match(r'^[0-9a-zA-Z._+\-]+@(s\.whatsapp\.net|lid|g\.us|c\.us|broadcast|newsletter)$', t, re.IGNORECASE):
         return True
-    if any(domain in t for domain in ("@s.whatsapp.net", "@lid", "@g.us", "@c.us")) and " " not in t:
+    if any(domain in t for domain in ("@s.whatsapp.net", "@lid", "@g.us", "@c.us")) and not re.search(r'\s', t):
         return True
 
-    # 3. Cadena base64 o hash hexadecimal largo sin espacios
-    if len(t) > 35 and " " not in t and re.match(r'^[A-Za-z0-9+/=_\-\*\&\"\'\(\)\%\;\:\$\^]+$', t):
+    # 3. Blobs Base64 puros de una sola línea (preserva números largos como CBU/códigos de barras, UUIDs y URLs)
+    if (
+        len(t) > 80 and
+        not re.search(r'\s', t) and
+        not t.isdigit() and
+        not re.match(r'^https?://', t, re.IGNORECASE) and
+        re.match(r'^[A-Za-z0-9+/=]+$', t)
+    ):
         return True
 
-    # 4. Ruido binario / claves cifradas decodificadas como texto (ej. ']X0lH͎y)M⌢a"' o '>GpJΕprȇ]Ԁa')
+    # 4. Audios, notas de voz y stickers nunca llevan cuerpo textual de usuario
+    if tipo in ("audio", "ptt", "sticker"):
+        return True
+
+    # 5. Ruido binario crudo decodificado accidentalmente (controles o alta densidad de caracteres fuera de bloques de escritura/símbolos/emojis)
     weird_chars = 0
     for ch in t:
         code = ord(ch)
         if not (
-            (65 <= code <= 90) or
-            (97 <= code <= 122) or
-            (48 <= code <= 57) or
-            code in (32, 9, 10, 13) or
-            ch in ".,;:!?¿¡()[]{}-\"'/@#$%&*+=_~<>|°ºª€$" or
-            (0x00C0 <= code <= 0x017F) or  # Acentos latinos y ñ
-            (0x2000 <= code <= 0x206F) or  # Puntuación general
-            (0x2600 <= code <= 0x27BF) or  # Símbolos / emojis comunes
+            (32 <= code <= 126) or
+            code in (9, 10, 13) or
+            (0x00A0 <= code <= 0x024F) or  # Suplemento Latino, acentos extendidos, °, ¿, ¡, €
+            (0x2000 <= code <= 0x2BFF) or  # Puntuación tipográfica, monedas, flechas, formas, estrellas ⭐, relojes ⏰, keycaps
+            (0x3000 <= code <= 0x303F) or
             (0xFE00 <= code <= 0xFE0F) or  # Variation selectors
-            (0x1F000 <= code <= 0x1FAFF)   # Emojis Unicode suplementarios
+            (0x1F000 <= code <= 0x1FFFF)   # Todos los bloques modernos de Emojis Unicode
         ):
             weird_chars += 1
 
-    if len(t) > 0 and (weird_chars / len(t)) > 0.18:
-        return True
-    if " " not in t and len(t) >= 6 and weird_chars >= 1:
-        return True
-
-    # 5. Audio / PTT: JIDs filtrados o ruido binario
-    if tipo in ("audio", "ptt"):
-        if any(domain in t for domain in ("@s.whatsapp.net", "@lid", "@g.us", "@c.us")):
-            return True
-        if not re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}', t):
-            return True
-
-    # 6. Stickers
-    if tipo == "sticker":
-        if any(domain in t for domain in ("@s.whatsapp.net", "@lid", "@g.us", "@c.us")):
-            return True
-        if len(t) <= 15 and " " not in t:
-            return True
-
-    # 7. Documentos con identificadores internos
-    if tipo == "document" and len(t) > 50 and " " not in t and re.match(r'^[A-Za-z0-9_\-]+$', t):
+    if len(t) >= 8 and (weird_chars / len(t)) > 0.35:
         return True
 
     return False
@@ -1051,25 +1040,12 @@ def _save_incremental_sync_tx(cur, data):
         if m_type in ("chat", "album", "unknown") and not body and not quoted_body and not has_media:
             continue
 
-        # Protección contra suplantación si el body recibido es idéntico al mensaje citado (o con prefijo de longitud Protobuf)
-        if quoted_msg_id and body:
+        # Completar texto citado desde la BD local si se recibió quoted_msg_id sin quoted_body
+        if quoted_msg_id and not quoted_body:
             cur.execute("SELECT contenido FROM mensajes WHERE msg_id LIKE ? LIMIT 1", (f"%{quoted_msg_id}%",))
             q_row = cur.fetchone()
             if q_row and q_row[0]:
-                q_text = q_row[0]
-                is_duplicate_quote = (
-                    body == q_text or
-                    (len(body) == len(q_text) + 1 and body[1:] == q_text)
-                )
-                if is_duplicate_quote:
-                    if not quoted_body:
-                        quoted_body = q_text
-                    cur.execute("SELECT contenido FROM mensajes WHERE msg_id = ?", (mid,))
-                    prev_row = cur.fetchone()
-                    if prev_row and prev_row[0] and prev_row[0] != body and prev_row[0] != q_text and not (len(prev_row[0]) == len(q_text) + 1 and prev_row[0][1:] == q_text):
-                        body = prev_row[0]
-                    else:
-                        body = ""
+                quoted_body = q_row[0]
 
         # Asegurar que el chat padre exista en la tabla chats y actualizar campos desnormalizados
         if chat_id:
@@ -1117,7 +1093,7 @@ def _save_incremental_sync_tx(cur, data):
             ON CONFLICT(msg_id) DO UPDATE SET
                 es_mio = excluded.es_mio,
                 contenido = CASE 
-                    WHEN excluded.contenido != '' AND (excluded.quoted_body IS NULL OR excluded.contenido != excluded.quoted_body) 
+                    WHEN excluded.contenido != '' 
                     THEN excluded.contenido 
                     ELSE mensajes.contenido 
                 END,
@@ -1201,6 +1177,42 @@ def search_full_text(query_str, chat_id=None, limit=50, db_path=DB_FILE):
             target_ids = [x.strip() for x in chat_id.split(",") if x.strip()]
 
     if target_ids:
+        # Resolver identidades canónicas, aliases y nombres de contactos a sus JIDs
+        resolved_set = set()
+        for tid in target_ids:
+            resolved_set.add(tid)
+            # Si no es un JID (@c.us, @lid, @g.us, etc.), buscar por nombre o teléfono
+            if "@" not in tid:
+                try:
+                    cur.execute("SELECT chat_id FROM chats WHERE nombre = ? OR chat_id = ?", (tid, tid))
+                    for r in cur.fetchall():
+                        if r[0]: resolved_set.add(r[0])
+                    cur.execute("SELECT contact_id, numero FROM contactos WHERE nombre = ? OR push_name = ? OR contact_id = ?", (tid, tid, tid))
+                    for r in cur.fetchall():
+                        if r[0]: resolved_set.add(r[0])
+                        if r[1]:
+                            resolved_set.add(f"{r[1]}@c.us")
+                            resolved_set.add(f"{r[1]}@s.whatsapp.net")
+                except Exception:
+                    pass
+
+        # Expandir bidireccionalmente con contact_aliases
+        if resolved_set:
+            seed_ids = list(resolved_set)
+            seed_ph = ",".join("?" for _ in seed_ids)
+            try:
+                cur.execute(f"""
+                    SELECT alias_id, canonical_id FROM contact_aliases
+                    WHERE alias_id IN ({seed_ph}) OR canonical_id IN ({seed_ph})
+                """, seed_ids + seed_ids)
+                for r in cur.fetchall():
+                    if r[0]: resolved_set.add(r[0])
+                    if r[1]: resolved_set.add(r[1])
+            except Exception:
+                pass
+            target_ids = list(resolved_set)
+
+    if target_ids:
         placeholders = ",".join("?" for _ in target_ids)
         sql = f"""
         SELECT 
@@ -1256,6 +1268,7 @@ def search_full_text(query_str, chat_id=None, limit=50, db_path=DB_FILE):
     for r in results:
         snip = r.get("snippet") or ""
         r["snippet"] = html.escape(snip).replace("\x01", "<mark>").replace("\x02", "</mark>")
+        r["sender_name"] = r.get("remitente_nombre")
     return results
 
 def create_manual_backup(db_path=DB_FILE, backup_dir=BACKUP_DIR):

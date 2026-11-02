@@ -78,7 +78,7 @@
           <div class="search-section">
             <div class="search-box-wrapper">
               <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-              <input type="text" id="searchInput" class="search-box" placeholder="Buscar contactos o en todo el historial..." oninput="handleSearchInput()">
+              <input type="text" id="searchInput" class="search-box" placeholder="Buscar contactos o en todo el historial..." oninput="handleSearchInput()" onkeydown="if(event.key==='Escape')clearSearchInput()">
               <button type="button" id="searchClearBtn" class="search-clear-btn" onclick="clearSearchInput()" title="Limpiar búsqueda">✕</button>
             </div>
           </div>
@@ -585,6 +585,36 @@
             </div>
           </div>
 
+          <!-- Tarjeta Gestión de Operadores y Equipo -->
+          <div class="workspace-card system-card" id="cardTeamOperators">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="card-title">👥 Operadores y Equipo de Trabajo</h3>
+                <p class="card-subtitle">Administra los usuarios autorizados. Los operadores dados de alta aquí podrán asignarse en el Copiloto y seleccionarse al ingresar desde otra PC en red local.</p>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button type="button" class="btn-primary" onclick="openAddOperatorDialog()">+ Nuevo Operador</button>
+              </div>
+            </div>
+
+            <div class="table-responsive" style="margin-top: 14px;">
+              <table class="crm-table">
+                <thead>
+                  <tr>
+                    <th style="width: 40px;"></th>
+                    <th>Nombre / Alias</th>
+                    <th style="width: 140px;">Presencia</th>
+                    <th style="width: 170px;">En esta PC</th>
+                    <th style="width: 130px; text-align: right;">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="teamOperatorsTableBody">
+                  <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 18px;">Cargando operadores...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <!-- Tarjeta Red Local y Modo Equipo -->
           <div class="workspace-card system-card">
             <div class="card-header-flex">
@@ -607,7 +637,7 @@
               </div>
               <div class="stat-box">
                 <div class="stat-val" id="myOperatorNameDisplay" style="font-size: 14px;">Operador</div>
-                <div class="stat-lbl">Mi Nombre (<a href="#" onclick="promptSetMyOperator(); return false;">Cambiar</a>)</div>
+                <div class="stat-lbl">Mi Nombre (<a href="#" onclick="promptSetMyOperator(); return false;">Seleccionar</a>)</div>
               </div>
             </div>
             <div style="margin-top: 14px;">
@@ -723,15 +753,17 @@
       </div>
       <div style="padding: 16px 20px;">
         <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
-          Te estás conectando desde otra PC de la red local. Ingresa el <b>PIN de Oficina</b> y tu <b>Nombre</b> para colaborar:
+          Te estás conectando desde otra PC de la red local. Selecciona tu <b>Nombre</b> e ingresa el <b>PIN de Oficina</b> para colaborar:
         </p>
         <div class="form-group mb-2">
-          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">PIN de Oficina</label>
-          <input type="password" id="modalLanPinInput" class="search-box" placeholder="Ej. 123456" maxlength="8" style="width:100%;">
+          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">Operador / Responsable</label>
+          <select id="modalOperatorSelect" class="search-box" style="width:100%;">
+            <option value="">Cargando operadores...</option>
+          </select>
         </div>
         <div class="form-group mb-2" style="margin-top: 12px;">
-          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">Tu Nombre Corto</label>
-          <input type="text" id="modalOperatorNameInput" class="search-box" placeholder="Ej. Ana, Lucas" style="width:100%;">
+          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">PIN de Oficina</label>
+          <input type="password" id="modalLanPinInput" class="search-box" placeholder="Ej. 123456" maxlength="8" style="width:100%;">
         </div>
         <div id="lanPinErrorMsg" style="display: none; color: #ef4444; font-size: 12px; margin-top: 8px;"></div>
         <div style="margin-top: 18px; display: flex; justify-content: flex-end;">

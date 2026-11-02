@@ -107,6 +107,8 @@ def get_system_settings():
                             data["known_operators"] = []
                         if "onboarding_completed" not in data:
                             data["onboarding_completed"] = False
+                        if "workspace_profile" not in data or data["workspace_profile"] not in VALID_WORKSPACE_PROFILES:
+                            data["workspace_profile"] = DEFAULT_WORKSPACE_PROFILE
                         return data
             except Exception:
                 pass
@@ -116,7 +118,8 @@ def get_system_settings():
             "network_mode": "local",
             "lan_pin": generate_lan_pin(),
             "known_operators": [],
-            "onboarding_completed": False
+            "onboarding_completed": False,
+            "workspace_profile": DEFAULT_WORKSPACE_PROFILE
         }
         try:
             with open(SYSTEM_SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -140,13 +143,17 @@ def save_system_settings(settings):
             return False
 
 
-def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, onboarding_completed=None):
+def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, rename_operator=None, onboarding_completed=None, workspace_profile=None):
     """Actualiza campos específicos de la configuración global de forma thread-safe."""
     settings = get_system_settings()
     changed = False
 
     if network_mode in ("local", "lan") and settings.get("network_mode") != network_mode:
         settings["network_mode"] = network_mode
+        changed = True
+
+    if workspace_profile in VALID_WORKSPACE_PROFILES and settings.get("workspace_profile") != workspace_profile:
+        settings["workspace_profile"] = workspace_profile
         changed = True
 
     if lan_pin is not None:
@@ -157,15 +164,29 @@ def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, r
 
     if add_operator:
         op = str(add_operator).strip()
-        if op and op not in settings.get("known_operators", []):
-            settings.setdefault("known_operators", []).append(op)
+        known = settings.setdefault("known_operators", [])
+        if op and not any(existing.lower() == op.lower() for existing in known):
+            known.append(op)
             changed = True
 
     if remove_operator:
         op = str(remove_operator).strip()
-        if op in settings.get("known_operators", []):
-            settings["known_operators"].remove(op)
+        known = settings.get("known_operators", [])
+        to_remove = [existing for existing in known if existing.lower() == op.lower()]
+        for item in to_remove:
+            known.remove(item)
             changed = True
+
+    if rename_operator and isinstance(rename_operator, dict):
+        old_op = str(rename_operator.get("old", "")).strip()
+        new_op = str(rename_operator.get("new", "")).strip()
+        known = settings.setdefault("known_operators", [])
+        if old_op and new_op:
+            for idx, item in enumerate(known):
+                if item.lower() == old_op.lower():
+                    known[idx] = new_op
+                    changed = True
+                    break
 
     if onboarding_completed is not None:
         val = bool(onboarding_completed)
@@ -358,7 +379,12 @@ def save_account_metadata(account_id, name=None, phone=None, workspace_profile=N
     if workspace_profile and workspace_profile in VALID_WORKSPACE_PROFILES:
         data["workspace_profile"] = workspace_profile
     elif "workspace_profile" not in data:
-        data["workspace_profile"] = DEFAULT_WORKSPACE_PROFILE
+        sys_prof = None
+        try:
+            sys_prof = get_system_settings().get("workspace_profile")
+        except Exception:
+            pass
+        data["workspace_profile"] = sys_prof if sys_prof in VALID_WORKSPACE_PROFILES else DEFAULT_WORKSPACE_PROFILE
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if "created_at" not in data:
@@ -376,9 +402,9 @@ def save_account_metadata(account_id, name=None, phone=None, workspace_profile=N
 def get_account_profile(account_id=None):
     """
     Obtiene el perfil de trabajo activo para la cuenta dada.
-    Si no está configurado o es inválido, retorna DEFAULT_WORKSPACE_PROFILE.
+    Si no está configurado o es inválido, retorna el perfil de system_settings.json o DEFAULT_WORKSPACE_PROFILE.
     """
-    if not account_id:
+    if not account_id or account_id == DEFAULT_ACCOUNT_ID:
         try:
             accounts = list_accounts()
             real = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
@@ -387,27 +413,38 @@ def get_account_profile(account_id=None):
             elif accounts:
                 account_id = accounts[0]["id"]
             else:
-                account_id = DEFAULT_ACCOUNT_ID
+                account_id = None
         except Exception:
-            account_id = DEFAULT_ACCOUNT_ID
+            account_id = None
 
-    aid = sanitize_account_id(account_id)
-    meta_path = os.path.join(get_account_dir(aid), "account.json")
-    if os.path.isfile(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                prof = data.get("workspace_profile")
-                if prof in VALID_WORKSPACE_PROFILES:
-                    return prof
-        except Exception:
-            pass
+    if account_id:
+        aid = sanitize_account_id(account_id)
+        meta_path = os.path.join(get_account_dir(aid), "account.json")
+        if os.path.isfile(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    prof = data.get("workspace_profile")
+                    if prof in VALID_WORKSPACE_PROFILES:
+                        return prof
+            except Exception:
+                pass
+
+    # Fallback al perfil global persistido en la estación de trabajo
+    try:
+        sys_prof = get_system_settings().get("workspace_profile")
+        if sys_prof in VALID_WORKSPACE_PROFILES:
+            return sys_prof
+    except Exception:
+        pass
+
     return DEFAULT_WORKSPACE_PROFILE
 
 
 def set_account_profile(account_id=None, profile=None):
     """
-    Establece el perfil de trabajo en account.json para la cuenta dada.
+    Establece el perfil de trabajo en account.json para la cuenta dada y
+    lo sincroniza globalmente en system_settings.json para asegurar persistencia.
     Retorna True si tuvo éxito, False en caso contrario.
     Acepta tanto (account_id, profile) como (profile, account_id) de forma robusta.
     """
@@ -415,7 +452,16 @@ def set_account_profile(account_id=None, profile=None):
     if account_id in VALID_WORKSPACE_PROFILES and (profile not in VALID_WORKSPACE_PROFILES or profile is None):
         account_id, profile = profile, account_id
 
-    if not account_id:
+    if profile not in VALID_WORKSPACE_PROFILES:
+        profile = DEFAULT_WORKSPACE_PROFILE
+
+    # Persistir globalmente en system_settings.json de la estación
+    try:
+        update_system_settings(workspace_profile=profile)
+    except Exception:
+        pass
+
+    if not account_id or account_id == DEFAULT_ACCOUNT_ID:
         try:
             accounts = list_accounts()
             real = [a for a in accounts if a["id"] != DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
@@ -429,8 +475,6 @@ def set_account_profile(account_id=None, profile=None):
             account_id = DEFAULT_ACCOUNT_ID
 
     aid = sanitize_account_id(account_id)
-    if profile not in VALID_WORKSPACE_PROFILES:
-        profile = DEFAULT_WORKSPACE_PROFILE
     ensure_account_dirs(aid)
     meta_path = os.path.join(get_account_dir(aid), "account.json")
     data = {}

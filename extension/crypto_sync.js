@@ -343,7 +343,7 @@
   
 
   // =========================================================================
-  // 2. DECODIFICADOR PROTOBUF REAL Y UTILIDADES DE TEXTO
+  // 2. DECODIFICADOR PROTOBUF ESTRUCTURAL DETERMINISTA (WAWebProtobufsWeb + WAProto)
   // =========================================================================
   function readVarint(bytes, pos) {
     let val = 0;
@@ -358,499 +358,573 @@
     return null;
   }
 
-  function isGarbageString(s) {
+  function isBase64MediaBlob(s) {
+    if (!s || typeof s !== "string") return false;
+    const t = s.trim();
+    if (!t) return false;
+    if (
+      t.startsWith("data:image") ||
+      t.startsWith("/9j/") ||
+      t.startsWith("iVBORw0KGgo") ||
+      t.startsWith("UklGR")
+    ) {
+      return true;
+    }
+    const jpgIdx = t.indexOf("/9j/");
+    if (jpgIdx !== -1 && t.length - jpgIdx > 60 && !/\s/.test(t.substring(jpgIdx, jpgIdx + 60))) {
+      return true;
+    }
+    // Blobs Base64 puros largos de una sola línea (descarta números puros como CBU/códigos de barras y URLs)
+    if (t.length > 80 && !/\s/.test(t) && !/^\d+$/.test(t) && !/^https?:\/\//i.test(t) && /^[A-Za-z0-9+/=]+$/.test(t)) {
+      return true;
+    }
+    return false;
+  }
+
+  function isInternalJidOrUrlNoise(s) {
     if (!s) return true;
     const t = s.trim();
     if (!t) return true;
-    // Ignorar JIDs de WhatsApp
     if (/^[0-9a-zA-Z._+-]+@(s\.whatsapp\.net|lid|g\.us|c\.us|broadcast|newsletter)$/i.test(t)) return true;
-    if (/@(s\.whatsapp\.net|lid|g\.us|c\.us|broadcast)\b/i.test(t) && !t.includes(" ")) return true;
-    // Ignorar hashes hexadecimales o identificadores de mensaje (ej. 3EB0..., AC68...)
-    if (/^[0-9A-F]{16,64}$/i.test(t)) return true;
-    // Ignorar mimetypes y URLs internas de CDN
-    if (/^(image|video|audio|application|text)\/[a-z0-9.+-]+(;.*)?$/i.test(t)) return true;
-    if (t.startsWith("https://mmg.whatsapp.net") || t.startsWith("/v/t62.") || t.startsWith("/mms/")) return true;
-    // Ignorar cadenas Base64 largas sin espacios
-    if (t.startsWith("data:image") || t.includes("/9j/")) return true;
-    if (t.length > 35 && !/\s/.test(t) && /^[A-Za-z0-9+/=_-]+$/.test(t)) return true;
-
-    // Verificar proporción de caracteres legibles vs símbolos aleatorios (evitar claves AES/MAC de 32 bytes interpretadas como texto)
-    let naturalChars = 0;
-    let weirdChars = 0;
-    for (let i = 0; i < t.length; i++) {
-      const code = t.charCodeAt(i);
-      if (
-        (code >= 65 && code <= 90) ||
-        (code >= 97 && code <= 122) ||
-        (code >= 48 && code <= 57) ||
-        code === 32 || code === 10 || code === 13 ||
-        ".,;:!?¿¡()[]{}-\"'/@#$%&*+=_~<>|°ºª€$".includes(t[i]) ||
-        (code >= 0x00C0 && code <= 0x017F) || // Acentos latinos y ñ
-        (code >= 0x2000 && code <= 0x206F) || // Puntuación general
-        (code >= 0xFE00 && code <= 0xFE0F) || // Variation selectors
-        (code >= 0xD800 && code <= 0xDFFF) || // Surrogates de Emojis
-        (code >= 0x2600 && code <= 0x27BF)    // Símbolos/Emojis adicionales
-      ) {
-        naturalChars++;
-      } else {
-        weirdChars++;
-      }
-    }
-    if (weirdChars > 0 && weirdChars / t.length > 0.2) return true;
-    if (!t.includes(" ") && t.length >= 6 && weirdChars >= 1) return true;
+    if (/@(s\.whatsapp\.net|lid|g\.us|c\.us|broadcast)\b/i.test(t) && !/\s/.test(t)) return true;
+    if (/^(image|video|audio|application)\/[a-z0-9.+-]+(;.*)?$/i.test(t)) return true;
+    if ((t.startsWith("https://mmg.whatsapp.net") || t.startsWith("/v/t62.") || t.startsWith("/mms/")) && !/\s/.test(t)) return true;
     return false;
   }
 
-  function isLikelyMediaBinaryFragment(s) {
-    if (!s) return true;
-    const t = s.trim();
-    if (!t) return true;
-    // En mensajes multimedia, descartar fragmentos cortos sin espacios que mezclan símbolos técnicos o dígitos/mayúsculas aleatorias (ej. "2:", "NX<ah+s", "%U3", "t8qJt")
-    if (!t.includes(" ") && t.length <= 12) {
-      if (/[<>\[\]{}()%^~|&*=+:;\/\\`$_]/.test(t)) return true;
-      if (/\d/.test(t) && /[A-Za-z]/.test(t)) return true;
-      if (/^[A-Za-z]{1,4}$/.test(t) && /[A-Z]/.test(t) && /[a-z]/.test(t) && !/^[A-Z][a-z]{2,3}$/.test(t)) return true;
-    }
-    return false;
-  }
+  /**
+   * Parsea de forma estricta un mensaje Protobuf completo.
+   * Exige que el 100% del buffer se consuma sin bytes sobrantes ni wireTypes inválidos.
+   * Soporta campos repetidos: Map<fieldNum, Array<{ wireType, value }>>.
+   */
+  function parseProtobufFields(bytes) {
+    if (!bytes || bytes.length === 0) return null;
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return null;
 
-  function parseProtobufTopFields(bytes) {
     const fields = new Map();
-    if (!bytes || bytes.length < 2) return fields;
     let pos = 0;
+
     while (pos < bytes.length) {
       const tagRes = readVarint(bytes, pos);
-      if (!tagRes || tagRes.val <= 0) break;
+      if (!tagRes || tagRes.val <= 0) return null;
       pos = tagRes.pos;
+
       const wireType = tagRes.val & 7;
       const fieldNum = Math.floor(tagRes.val / 8);
-      if (fieldNum <= 0 || fieldNum > 5000) break;
+      if (fieldNum <= 0 || fieldNum > 50000) return null;
 
+      let entryVal = null;
       if (wireType === 0) {
         const v = readVarint(bytes, pos);
-        if (!v) break;
+        if (!v) return null;
         pos = v.pos;
+        entryVal = v.val;
       } else if (wireType === 1) {
+        if (pos + 8 > bytes.length) return null;
+        entryVal = bytes.subarray(pos, pos + 8);
         pos += 8;
-        if (pos > bytes.length) break;
       } else if (wireType === 5) {
+        if (pos + 4 > bytes.length) return null;
+        entryVal = bytes.subarray(pos, pos + 4);
         pos += 4;
-        if (pos > bytes.length) break;
       } else if (wireType === 2) {
         const lenRes = readVarint(bytes, pos);
-        if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > bytes.length) break;
-        const sub = bytes.subarray(lenRes.pos, lenRes.pos + lenRes.val);
+        if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > bytes.length) return null;
+        entryVal = bytes.subarray(lenRes.pos, lenRes.pos + lenRes.val);
         pos = lenRes.pos + lenRes.val;
-        fields.set(fieldNum, sub);
       } else {
-        break;
+        return null;
       }
+
+      let list = fields.get(fieldNum);
+      if (!list) {
+        list = [];
+        fields.set(fieldNum, list);
+      }
+      list.push({ wireType, value: entryVal });
     }
+
+    if (pos !== bytes.length) return null;
     return fields;
   }
 
-  function extractProtobufStrings(bytes, depth = 0, isMedia = false) {
-    if (depth > 5 || !bytes || bytes.length === 0) return [];
-    // Descartar bloques binarios JPEG crudos (miniaturas jpegThumbnail: FF D8 FF)
-    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return [];
-    const candidates = [];
-    let pos = 0;
-
-    while (pos < bytes.length) {
-      const tagRes = readVarint(bytes, pos);
-      if (!tagRes || tagRes.val <= 0) break;
-      pos = tagRes.pos;
-
-      const wireType = tagRes.val & 7;
-      const fieldNum = Math.floor(tagRes.val / 8);
-      if (fieldNum <= 0 || fieldNum > 5000) break;
-
-      if (wireType === 0) {
-        const v = readVarint(bytes, pos);
-        if (!v) break;
-        pos = v.pos;
-      } else if (wireType === 1) {
-        pos += 8;
-        if (pos > bytes.length) break;
-      } else if (wireType === 5) {
-        pos += 4;
-        if (pos > bytes.length) break;
-      } else if (wireType === 2) {
-        const lenRes = readVarint(bytes, pos);
-        if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > bytes.length) break;
-        const sub = bytes.subarray(lenRes.pos, lenRes.pos + lenRes.val);
-        pos = lenRes.pos + lenRes.val;
-
-        if (sub.length > 0) {
-          // Evitar inspeccionar miniaturas JPEG crudas como texto o submensajes
-          if (sub.length >= 3 && sub[0] === 0xff && sub[1] === 0xd8 && sub[2] === 0xff) {
-            continue;
-          }
-          // ContextInfo (campo 17 en ExtendedTextMessage, ImageMessage, VideoMessage, etc.) contiene el mensaje citado, no el propio
-          if (fieldNum === 17) {
-            continue;
-          }
-          // En MsgRowOpaqueData en profundidad 0, el campo 2 es quotedMsg (el mensaje citado). Debe ignorarse como cuerpo del mensaje actual
-          if (depth === 0 && fieldNum === 2) {
-            continue;
-          }
-
-          // Si sub parece ser un submensaje Protobuf anidado (ej. empieza con tag wireType 2 y longitud que abarca el resto de sub),
-          // no decodificar sub directamente como string crudo para evitar que el tag (0x0A='\n') y el byte de longitud (ej. 0x42='B')
-          // se interpreten como caracteres ASCII pegados al texto.
-          let isSubMessage = false;
-          if (sub.length >= 2) {
-            const subWire = sub[0] & 7;
-            const subField = sub[0] >> 3;
-            if (subField >= 1 && subField <= 50 && (subWire === 0 || subWire === 2)) {
-              if (subWire === 2) {
-                const subLen = readVarint(sub, 1);
-                if (subLen && subLen.val > 0 && (subLen.pos + subLen.val === sub.length || subLen.pos + subLen.val <= sub.length - 2)) {
-                  isSubMessage = true;
-                }
-              }
-            }
-          }
-
-          // 1. Intentar decodificar como UTF-8 estricto si no es un submensaje contenedor
-          const isAllowedMediaField = !isMedia || (fieldNum === 1 || fieldNum === 2 || fieldNum === 3 || fieldNum === 6 || fieldNum === 8 || fieldNum === 20);
-          if (!isSubMessage && isAllowedMediaField) {
-            try {
-              const str = new TextDecoder("utf-8", { fatal: true }).decode(sub);
-              if (!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(str)) {
-                const cleaned = str.trim();
-                if (cleaned && !isGarbageString(cleaned) && (!isMedia || !isLikelyMediaBinaryFragment(cleaned))) {
-                  const bonus = (fieldNum === 1 || fieldNum === 2 || fieldNum === 3 || fieldNum === 6 || fieldNum === 20) ? 1000 : 0;
-                  candidates.push({ text: cleaned, score: cleaned.length + bonus });
-                }
-              }
-            } catch (e) {}
-          }
-
-          // 2. Explorar recursivamente por si es un mensaje contenedor (Message / ExtendedTextMessage / ImageMessage)
-          const nested = extractProtobufStrings(sub, depth + 1, isMedia);
-          for (const item of nested) {
-            candidates.push(item);
-          }
-        }
-      } else {
-        break;
-      }
+  function getProtoBytes(fields, fieldNum) {
+    if (!fields) return null;
+    const list = fields.get(fieldNum);
+    if (!list) return null;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].wireType === 2 && list[i].value) return list[i].value;
     }
-    // Si es un submensaje anidado y no terminó exactamente al final del buffer, era un campo binario (ej. scansSidecar / mediaKey), no un submensaje Protobuf
-    if (depth > 0 && pos !== bytes.length) return [];
-    return candidates;
+    return null;
   }
 
-  function extractContextInfoFromBuffer(buffer) {
-    if (!buffer) return null;
-    const bytes = new Uint8Array(buffer);
-    if (bytes.length < 3) return null;
+  function getAllProtoBytes(fields, fieldNum) {
+    const out = [];
+    if (!fields) return out;
+    const list = fields.get(fieldNum);
+    if (!list) return out;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].wireType === 2 && list[i].value) out.push(list[i].value);
+    }
+    return out;
+  }
 
-    // Si buffer es un MsgRowOpaqueData con campo 2 (quotedMsg), extraer el texto citado
-    const topFields = parseProtobufTopFields(bytes);
-    let topQuotedBody = "";
-    if (topFields.has(2)) {
-      topQuotedBody = extractTextFromBuffer(topFields.get(2), false);
+  function getProtoVarint(fields, fieldNum) {
+    if (!fields) return null;
+    const list = fields.get(fieldNum);
+    if (!list) return null;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].wireType === 0) return list[i].value;
+    }
+    return null;
+  }
+
+  /**
+   * Decodifica un campo leaf `string` de Protobuf como UTF-8 estricto íntegro,
+   * sin heurísticas de recorte ni escaneo de subcadenas.
+   */
+  function decodeProtoStringLeaf(sub, rejectMediaBlob = true) {
+    if (!sub || sub.length === 0) return "";
+    if (sub.length >= 3 && sub[0] === 0xff && sub[1] === 0xd8 && sub[2] === 0xff) return "";
+    try {
+      let str = new TextDecoder("utf-8", { fatal: true }).decode(sub);
+      // Si tiene bytes NUL es un buffer binario, no un string de usuario
+      if (str.indexOf("\x00") !== -1) return "";
+      // Normalizar saltos de línea suaves (Shift+Enter de Word/Docs: \x0b, \x0c) y limpiar controles no imprimibles residuales
+      str = str.replace(/[\x0b\x0c]/g, "\n").replace(/[\x01-\x08\x0e-\x1f\x7f]/g, "").trim();
+      if (!str) return "";
+      if (rejectMediaBlob && isBase64MediaBlob(str)) return "";
+      if (isInternalJidOrUrlNoise(str)) return "";
+      return str;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  /**
+   * Extrae texto de un WAProto.Message real (usado en MsgOpaqueData.futureproofBuffer = 14
+   * y en ContextInfo.quotedMessage = 3).
+   */
+  function extractTextFromWAProtoMessage(protoBytes, isMedia = false, depth = 0) {
+    if (depth > 5 || !protoBytes || protoBytes.length === 0) return "";
+    const fields = parseProtobufFields(protoBytes);
+    if (!fields) return "";
+
+    // 1. Desenvolver contenedores FutureProofMessage (ephemeral=37, viewOnce=40, docWithCaption=51, viewOnceV2=55, edited=58, viewOnceV2Ext=59)
+    const wrapperFields = [37, 40, 51, 55, 58, 59];
+    for (const wf of wrapperFields) {
+      const wrapSub = getProtoBytes(fields, wf);
+      if (wrapSub) {
+        const wrapParsed = parseProtobufFields(wrapSub);
+        const innerMsg = getProtoBytes(wrapParsed, 1) || wrapSub;
+        const innerText = extractTextFromWAProtoMessage(innerMsg, isMedia, depth + 1);
+        if (innerText) return innerText;
+      }
     }
 
-    function findContextInfoBytes(subBytes, depth) {
-      if (depth > 4 || !subBytes || subBytes.length < 3) return null;
-      let pos = 0;
-      while (pos < subBytes.length) {
-        const tagRes = readVarint(subBytes, pos);
-        if (!tagRes || tagRes.val <= 0) break;
-        pos = tagRes.pos;
-        const wireType = tagRes.val & 7;
-        const fieldNum = Math.floor(tagRes.val / 8);
+    // 2. conversation (campo 1: string directo en mensajes de texto simples)
+    if (!isMedia) {
+      const conv = decodeProtoStringLeaf(getProtoBytes(fields, 1));
+      if (conv) return conv;
+    }
 
-        if (wireType === 0) {
-          const v = readVarint(subBytes, pos);
-          if (!v) break;
-          pos = v.pos;
-        } else if (wireType === 1) {
-          pos += 8;
-        } else if (wireType === 5) {
-          pos += 4;
-        } else if (wireType === 2) {
-          const lenRes = readVarint(subBytes, pos);
-          if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > subBytes.length) break;
-          const sub = subBytes.subarray(lenRes.pos, lenRes.pos + lenRes.val);
-          pos = lenRes.pos + lenRes.val;
+    // 3. extendedTextMessage (campo 6 -> campo 1: text)
+    const extBytes = getProtoBytes(fields, 6);
+    if (extBytes && !isMedia) {
+      const extFields = parseProtobufFields(extBytes);
+      if (extFields) {
+        const extText = decodeProtoStringLeaf(getProtoBytes(extFields, 1)) ||
+                        decodeProtoStringLeaf(getProtoBytes(extFields, 6)) ||
+                        decodeProtoStringLeaf(getProtoBytes(extFields, 5));
+        if (extText) return extText;
+      }
+    }
 
-          if (fieldNum === 17) {
-            return sub;
-          }
-          if (fieldNum === 1 || fieldNum === 3 || fieldNum === 6 || fieldNum === 7 || fieldNum === 9 || fieldNum === 40 || fieldNum === 41 || fieldNum === 45) {
-            const found = findContextInfoBytes(sub, depth + 1);
-            if (found) return found;
-          }
-        } else {
-          break;
+    // 4. Mensajes multimedia en WAProto.Message
+    // imageMessage (campo 3 -> campo 3: caption)
+    const imgBytes = getProtoBytes(fields, 3);
+    if (imgBytes) {
+      const imgFields = parseProtobufFields(imgBytes);
+      const cap = decodeProtoStringLeaf(getProtoBytes(imgFields, 3));
+      if (cap) return cap;
+    }
+
+    // videoMessage (campo 9 -> campo 7: caption)
+    const vidBytes = getProtoBytes(fields, 9);
+    if (vidBytes) {
+      const vidFields = parseProtobufFields(vidBytes);
+      const cap = decodeProtoStringLeaf(getProtoBytes(vidFields, 7));
+      if (cap) return cap;
+    }
+
+    // documentMessage (campo 7 -> campo 20: caption, fallback campo 3: title / campo 8: fileName)
+    const docBytes = getProtoBytes(fields, 7);
+    if (docBytes) {
+      const docFields = parseProtobufFields(docBytes);
+      if (docFields) {
+        const cap = decodeProtoStringLeaf(getProtoBytes(docFields, 20));
+        if (cap) return cap;
+        if (!isMedia) {
+          const docTitle = decodeProtoStringLeaf(getProtoBytes(docFields, 3)) ||
+                           decodeProtoStringLeaf(getProtoBytes(docFields, 8));
+          if (docTitle) return docTitle;
         }
       }
-      return null;
     }
 
-    const ctxBytes = findContextInfoBytes(bytes, 0);
-    if (!ctxBytes) {
-      if (topQuotedBody) {
-        return { stanzaId: null, participant: null, quotedBody: topQuotedBody };
+    if (isMedia) return "";
+
+    // 5. contactMessage (campo 4 -> campo 16: vcard, campo 1: displayName)
+    const contactBytes = getProtoBytes(fields, 4);
+    if (contactBytes) {
+      const cFields = parseProtobufFields(contactBytes);
+      const vc = decodeProtoStringLeaf(getProtoBytes(cFields, 16)) ||
+                 decodeProtoStringLeaf(getProtoBytes(cFields, 1));
+      if (vc) return vc;
+    }
+
+    // 6. locationMessage (campo 5 -> campo 3: name, campo 4: address, campo 11: comment) / liveLocationMessage (campo 18 -> campo 3: caption)
+    const locBytes = getProtoBytes(fields, 5);
+    if (locBytes) {
+      const lFields = parseProtobufFields(locBytes);
+      if (lFields) {
+        const parts = [
+          decodeProtoStringLeaf(getProtoBytes(lFields, 3)),
+          decodeProtoStringLeaf(getProtoBytes(lFields, 4)),
+          decodeProtoStringLeaf(getProtoBytes(lFields, 11))
+        ].filter(Boolean);
+        if (parts.length > 0) return parts.join(" — ");
       }
-      return null;
+    }
+    const liveLocBytes = getProtoBytes(fields, 18);
+    if (liveLocBytes) {
+      const llFields = parseProtobufFields(liveLocBytes);
+      const cap = decodeProtoStringLeaf(getProtoBytes(llFields, 3));
+      if (cap) return cap;
     }
 
+    // 7. Encuestas en WAProto.Message: pollCreationMessage (49 / 60 / 64 -> campo 2: name, campo 3: repeated Option { 1: optionName })
+    for (const pf of [49, 60, 64]) {
+      const pollBytes = getProtoBytes(fields, pf);
+      if (pollBytes) {
+        const pFields = parseProtobufFields(pollBytes);
+        if (pFields) {
+          const pollTitle = decodeProtoStringLeaf(getProtoBytes(pFields, 2));
+          const optSubs = getAllProtoBytes(pFields, 3);
+          const opts = [];
+          for (const os of optSubs) {
+            const oFields = parseProtobufFields(os);
+            const oName = decodeProtoStringLeaf(getProtoBytes(oFields, 1));
+            if (oName) opts.push(`• ${oName}`);
+          }
+          if (pollTitle || opts.length > 0) {
+            return [pollTitle ? `📊 ${pollTitle}` : "", ...opts].filter(Boolean).join("\n");
+          }
+        }
+      }
+    }
+
+    // 8. Botones, listas e interactivos (buttons=42, buttonsResp=43, list=36, listResp=39, templateButtonReply=29, interactive=45)
+    const btnBytes = getProtoBytes(fields, 42);
+    if (btnBytes) {
+      const bFields = parseProtobufFields(btnBytes);
+      const txt = decodeProtoStringLeaf(getProtoBytes(bFields, 1)) || decodeProtoStringLeaf(getProtoBytes(bFields, 2));
+      if (txt) return txt;
+    }
+    const btnRespBytes = getProtoBytes(fields, 43) || getProtoBytes(fields, 29);
+    if (btnRespBytes) {
+      const brFields = parseProtobufFields(btnRespBytes);
+      const txt = decodeProtoStringLeaf(getProtoBytes(brFields, 2)) || decodeProtoStringLeaf(getProtoBytes(brFields, 1));
+      if (txt) return txt;
+    }
+    const listBytes = getProtoBytes(fields, 36);
+    if (listBytes) {
+      const lFields = parseProtobufFields(listBytes);
+      const txt = decodeProtoStringLeaf(getProtoBytes(lFields, 2)) || decodeProtoStringLeaf(getProtoBytes(lFields, 1));
+      if (txt) return txt;
+    }
+    const listRespBytes = getProtoBytes(fields, 39);
+    if (listRespBytes) {
+      const lrFields = parseProtobufFields(listRespBytes);
+      const txt = decodeProtoStringLeaf(getProtoBytes(lrFields, 1));
+      if (txt) return txt;
+    }
+    const interBytes = getProtoBytes(fields, 45);
+    if (interBytes) {
+      const iFields = parseProtobufFields(interBytes);
+      if (iFields) {
+        const bodySub = parseProtobufFields(getProtoBytes(iFields, 2));
+        const headerSub = parseProtobufFields(getProtoBytes(iFields, 1));
+        const parts = [
+          decodeProtoStringLeaf(getProtoBytes(headerSub, 1)),
+          decodeProtoStringLeaf(getProtoBytes(bodySub, 1))
+        ].filter(Boolean);
+        if (parts.length > 0) return parts.join("\n");
+      }
+    }
+
+    return "";
+  }
+
+  /**
+   * Extrae datos de encuesta desde MsgOpaqueData cuando pollName y pollOptions están almacenados en campos superiores (>= 15).
+   */
+  function extractPollFromMsgOpaqueFields(fields) {
+    if (!fields) return "";
+    let pollTitle = "";
+    const options = [];
+
+    for (const [fieldNum, entries] of fields.entries()) {
+      if (fieldNum < 15) continue;
+      const wire2Entries = entries.filter(e => e.wireType === 2 && e.value && e.value.length > 0);
+      if (wire2Entries.length === 0) continue;
+
+      // Detectar repeated PollOption { optional string name = 1; }
+      const parsedOptions = [];
+      let allValidOptions = true;
+      for (const ent of wire2Entries) {
+        const subFields = parseProtobufFields(ent.value);
+        if (!subFields || subFields.size > 3) {
+          allValidOptions = false;
+          break;
+        }
+        const optName = decodeProtoStringLeaf(getProtoBytes(subFields, 1));
+        if (!optName) {
+          allValidOptions = false;
+          break;
+        }
+        parsedOptions.push(optName);
+      }
+
+      if (allValidOptions && parsedOptions.length > 0 && (wire2Entries.length >= 2 || options.length === 0)) {
+        if (parsedOptions.length > options.length) {
+          options.length = 0;
+          for (const o of parsedOptions) options.push(`• ${o}`);
+        }
+        continue;
+      }
+
+      // Detectar pollName (string único en campos >= 15)
+      if (!pollTitle && wire2Entries.length === 1) {
+        const cand = decodeProtoStringLeaf(wire2Entries[0].value);
+        if (cand && !/^https?:\/\//i.test(cand)) {
+          pollTitle = cand;
+        }
+      }
+    }
+
+    if (!pollTitle) {
+      pollTitle = decodeProtoStringLeaf(getProtoBytes(fields, 1));
+    }
+    if (pollTitle || options.length > 0) {
+      return [pollTitle ? `📊 ${pollTitle}` : "", ...options].filter(Boolean).join("\n");
+    }
+    return "";
+  }
+
+  /**
+   * Extrae texto determinísticamente desde un submensaje MsgOpaqueData (WAWebProtobufsWeb.MsgOpaqueData):
+   *   1 = body (string texto en chat/vcard; miniatura JPEG b64 en multimedia)
+   *   2 = caption (string pie de foto/video/documento)
+   *   4 = loc (string ubicación)
+   *   9 = paymentNoteMsgBody (string nota de pago)
+   *  12 = title, 13 = description (metadatos rich/link)
+   *  14 = futureproofBuffer (bytes -> WAProto.Message)
+   */
+  function extractFromMsgOpaqueData(msgOpaqueBytes, msgType = "chat", isMedia = false) {
+    const empty = { text: "", thumbnail: null, futureproofBytes: null };
+    if (!msgOpaqueBytes || msgOpaqueBytes.length === 0) return empty;
+
+    const fields = parseProtobufFields(msgOpaqueBytes);
+    if (!fields) return empty;
+
+    const futureproofBytes = getProtoBytes(fields, 14);
+    let thumbnail = null;
+
+    // Rescatar miniatura JPEG en Base64 si MsgOpaqueData.body (campo 1) contiene '/9j/' o 'data:image'
+    const rawField1Bytes = getProtoBytes(fields, 1);
+    if (rawField1Bytes && rawField1Bytes.length > 30) {
+      const rawF1 = decodeProtoStringLeaf(rawField1Bytes, false);
+      if (rawF1 && (rawF1.startsWith("data:image") || rawF1.includes("/9j/"))) {
+        const idx = rawF1.indexOf("/9j/");
+        const b64Clean = idx !== -1 ? rawF1.substring(idx).trim() : rawF1;
+        thumbnail = b64Clean.startsWith("data:image") ? b64Clean : "data:image/jpeg;base64," + b64Clean;
+      }
+    }
+
+    // Audios, notas de voz y stickers nunca llevan texto de usuario
+    if (msgType === "ptt" || msgType === "audio" || msgType === "sticker") {
+      return { text: "", thumbnail, futureproofBytes };
+    }
+
+    // 1. Encuestas (poll_creation)
+    if (msgType === "poll_creation") {
+      const pollText = extractPollFromMsgOpaqueFields(fields) ||
+                       (futureproofBytes ? extractTextFromWAProtoMessage(futureproofBytes, false) : "");
+      return { text: pollText, thumbnail, futureproofBytes };
+    }
+
+    // 2. Multimedia con posible pie de texto (image, video, document)
+    if (isMedia) {
+      const caption = decodeProtoStringLeaf(getProtoBytes(fields, 2));
+      if (caption) return { text: caption, thumbnail, futureproofBytes };
+
+      if (futureproofBytes) {
+        const fpCap = extractTextFromWAProtoMessage(futureproofBytes, true);
+        if (fpCap) return { text: fpCap, thumbnail, futureproofBytes };
+      }
+
+      const bodyFallback = decodeProtoStringLeaf(rawField1Bytes, true);
+      return { text: bodyFallback, thumbnail, futureproofBytes };
+    }
+
+    // 3. Ubicación (location / live_location)
+    if (msgType === "location" || msgType === "live_location") {
+      const locParts = [
+        decodeProtoStringLeaf(getProtoBytes(fields, 4)),
+        decodeProtoStringLeaf(getProtoBytes(fields, 2)),
+        decodeProtoStringLeaf(rawField1Bytes, true)
+      ].filter(Boolean);
+      return { text: locParts.join(" — "), thumbnail, futureproofBytes };
+    }
+
+    // 4. Mensajes de texto estándar, vCards, respuestas interactivas, pagos, etc.
+    const body = decodeProtoStringLeaf(rawField1Bytes, true);
+    if (body) return { text: body, thumbnail, futureproofBytes };
+
+    const caption = decodeProtoStringLeaf(getProtoBytes(fields, 2));
+    if (caption) return { text: caption, thumbnail, futureproofBytes };
+
+    const payNote = decodeProtoStringLeaf(getProtoBytes(fields, 9));
+    if (payNote) return { text: payNote, thumbnail, futureproofBytes };
+
+    const loc = decodeProtoStringLeaf(getProtoBytes(fields, 4));
+    if (loc) return { text: loc, thumbnail, futureproofBytes };
+
+    if (futureproofBytes) {
+      const fpText = extractTextFromWAProtoMessage(futureproofBytes, false);
+      if (fpText) return { text: fpText, thumbnail, futureproofBytes };
+    }
+
+    if (msgType === "interactive" || msgType === "list" || msgType === "rich_response") {
+      const richParts = [
+        decodeProtoStringLeaf(getProtoBytes(fields, 12)),
+        decodeProtoStringLeaf(getProtoBytes(fields, 13))
+      ].filter(Boolean);
+      if (richParts.length > 0) return { text: richParts.join("\n"), thumbnail, futureproofBytes };
+    }
+
+    return { text: "", thumbnail, futureproofBytes };
+  }
+
+  /**
+   * Desempaqueta un buffer descifrado de `m.msgRowOpaqueData` (MsgRowOpaqueData):
+   *   Campo 1 = currentMsg (MsgOpaqueData)
+   *   Campo 2 = quotedMsg  (MsgOpaqueData)
+   */
+  function unpackMsgRowOpaqueData(decBuf) {
+    if (!decBuf) return { currentMsgBytes: null, quotedMsgBytes: null };
+    const opaqueBytes = new Uint8Array(decBuf);
+    if (opaqueBytes.length === 0) return { currentMsgBytes: null, quotedMsgBytes: null };
+
+    const rowFields = parseProtobufFields(opaqueBytes);
+    if (!rowFields) return { currentMsgBytes: null, quotedMsgBytes: null };
+
+    const f1 = getProtoBytes(rowFields, 1);
+    const f2 = getProtoBytes(rowFields, 2);
+
+    const f1IsOpaqueMsg = Boolean(f1 && parseProtobufFields(f1));
+    const f2IsOpaqueMsg = Boolean(f2 && parseProtobufFields(f2));
+
+    if (f1IsOpaqueMsg || f2IsOpaqueMsg) {
+      return {
+        currentMsgBytes: f1IsOpaqueMsg ? f1 : null,
+        quotedMsgBytes: f2IsOpaqueMsg ? f2 : null
+      };
+    }
+
+    // Fallback seguro si el buffer ya fuera directamente un MsgOpaqueData sin envoltorio MsgRowOpaqueData
+    return { currentMsgBytes: opaqueBytes, quotedMsgBytes: null };
+  }
+
+  /**
+   * Busca ContextInfo (campo 17) únicamente dentro de un WAProto.Message válido (nunca sobre strings planos).
+   */
+  function findContextInfoInWAProto(protoBytes, depth = 0) {
+    if (depth > 5 || !protoBytes || protoBytes.length < 3) return null;
+    const fields = parseProtobufFields(protoBytes);
+    if (!fields) return null;
+
+    const directCtx = getProtoBytes(fields, 17);
+    if (directCtx && parseProtobufFields(directCtx)) return directCtx;
+
+    // Contenedores de mensaje en WAProto.Message que pueden alojar ContextInfo en su campo 17
+    const containerFieldNums = [3, 4, 5, 6, 7, 8, 9, 18, 29, 36, 37, 39, 40, 42, 43, 45, 49, 51, 55, 58, 59, 60, 64];
+    for (const fn of containerFieldNums) {
+      const sub = getProtoBytes(fields, fn);
+      if (sub) {
+        const found = findContextInfoInWAProto(sub, depth + 1);
+        if (found) return found;
+      }
+    }
+    // En FutureProofMessage (ephemeral/viewOnce/edited), el mensaje interno está en el campo 1
+    if (depth > 0) {
+      const inner1 = getProtoBytes(fields, 1);
+      if (inner1 && parseProtobufFields(inner1)) {
+        const found = findContextInfoInWAProto(inner1, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function extractContextInfoFromOpaque(quotedMsgBytes, futureproofBytes) {
     let stanzaId = null;
     let participant = null;
     let quotedBody = "";
 
-    let pos = 0;
-    while (pos < ctxBytes.length) {
-      const tagRes = readVarint(ctxBytes, pos);
-      if (!tagRes || tagRes.val <= 0) break;
-      pos = tagRes.pos;
-      const wireType = tagRes.val & 7;
-      const fieldNum = Math.floor(tagRes.val / 8);
-
-      if (wireType === 0) {
-        const v = readVarint(ctxBytes, pos);
-        if (!v) break;
-        pos = v.pos;
-      } else if (wireType === 1) {
-        pos += 8;
-      } else if (wireType === 5) {
-        pos += 4;
-      } else if (wireType === 2) {
-        const lenRes = readVarint(ctxBytes, pos);
-        if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > ctxBytes.length) break;
-        const sub = ctxBytes.subarray(lenRes.pos, lenRes.pos + lenRes.val);
-        pos = lenRes.pos + lenRes.val;
-
-        if (fieldNum === 1) {
-          try { stanzaId = new TextDecoder("utf-8").decode(sub).trim(); } catch (e) {}
-        } else if (fieldNum === 2) {
-          try { participant = new TextDecoder("utf-8").decode(sub).trim(); } catch (e) {}
-        } else if (fieldNum === 3) {
-          quotedBody = extractTextFromBuffer(sub, false);
-        }
-      } else {
-        break;
+    // 1. Extraer texto citado desde MsgRowOpaqueData.quotedMsg (MsgOpaqueData: campo 1=body o campo 2=caption)
+    if (quotedMsgBytes) {
+      const qExtracted = extractFromMsgOpaqueData(quotedMsgBytes, "chat", false);
+      if (qExtracted.text) {
+        quotedBody = qExtracted.text;
       }
     }
 
-    if (!quotedBody && topQuotedBody) {
-      quotedBody = topQuotedBody;
+    // 2. Si existe futureproofBuffer (WAProto.Message), extraer stanzaId, participant y fallback de quotedMessage desde ContextInfo
+    if (futureproofBytes) {
+      const ctxBytes = findContextInfoInWAProto(futureproofBytes, 0);
+      const ctxFields = parseProtobufFields(ctxBytes);
+      if (ctxFields) {
+        stanzaId = decodeProtoStringLeaf(getProtoBytes(ctxFields, 1), false) || null;
+        participant = decodeProtoStringLeaf(getProtoBytes(ctxFields, 2), false) || null;
+        if (!quotedBody) {
+          const qProtoMsg = getProtoBytes(ctxFields, 3);
+          if (qProtoMsg) {
+            quotedBody = extractTextFromWAProtoMessage(qProtoMsg, false);
+          }
+        }
+      }
     }
 
+    if (!stanzaId && !participant && !quotedBody) return null;
     return { stanzaId, participant, quotedBody };
   }
 
-  function scanLengthPrefixedStrings(bytes) {
-    const candidates = [];
-    for (let pos = 0; pos < bytes.length - 1; pos++) {
-      const tagByte = bytes[pos];
-      // Tags de campos string en Protobuf (wireType === 2):
-      // 0x0a (field 1: conversation/text), 0x12 (field 2: text), 0x1a (field 3: caption), 0x32 (field 6: caption)
-      if ((tagByte & 7) !== 2) continue;
-      const fieldNum = tagByte >> 3;
-      if (fieldNum < 1 || fieldNum > 15) continue;
-
-      const lenRes = readVarint(bytes, pos + 1);
-      if (!lenRes || lenRes.val < 1 || lenRes.pos + lenRes.val > bytes.length) continue;
-
-      const endPos = lenRes.pos + lenRes.val;
-      // Si no termina exactamente al final del buffer, verificar que el siguiente byte parezca un tag Protobuf válido o 0
-      if (endPos < bytes.length) {
-        const nextByte = bytes[endPos];
-        const nextWire = nextByte & 7;
-        if (nextByte !== 0 && nextWire > 5) continue;
-      }
-
-      const sub = bytes.subarray(lenRes.pos, endPos);
-      try {
-        const str = new TextDecoder("utf-8", { fatal: true }).decode(sub);
-        if (!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(str)) {
-          const cleaned = str.trim();
-          if (cleaned && !isGarbageString(cleaned)) {
-            const bonus = (fieldNum === 1 || fieldNum === 2 || fieldNum === 3 || fieldNum === 6) ? 1000 : 0;
-            const exactEndBonus = (endPos === bytes.length || bytes[endPos] === 0x9a || bytes[endPos] === 0x8a || (bytes[endPos] & 7) === 0 || (bytes[endPos] & 7) === 2) ? 200 : 0;
-            candidates.push({ text: cleaned, score: cleaned.length + bonus + exactEndBonus });
-          }
-        }
-      } catch (e) {}
+  function extractForwardingFromWAProto(futureproofBytes) {
+    if (!futureproofBytes || futureproofBytes.length < 3) {
+      return { isForwarded: false, forwardingScore: 0 };
     }
-    return candidates;
-  }
-
-  function stripProtobufLengthPrefix(chunk) {
-    if (!chunk || chunk.length < 2) return chunk;
-    for (let idx = 0; idx <= Math.min(2, chunk.length - 2); idx++) {
-      if (chunk[idx] === 10) {
-        const lenRes = readVarint(chunk, idx + 1);
-        if (lenRes && lenRes.val > 0 && Math.abs((chunk.length - lenRes.pos) - lenRes.val) <= 2) {
-          return chunk.slice(lenRes.pos);
-        }
-      }
+    const ctxBytes = findContextInfoInWAProto(futureproofBytes, 0);
+    const ctxFields = parseProtobufFields(ctxBytes);
+    if (!ctxFields) {
+      return { isForwarded: false, forwardingScore: 0 };
     }
-    const firstLen = readVarint(chunk, 0);
-    if (firstLen && firstLen.val > 0 && firstLen.pos < chunk.length && (chunk.length - firstLen.pos) === firstLen.val) {
-      return chunk.slice(firstLen.pos);
+    const fwdScore = getProtoVarint(ctxFields, 21) || 0;
+    const isFwdFlag = getProtoVarint(ctxFields, 22) === 1;
+    if (isFwdFlag || fwdScore > 0) {
+      return { isForwarded: true, forwardingScore: Math.max(1, fwdScore) };
     }
-    return chunk;
-  }
-
-  function extractTextFromBuffer(buffer, isMedia = false) {
-    if (!buffer) return "";
-    let bytes = new Uint8Array(buffer);
-    if (bytes.length === 0) return "";
-
-    // Si buffer es un MsgRowOpaqueData con campo 1 (currentMsg), aislar el submensaje del mensaje actual
-    const topFields = parseProtobufTopFields(bytes);
-    if (topFields.has(1)) {
-      bytes = topFields.get(1);
-    }
-
-    // 1. Primero usar el parser estructurado de Protobuf probando offsets 0..16
-    for (let offset = 0; offset <= Math.min(16, bytes.length - 2); offset++) {
-      const protoCandidates = extractProtobufStrings(offset === 0 ? bytes : bytes.subarray(offset), 0, isMedia);
-      if (protoCandidates.length > 0) {
-        protoCandidates.sort((a, b) => b.score - a.score);
-        if (protoCandidates[0].score >= 1000 || offset === 0) {
-          return protoCandidates[0].text;
-        }
-      }
-    }
-
-    // En mensajes multimedia (imagen/video/documento), no ejecutar escaneo de bytes sueltos para no capturar fragmentos ASCII de miniaturas JPEG binarias o hashes
-    if (isMedia) return "";
-
-    // 2. Escáner directo de campos length-prefixed (0x0a, 0x12, 0x1a, 0x32) en cualquier posición de cabecera
-    const scannedCandidates = scanLengthPrefixedStrings(bytes);
-    if (scannedCandidates.length > 0) {
-      scannedCandidates.sort((a, b) => b.score - a.score);
-      return scannedCandidates[0].text;
-    }
-
-    // 3. Fallback seguro reconociendo únicamente secuencias UTF-8 válidas (evita que tags Protobuf como 0x9a o 0x8a rompan TextDecoder)
-    const valid = [];
-    let cur = [];
-
-    function flushCur() {
-      if (cur.length >= 1) {
-        try {
-          const stripped = stripProtobufLengthPrefix(new Uint8Array(cur));
-          let s = new TextDecoder("utf-8", { fatal: false }).decode(stripped).replace(/\ufffd/g, "").trim();
-          s = s.replace(/^[a-zA-Z0-9]{1,2}\r?\n[\x20-\x7e]/, "").trim();
-          if (s.length >= 1 && !isGarbageString(s)) valid.push(s);
-        } catch (e) {}
-      }
-      cur = [];
-    }
-
-    let i = 0;
-    while (i < bytes.length) {
-      const b = bytes[i];
-      if ((b >= 32 && b <= 126) || b === 9 || b === 10 || b === 13) {
-        cur.push(b);
-        i++;
-      } else if (b >= 0xC2 && b <= 0xDF && i + 1 < bytes.length && (bytes[i + 1] & 0xC0) === 0x80) {
-        cur.push(b, bytes[i + 1]);
-        i += 2;
-      } else if (b >= 0xE0 && b <= 0xEF && i + 2 < bytes.length && (bytes[i + 1] & 0xC0) === 0x80 && (bytes[i + 2] & 0xC0) === 0x80) {
-        cur.push(b, bytes[i + 1], bytes[i + 2]);
-        i += 3;
-      } else if (b >= 0xF0 && b <= 0xF4 && i + 3 < bytes.length && (bytes[i + 1] & 0xC0) === 0x80 && (bytes[i + 2] & 0xC0) === 0x80 && (bytes[i + 3] & 0xC0) === 0x80) {
-        cur.push(b, bytes[i + 1], bytes[i + 2], bytes[i + 3]);
-        i += 4;
-      } else {
-        flushCur();
-        i++;
-      }
-    }
-    flushCur();
-
-    if (valid.length === 0) return "";
-    valid.sort((a, b) => b.length - a.length);
-    return valid[0];
-  }
-
-  function extractForwardingFromBuffer(buffer) {
-    if (!buffer) return { isForwarded: false, forwardingScore: 0 };
-    const bytes = new Uint8Array(buffer);
-    if (bytes.length < 3) return { isForwarded: false, forwardingScore: 0 };
-
-    // 1. Escaneo rápido de firma exacta ContextInfo en WAProto:
-    // field 21 (forwardingScore, tag 0xa8 0x01) + field 22 (isForwarded, tag 0xb0 0x01 0x01)
-    for (let i = 0; i < bytes.length - 2; i++) {
-      if (bytes[i] === 0xa8 && bytes[i + 1] === 0x01) {
-        const scoreRes = readVarint(bytes, i + 2);
-        if (scoreRes && scoreRes.val > 0 && scoreRes.val <= 1000) {
-          const nextPos = scoreRes.pos;
-          if (nextPos + 2 < bytes.length && bytes[nextPos] === 0xb0 && bytes[nextPos + 1] === 0x01 && bytes[nextPos + 2] === 0x01) {
-            return { isForwarded: true, forwardingScore: scoreRes.val };
-          }
-        }
-      }
-    }
-
-    // 2. Búsqueda estructurada recursiva en submensajes Protobuf válidos (ContextInfo)
-    function checkSubmessage(sub, depth) {
-      if (depth > 5 || !sub || sub.length < 3) return null;
-      let pos = 0;
-      let hasIsForwarded = false;
-      let fwdScore = 0;
-      let validFields = 0;
-
-      while (pos < sub.length) {
-        const tagRes = readVarint(sub, pos);
-        if (!tagRes || tagRes.val <= 0) return null;
-        pos = tagRes.pos;
-        const wireType = tagRes.val & 7;
-        const fieldNum = Math.floor(tagRes.val / 8);
-        if (fieldNum <= 0 || fieldNum > 500) return null;
-
-        if (wireType === 0) {
-          const v = readVarint(sub, pos);
-          if (!v) return null;
-          pos = v.pos;
-          validFields++;
-          if (depth >= 1 && fieldNum === 21 && v.val > 0 && v.val <= 1000) {
-            fwdScore = v.val;
-          } else if (depth >= 1 && fieldNum === 22 && v.val === 1) {
-            hasIsForwarded = true;
-          }
-        } else if (wireType === 1) {
-          pos += 8;
-          if (pos > sub.length) return null;
-          validFields++;
-        } else if (wireType === 5) {
-          pos += 4;
-          if (pos > sub.length) return null;
-          validFields++;
-        } else if (wireType === 2) {
-          const lenRes = readVarint(sub, pos);
-          if (!lenRes || lenRes.val < 0 || lenRes.pos + lenRes.val > sub.length) return null;
-          const child = sub.subarray(lenRes.pos, lenRes.pos + lenRes.val);
-          pos = lenRes.pos + lenRes.val;
-          validFields++;
-          const nestedRes = checkSubmessage(child, depth + 1);
-          if (nestedRes && nestedRes.isForwarded) return nestedRes;
-        } else {
-          return null;
-        }
-      }
-
-      if (pos === sub.length && validFields > 0 && (hasIsForwarded || fwdScore > 0)) {
-        return { isForwarded: true, forwardingScore: Math.max(1, fwdScore) };
-      }
-      return null;
-    }
-
-    for (let offset = 0; offset <= Math.min(16, bytes.length - 3); offset++) {
-      const res = checkSubmessage(offset === 0 ? bytes : bytes.subarray(offset), 0);
-      if (res && res.isForwarded) return res;
-    }
-
     return { isForwarded: false, forwardingScore: 0 };
   }
 
@@ -1118,27 +1192,25 @@
             return null;
           }
           const isMedia = m.type in { image: 1, video: 1, sticker: 1, ptt: 1, audio: 1, document: 1 };
-          const caption = m.caption || "";
+          const caption = typeof m.caption === "string" ? m.caption : "";
           const rawBody = (typeof m.body === "string" && m.body) ? m.body : "";
-
-          const isBinaryOrB64 = (s) => {
-            if (!s) return false;
-            if (s.startsWith('data:image') || s.includes('/9j/')) return true;
-            if (s.length > 40 && !/\s/.test(s) && /^[A-Za-z0-9+/=_\-\*\&\"\'\(\)\%\;\:\$\^]+$/.test(s)) return true;
-            return false;
-          };
 
           let bodyText = "";
           if (isMedia) {
-            if (caption && !isBinaryOrB64(caption)) {
+            if (caption && !isBase64MediaBlob(caption)) {
               bodyText = caption;
-            } else if (rawBody && !isBinaryOrB64(rawBody)) {
+            } else if (rawBody && !isBase64MediaBlob(rawBody) && !(m.type in { sticker: 1, ptt: 1, audio: 1 })) {
               bodyText = rawBody;
             }
           } else if (m.type === "revoked") {
             bodyText = "🚫 Este mensaje fue eliminado";
+          } else if (m.type === "poll_creation" && m.pollName) {
+            const opts = Array.isArray(m.pollOptions)
+              ? m.pollOptions.map(o => (o && (o.name || o.optionName)) ? `• ${o.name || o.optionName}` : "").filter(Boolean)
+              : [];
+            bodyText = [`📊 ${m.pollName}`, ...opts].join("\n");
           } else {
-            bodyText = isBinaryOrB64(rawBody) ? "" : (rawBody || caption);
+            bodyText = isBase64MediaBlob(rawBody) ? (isBase64MediaBlob(caption) ? "" : caption) : (rawBody || caption);
           }
 
           // Estado de reenviado desde propiedades directas en IndexedDB
@@ -1150,39 +1222,32 @@
             forwardingScore > 0
           );
 
-          // Si falta texto o no hay marca explícita de reenviado y existe msgRowOpaqueData, descifrar e inspeccionar Protobuf
+          // Si existe msgRowOpaqueData, desempaquetar determinísticamente MsgRowOpaqueData -> MsgOpaqueData
           const canHaveEncryptedText = !isMedia || (m.type in { image: 1, video: 1, document: 1 });
           let quotedInfoFromOpaque = null;
+          let opaqueThumbnail = null;
           if (m.msgRowOpaqueData) {
             const decBuf = await decryptOpaqueData(m.msgRowOpaqueData);
             if (decBuf) {
-              const opaqueBytes = new Uint8Array(decBuf);
-              const topFields = parseProtobufTopFields(opaqueBytes);
-              // MsgRowOpaqueData: Campo 1 = currentMsg (mensaje actual), Campo 2 = quotedMsg (mensaje citado)
-              const currentMsgBytes = topFields.get(1) || opaqueBytes;
-              const quotedMsgBytes = topFields.get(2) || null;
+              const { currentMsgBytes, quotedMsgBytes } = unpackMsgRowOpaqueData(decBuf);
+              const opaqueCurrent = currentMsgBytes
+                ? extractFromMsgOpaqueData(currentMsgBytes, m.type || "chat", isMedia)
+                : { text: "", thumbnail: null, futureproofBytes: null };
 
-              if (!bodyText && canHaveEncryptedText) {
-                const decoded = extractTextFromBuffer(currentMsgBytes, isMedia);
-                if (decoded && !isBinaryOrB64(decoded)) {
-                  bodyText = decoded;
-                }
+              if (opaqueCurrent.thumbnail) {
+                opaqueThumbnail = opaqueCurrent.thumbnail;
               }
-              if (!isForwarded) {
-                const fwdInfo = extractForwardingFromBuffer(currentMsgBytes);
+              if (!bodyText && canHaveEncryptedText && opaqueCurrent.text && !isBase64MediaBlob(opaqueCurrent.text)) {
+                bodyText = opaqueCurrent.text;
+              }
+              if (!isForwarded && opaqueCurrent.futureproofBytes) {
+                const fwdInfo = extractForwardingFromWAProto(opaqueCurrent.futureproofBytes);
                 if (fwdInfo.isForwarded) {
                   isForwarded = true;
                   forwardingScore = Math.max(forwardingScore, fwdInfo.forwardingScore || 1);
                 }
               }
-              quotedInfoFromOpaque = extractContextInfoFromBuffer(decBuf);
-              if (quotedMsgBytes && (!quotedInfoFromOpaque || !quotedInfoFromOpaque.quotedBody)) {
-                const qBody = extractTextFromBuffer(quotedMsgBytes, false);
-                if (qBody) {
-                  if (!quotedInfoFromOpaque) quotedInfoFromOpaque = {};
-                  quotedInfoFromOpaque.quotedBody = qBody;
-                }
-              }
+              quotedInfoFromOpaque = extractContextInfoFromOpaque(quotedMsgBytes, opaqueCurrent.futureproofBytes);
             }
           }
           if (isForwarded && forwardingScore < 1) {
@@ -1190,8 +1255,8 @@
           }
 
           if (bodyText) {
-            bodyText = bodyText.replace(/\ufffd/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").trim();
-            if (m.type in { sticker: 1, ptt: 1, audio: 1 } && bodyText.length <= 15 && !bodyText.includes(" ")) {
+            bodyText = bodyText.replace(/\ufffd/g, "").replace(/[\x0b\x0c]/g, "\n").replace(/[\x00-\x08\x0e-\x1f\x7f]/g, "").trim();
+            if (m.type in { sticker: 1, ptt: 1, audio: 1 }) {
               bodyText = "";
             }
           }
@@ -1205,12 +1270,16 @@
           } else if (m.thumbnail) {
             const tB64 = bufferToBase64(m.thumbnail);
             if (tB64) thumbnailStr = tB64.startsWith('data:image') ? tB64 : 'data:image/jpeg;base64,' + tB64;
+          } else if (opaqueThumbnail) {
+            thumbnailStr = opaqueThumbnail;
           }
 
           const qMsg = m.quotedMsg || {};
           const quotedMsgId = extractId(m.quotedStanzaID || qMsg.id || (quotedInfoFromOpaque && quotedInfoFromOpaque.stanzaId));
           const quotedAuthor = extractId(m.quotedParticipant || qMsg.author || qMsg.from || (quotedInfoFromOpaque && quotedInfoFromOpaque.participant));
-          let quotedBody = qMsg.caption || (typeof qMsg.body === "string" && !isBinaryOrB64(qMsg.body) ? qMsg.body : "") || (quotedInfoFromOpaque && quotedInfoFromOpaque.quotedBody) || "";
+          let quotedBody = (typeof qMsg.caption === "string" && !isBase64MediaBlob(qMsg.caption) ? qMsg.caption : "") ||
+                           (typeof qMsg.body === "string" && !isBase64MediaBlob(qMsg.body) ? qMsg.body : "") ||
+                           (quotedInfoFromOpaque && quotedInfoFromOpaque.quotedBody) || "";
 
           return {
             id: msgId,

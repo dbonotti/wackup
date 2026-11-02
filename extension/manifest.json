@@ -35,6 +35,11 @@
       "js": ["crypto_sync.js"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["viewer_bridge.js"],
+      "run_at": "document_idle"
     }
   ]
 }

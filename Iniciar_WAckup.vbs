@@ -44,9 +44,8 @@ If Err.Number <> 0 Then
     End If
 End If
 
-' 2. Esperar brevemente a que el servidor inicialice y abrir el navegador en primer plano
-WScript.Sleep 1500
-WshShell.Run targetUrl, 1, False
+' El propio servidor (whatsapp_viewer.py) detecta si ya existe una pestaña activa
+' y solo abre el navegador cuando no hay ninguna abierta.
 
 Set WshShell = Nothing
 Set fso = Nothing
