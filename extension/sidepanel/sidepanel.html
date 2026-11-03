@@ -36,15 +36,28 @@
         <input type="text" id="cfg-server-url" class="form-control" placeholder="http://127.0.0.1:8080">
       </div>
       <div class="form-group mb-2">
-        <label for="cfg-office-pin">PIN de Oficina (Opcional):</label>
-        <input type="password" id="cfg-office-pin" class="form-control" placeholder="PIN de acceso LAN">
+        <label for="cfg-office-pin">PIN de Oficina (para Modo LAN):</label>
+        <input type="password" id="cfg-office-pin" class="form-control" placeholder="PIN de 6 dígitos">
       </div>
       <div class="form-group mb-2">
-        <label for="cfg-operator-name">Nombre de Operador:</label>
-        <input type="text" id="cfg-operator-name" class="form-control" placeholder="Ej: Juan">
+        <button type="button" id="btn-check-server" class="btn-secondary full-width" style="padding: 6px 12px; font-size: 12.5px;">
+          🔌 Conectar y Cargar Operadores
+        </button>
+      </div>
+      <div id="cfg-operator-section" class="form-group mb-2" style="display: none;">
+        <label for="cfg-operator-select">Operador de esta PC:</label>
+        <select id="cfg-operator-select" class="form-control">
+          <option value="">-- Selecciona tu nombre --</option>
+        </select>
+        <div id="cfg-operator-status-box" class="cfg-status-box mt-1" style="display: none;">
+          <div id="cfg-operator-status-msg" class="cfg-status-msg"></div>
+          <button type="button" id="btn-kick-operator" class="btn-link-action" style="display: none;">
+            ⚠️ Liberar sesión anterior de este operador
+          </button>
+        </div>
       </div>
       <div class="settings-actions">
-        <button id="btn-save-cfg" class="btn-primary full-width">Guardar Configuración</button>
+        <button id="btn-save-cfg" class="btn-primary full-width">Guardar y Conectar</button>
         <button id="btn-sync-all-full" class="btn-secondary full-width">📥 Sincronizar Historial Completo</button>
       </div>
       <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>

@@ -1225,6 +1225,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 "local_ips": ips,
                 "port": PORT,
                 "known_operators": settings.get("known_operators", []),
+                "online_operators": sse_hub.get_sse_hub().get_online_operators(),
                 "is_local": is_local,
                 "needs_pin": not can_see_pin
             }
@@ -1852,8 +1853,19 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
                 settings = config.get_system_settings()
                 expected_pin = str(settings.get("lan_pin", "")).strip()
+                network_mode = settings.get("network_mode", "local")
+                is_local = self.is_local_client()
 
-                if not pin or pin != expected_pin:
+                # Si está en modo LAN o se requiere PIN, validar si se especificó expected_pin
+                if (network_mode == "lan" or not is_local) and expected_pin:
+                    if not pin or pin != expected_pin:
+                        self.send_json(401, {
+                            "ok": False,
+                            "error": "PIN de oficina incorrecto",
+                            "needs_pin": True
+                        })
+                        return
+                elif pin and expected_pin and pin != expected_pin:
                     self.send_json(401, {
                         "ok": False,
                         "error": "PIN de oficina incorrecto",
@@ -1861,33 +1873,65 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     })
                     return
 
+                known_ops = settings.get("known_operators", [])
+                online_ops = sse_hub.get_sse_hub().get_online_operators()
+
+                # Si NO se especifica operator_name, responder verificación exitosa con lista de operadores y estado
                 if not operator_name:
-                    self.send_json(400, {
-                        "ok": False,
-                        "error": "Por favor selecciona un operador de la lista.",
-                        "needs_pin": True
+                    self.send_json(200, {
+                        "ok": True,
+                        "network_mode": network_mode,
+                        "known_operators": known_ops,
+                        "online_operators": online_ops,
+                        "message": "PIN verificado correctamente"
                     })
                     return
 
-                known_ops = settings.get("known_operators", [])
                 if known_ops:
                     matched_op = next((existing for existing in known_ops if existing.lower() == operator_name.lower()), None)
                     if not matched_op:
                         self.send_json(400, {
                             "ok": False,
                             "error": "El operador seleccionado no está dado de alta. Debe registrarse previamente desde Configuración en la PC principal.",
-                            "needs_pin": True
+                            "needs_pin": True,
+                            "known_operators": known_ops,
+                            "online_operators": online_ops
                         })
                         return
                     operator_name = matched_op
                 else:
                     # Si no hay operadores en el sistema, darlo de alta automáticamente
                     config.update_system_settings(add_operator=operator_name)
+                    known_ops = [operator_name]
 
                 self.send_json(200, {
                     "ok": True,
                     "operator_name": operator_name,
+                    "known_operators": known_ops,
+                    "online_operators": online_ops,
                     "message": "PIN verificado correctamente"
+                })
+                return
+
+            elif url.path == "/api/presence/kick":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                target_op = str(payload.get("operator") or payload.get("operator_name", "")).strip()
+                if not target_op:
+                    self.send_json(400, {"ok": False, "error": "Falta el nombre de operador a liberar"})
+                    return
+                kicked = sse_hub.get_sse_hub().kick_operator(target_op)
+                online_ops = sse_hub.get_sse_hub().get_online_operators()
+                self.send_json(200, {
+                    "ok": True,
+                    "kicked": kicked,
+                    "operator": target_op,
+                    "online_operators": online_ops,
+                    "message": f"Sesión de {target_op} liberada correctamente"
                 })
                 return
 

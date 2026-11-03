@@ -20,7 +20,7 @@
 1. **Paquete Portable "Doble Clic":**  
    Ya no requiere tener Python ni Git instalados en la PC. El paquete incluye un runtime Python embebido autónomo.
 2. **Copiloto Nativo en Panel Lateral (`chrome.sidePanel`):**  
-   Integrado limpiamente en la interfaz de Chromium (Chrome, Edge, Brave), sin tocar el diseño de WhatsApp Web. Incluye panel colapsable de ajustes rápidos en el encabezado.
+   Integrado limpiamente en la interfaz de Chromium (Chrome, Edge, Brave), sin tocar el diseño de WhatsApp Web. Incluye panel colapsable de ajustes rápidos en el encabezado con validación interactiva de servidor y carga dinámica de operadores oficiales.
 3. **Radar de Atención Inteligente & Gestión de Pendientes:**  
    - Ventana operativa de los últimos 7 días para evitar sobrecarga de chats antiguos.
    - Descarte rápido en 1 clic y descarte fundamentado con registro en bitácora (*No requiere respuesta, Resuelto por otro canal, Personal, Spam*).
@@ -39,10 +39,12 @@
    - `🎯 Radar de Atención & Métricas`: Embudo de no respondidos, SLA de respuesta y mapa de calor de horarios pico.
    - `🏷️ CRM Comercial & Plantillas`: Tablero Kanban de ventas, notas compartidas y respuestas rápidas configurables.
    - `⚙️ Sistema y Red`: Copias de seguridad en caliente, logs en vivo, diagnóstico y configuración LAN.
-7. **Modo Equipo en Red Local (LAN):**  
-   Múltiples compañeros en la misma oficina pueden conectarse simultáneamente al Visor y al Copiloto usando un **PIN simple de 6 dígitos**.
+7. **Modo Equipo en Red Local (LAN) y Conexión Asistida:**  
+   - Múltiples compañeros en la misma oficina pueden conectarse simultáneamente al Visor y al Copiloto usando un **PIN simple de 6 dígitos**.
+   - **Flujo guiado en la Extensión**: Validación de URL y PIN en 1 clic que carga la lista oficial de operadores autorizados (`known_operators`), evitando discrepancias o nombres no registrados.
+   - **Gestión de concurrencia y sesiones activas**: Indicadores de operadores `(En línea)` en tiempo real y herramientas para liberar o desconectar sesiones colgadas (`⚡ Liberar`) tanto desde la extensión como desde el Visor central.
 8. **Semáforo Anti-Colisión y Bitácora en Tiempo Real:**  
-   Vía Server-Sent Events (`SSE`), visualiza quién está viendo cada chat para no pisarse al responder, y registra una bitácora cronológica inmutable por contacto.
+   Vía Server-Sent Events (`SSE`), visualiza quién está viendo cada chat para no pisarse al responder (con discriminación inteligente para no alertar sobre uno mismo en doble pantalla), y registra una bitácora cronológica inmutable por contacto.
 9. **Actualizador Nativo por HTTPS:**  
    Comprueba y aplica actualizaciones desde GitHub Releases sin Git, generando antes un backup consistente con `sqlite3.Connection.backup()`.
 10. **Bandeja del Sistema (System Tray):**  
@@ -81,10 +83,14 @@ python whatsapp_viewer.py --console
 ## 🌐 Modo Equipo en Red Local (LAN)
 
 Para compartir el CRM y el historial con otras PCs de la oficina:
-1. En la PC principal, ingresa a **`⚙️ Sistema y Red`** en el Visor Web.
-2. Haz clic en **`Cambiar a Modo LAN`**.
-3. El servidor mostrará el **PIN de Oficina** y las direcciones IP locales disponibles (ej. `http://192.168.1.50:8080`).
-4. Cualquier compañero ingresa a esa URL desde su navegador o configura la IP en su extensión con el PIN para comenzar a colaborar en tiempo real.
+1. **En la PC principal**:
+   - Ingresa a **`⚙️ Sistema y Red`** (`Alt + 4`) en el Visor Web.
+   - Da de alta a los integrantes del equipo en la sección **`Operadores y Equipo de Trabajo`** (`+ Nuevo Operador`).
+   - Haz clic en **`Cambiar a Modo LAN`**: el servidor mostrará el **PIN de Oficina** y las direcciones IP locales disponibles (ej. `http://192.168.1.50:8080`).
+2. **En las PCs de los compañeros**:
+   - **Desde el Visor Web**: Ingresan a la URL de la PC principal e introducen el PIN seleccionando su nombre oficial de la lista.
+   - **Desde la Extensión (Copiloto lateral)**: Abren el ícono ⚙️ en el encabezado, ingresan la URL y el PIN de oficina, y presionan **`Conectar y Cargar Operadores`**. El sistema validará la conexión y desplegará la lista oficial de operadores autorizados con su estado en vivo (`En línea` / disponible).
+   - **Liberación de sesiones colgadas**: Si una sesión previa quedó abierta por error en otra máquina, tanto el administrador en el Visor como el usuario en la extensión pueden presionar **`Liberar sesión`** para reanudar el trabajo de inmediato.
 
 ---
 

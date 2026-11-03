@@ -3616,6 +3616,13 @@
         }
 
         knownOperatorsList = data.known_operators || [];
+        const savedOp = localStorage.getItem('wackup_operator_name');
+        if ((!savedOp || savedOp === 'Operador' || myOperatorName === 'Operador') && knownOperatorsList.length > 0) {
+          myOperatorName = knownOperatorsList[0];
+          localStorage.setItem('wackup_operator_name', myOperatorName);
+          const opEl = document.getElementById('myOperatorNameDisplay');
+          if (opEl) opEl.textContent = myOperatorName;
+        }
         updateCopilotOperatorOptions();
         renderTeamOperatorsList();
 
@@ -3667,6 +3674,10 @@
           ? '<span style="background:rgba(0,168,132,0.15); color:#00a884; border:1px solid rgba(0,168,132,0.3); padding:3px 10px; border-radius:12px; font-size:11.5px; font-weight:600;">✓ Activo en esta PC</span>'
           : `<button type="button" class="btn-card-action" style="padding:3px 10px; font-size:11.5px;" onclick="setThisPcOperator('${escapeHtml(op)}')">Usar aquí</button>`;
 
+        const kickBtn = online
+          ? `<button type="button" class="btn-card-action" title="Desconectar sesión y liberar operador" style="padding:4px 8px; font-size:12px; margin-right:4px; color:#f59e0b; border-color:rgba(245,158,11,0.3);" onclick="kickOperatorAdmin('${escapeHtml(op)}')">⚡ Liberar</button>`
+          : '';
+
         return `
           <tr>
             <td style="text-align: center; font-size: 16px;">👤</td>
@@ -3674,6 +3685,7 @@
             <td>${presenceBadge}</td>
             <td>${pcBadge}</td>
             <td style="text-align: right; white-space: nowrap;">
+              ${kickBtn}
               <button type="button" class="btn-card-action" title="Renombrar operador" style="padding:4px 8px; font-size:12px; margin-right:4px;" onclick="openEditOperatorDialog('${escapeHtml(op)}')">✏️</button>
               <button type="button" class="btn-card-action btn-danger-action" title="Eliminar operador" style="padding:4px 8px; font-size:12px; color:#ef4444;" onclick="deleteOperator('${escapeHtml(op)}')">🗑️</button>
             </td>
@@ -3784,6 +3796,30 @@
         showToast('Error de comunicación con el servidor');
       }
     }
+
+    async function kickOperatorAdmin(opName) {
+      if (!opName) return;
+      if (!confirm(`¿Estás seguro de que deseas forzar la desconexión y liberar la sesión activa de "${opName}"?`)) {
+        return;
+      }
+      try {
+        const res = await authFetch('/api/presence/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operator: opName })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          showToast(`✓ Sesión de "${opName}" liberada con éxito`);
+          renderTeamOperatorsList();
+        } else {
+          showToast(data.error || 'Error al liberar sesión');
+        }
+      } catch (e) {
+        showToast('Error de red al intentar liberar operador');
+      }
+    }
+    window.kickOperatorAdmin = kickOperatorAdmin;
 
     function setThisPcOperator(opName, notify = true) {
       if (!opName) return;

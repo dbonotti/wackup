@@ -101,6 +101,7 @@ const ALLOWED_ENDPOINTS = [
   { method: "GET", pattern: /^\/api\/presence(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/presence\/heartbeat\/?$/ },
   { method: "POST", pattern: /^\/api\/presence\/leave\/?$/ },
+  { method: "POST", pattern: /^\/api\/presence\/kick\/?$/ },
   { method: "GET", pattern: /^\/api\/copilot\/notes\/log(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/copilot\/notes\/log\/?$/ },
   { method: "POST", pattern: /^\/api\/copilot\/notes\/log\/delete\/?$/ },
@@ -280,13 +281,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     const headers = { "Accept": "application/json" };
-    if (config.officePin) {
-      headers["X-WAckup-Pin"] = config.officePin;
-      headers["X-Office-PIN"] = config.officePin;
+    const effectivePin = request.pin !== undefined ? request.pin : config.officePin;
+    if (effectivePin) {
+      headers["X-WAckup-Pin"] = effectivePin;
+      headers["X-Office-PIN"] = effectivePin;
     }
-    if (config.operatorName) {
-      headers["X-WAckup-Operator"] = config.operatorName;
-      headers["X-Operator-Name"] = config.operatorName;
+    const effectiveOp = request.operator !== undefined ? request.operator : config.operatorName;
+    if (effectiveOp) {
+      headers["X-WAckup-Operator"] = effectiveOp;
+      headers["X-Operator-Name"] = effectiveOp;
     }
 
     const fetchOptions = { method, headers };
@@ -295,7 +298,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       fetchOptions.body = typeof opts.body === "string" ? opts.body : (opts.body ? JSON.stringify(opts.body) : "");
     }
 
-    const targetUrl = config.serverUrl + request.endpoint;
+    const base = (request.serverUrl || config.serverUrl || "http://127.0.0.1:8080").replace(/\/+$/, "");
+    const targetUrl = base + request.endpoint;
 
     fetch(targetUrl, fetchOptions)
       .then(async (res) => {

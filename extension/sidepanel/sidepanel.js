@@ -37,12 +37,15 @@
   // =========================================================================
   // COMUNICACIÓN CON EL SERVICE WORKER
   // =========================================================================
-  function apiFetch(endpoint, options = {}) {
+  function apiFetch(endpoint, options = {}, extra = {}) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({
         action: "backend_fetch",
         endpoint: endpoint,
-        options: options
+        options: options,
+        serverUrl: extra.serverUrl,
+        pin: extra.pin,
+        operator: extra.operator
       }, (res) => {
         if (chrome.runtime.lastError) {
           return reject(new Error(chrome.runtime.lastError.message));
@@ -1710,6 +1713,150 @@
     const saveBtn = document.getElementById("btn-save-cfg");
     const feedback = document.getElementById("cfg-feedback");
 
+    const checkBtn = document.getElementById("btn-check-server");
+    const opSec = document.getElementById("cfg-operator-section");
+    const opSelect = document.getElementById("cfg-operator-select");
+    const statusBox = document.getElementById("cfg-operator-status-box");
+    const statusMsg = document.getElementById("cfg-operator-status-msg");
+    const kickBtn = document.getElementById("btn-kick-operator");
+    let lastOnlineOps = [];
+
+    async function checkServerAndLoadOperators(showFeedback = true) {
+      const urlInput = document.getElementById("cfg-server-url");
+      const pinInput = document.getElementById("cfg-office-pin");
+
+      const sUrl = (urlInput ? urlInput.value.trim() : "http://127.0.0.1:8080").replace(/\/+$/, "");
+      const sPin = pinInput ? pinInput.value.trim() : "";
+
+      if (checkBtn) {
+        checkBtn.disabled = true;
+        checkBtn.textContent = "⏳ Conectando...";
+      }
+
+      try {
+        const data = await apiFetch("/api/auth/verify_pin", {
+          method: "POST",
+          body: { pin: sPin }
+        }, { serverUrl: sUrl, pin: sPin });
+
+        if (!data || !data.ok) {
+          if (opSec) opSec.style.display = "none";
+          if (feedback) {
+            feedback.style.display = "block";
+            feedback.style.color = "#ef4444";
+            feedback.textContent = `❌ ${data?.error || "PIN de oficina incorrecto o no autorizado."}`;
+          }
+          return false;
+        }
+
+        const knownOps = Array.isArray(data.known_operators) ? data.known_operators : [];
+        lastOnlineOps = Array.isArray(data.online_operators) ? data.online_operators.map(o => o.toLowerCase()) : [];
+        knownOperators = knownOps;
+
+        if (opSelect) {
+          opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>';
+          if (knownOps.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = operatorName || "Operador";
+            opt.textContent = `👤 ${operatorName || "Operador"} (Predeterminado)`;
+            opt.selected = true;
+            opSelect.appendChild(opt);
+          } else {
+            knownOps.forEach(op => {
+              const isOnline = lastOnlineOps.includes(op.toLowerCase());
+              const isCurrent = (operatorName && operatorName.toLowerCase() === op.toLowerCase());
+              const opt = document.createElement("option");
+              opt.value = op;
+              opt.textContent = isOnline ? `👤 ${op} (En línea)` : `👤 ${op}`;
+              if (isCurrent) opt.selected = true;
+              opSelect.appendChild(opt);
+            });
+          }
+
+          opSelect.onchange = () => updateOperatorInUseWarning();
+        }
+
+        if (opSec) opSec.style.display = "block";
+        updateOperatorInUseWarning();
+
+        if (feedback && showFeedback) {
+          feedback.style.display = "block";
+          feedback.style.color = "#10b981";
+          feedback.textContent = `✓ Conexión establecida. ${knownOps.length} operador(es) detectados.`;
+          setTimeout(() => { if (feedback) feedback.style.display = "none"; }, 4000);
+        }
+
+        return true;
+      } catch (err) {
+        if (opSec) opSec.style.display = "none";
+        if (feedback) {
+          feedback.style.display = "block";
+          feedback.style.color = "#ef4444";
+          const errDetail = err.message || "Error al conectar";
+          feedback.textContent = `❌ Error de conexión: ${errDetail}`;
+        }
+        return false;
+      } finally {
+        if (checkBtn) {
+          checkBtn.disabled = false;
+          checkBtn.textContent = "🔌 Conectar y Cargar Operadores";
+        }
+      }
+    }
+
+    function updateOperatorInUseWarning() {
+      if (!opSelect || !statusBox) return;
+      const selectedOp = opSelect.value.trim();
+      if (!selectedOp) {
+        statusBox.style.display = "none";
+        return;
+      }
+
+      const isOnline = lastOnlineOps.includes(selectedOp.toLowerCase());
+      if (isOnline) {
+        statusBox.className = "cfg-status-box warn mt-1";
+        statusBox.style.display = "block";
+        if (statusMsg) {
+          statusMsg.innerHTML = `⚠️ <b>${escapeHtml(selectedOp)}</b> ya figura activo en otro equipo.<br>Si eres tú en otra ventana puedes continuar; si quedó colgado puedes liberarlo:`;
+        }
+        if (kickBtn) {
+          kickBtn.style.display = "block";
+          kickBtn.onclick = () => kickStuckOperator(selectedOp);
+        }
+      } else {
+        statusBox.style.display = "none";
+        if (kickBtn) kickBtn.style.display = "none";
+      }
+    }
+
+    async function kickStuckOperator(opName) {
+      if (!opName) return;
+      const urlInput = document.getElementById("cfg-server-url");
+      const pinInput = document.getElementById("cfg-office-pin");
+      const sUrl = (urlInput ? urlInput.value.trim() : "http://127.0.0.1:8080").replace(/\/+$/, "");
+      const sPin = pinInput ? pinInput.value.trim() : "";
+
+      try {
+        const data = await apiFetch("/api/presence/kick", {
+          method: "POST",
+          body: { operator: opName }
+        }, { serverUrl: sUrl, pin: sPin });
+
+        if (data && data.ok) {
+          showToast(`✓ Sesión previa de ${opName} liberada`);
+          await checkServerAndLoadOperators(false);
+        } else {
+          showToast(data?.error || "Error al liberar sesión");
+        }
+      } catch (e) {
+        showToast("Error de conexión al liberar sesión");
+      }
+    }
+
+    if (checkBtn) {
+      checkBtn.addEventListener("click", () => checkServerAndLoadOperators(true));
+    }
+
     function openSettings() {
       if (panel) panel.style.display = "block";
       if (backdrop) backdrop.style.display = "block";
@@ -1723,11 +1870,12 @@
           currentOfficePin = res.config.officePin || "";
           const urlInput = document.getElementById("cfg-server-url");
           const pinInput = document.getElementById("cfg-office-pin");
-          const opInput = document.getElementById("cfg-operator-name");
 
           if (urlInput) urlInput.value = currentServerUrl;
           if (pinInput) pinInput.value = currentOfficePin;
-          if (opInput) opInput.value = operatorName;
+
+          // Autocomprobar y cargar lista de operadores
+          checkServerAndLoadOperators(false);
         }
       });
     }
@@ -1773,11 +1921,9 @@
         currentOfficePin = res.config.officePin || "";
         const urlInput = document.getElementById("cfg-server-url");
         const pinInput = document.getElementById("cfg-office-pin");
-        const opInput = document.getElementById("cfg-operator-name");
 
         if (urlInput) urlInput.value = currentServerUrl;
         if (pinInput) pinInput.value = currentOfficePin;
-        if (opInput) opInput.value = operatorName;
       }
       connectSidePanelSSE();
       if (operatorName !== prevOp) {
@@ -1798,12 +1944,19 @@
       saveBtn.addEventListener("click", () => {
         const urlInput = document.getElementById("cfg-server-url");
         const pinInput = document.getElementById("cfg-office-pin");
-        const opInput = document.getElementById("cfg-operator-name");
+        const opSelect = document.getElementById("cfg-operator-select");
+
+        const selectedOp = opSelect ? opSelect.value.trim() : "";
+        if (!selectedOp) {
+          showToast("⚠️ Por favor selecciona tu nombre de operador");
+          if (opSelect) opSelect.focus();
+          return;
+        }
 
         const newConfig = {
           serverUrl: urlInput ? urlInput.value.trim() : "http://127.0.0.1:8080",
           officePin: pinInput ? pinInput.value.trim() : "",
-          operatorName: opInput ? opInput.value.trim() : ""
+          operatorName: selectedOp
         };
 
         operatorName = newConfig.operatorName;
@@ -1813,10 +1966,12 @@
         chrome.runtime.sendMessage({ action: "save_config", config: newConfig }, () => {
           if (feedback) {
             feedback.style.display = "block";
-            feedback.textContent = "Configuración guardada correctamente ✓";
-            setTimeout(() => { feedback.style.display = "none"; }, 3000);
+            feedback.style.color = "#10b981";
+            feedback.textContent = `Conectado como ${operatorName} ✓`;
+            setTimeout(() => { feedback.style.display = "none"; }, 3500);
           }
-          showToast("Configuración guardada");
+          showToast(`✓ Conectado como ${operatorName}`);
+          closeSettings();
           connectSidePanelSSE();
           loadWorkspaceProfile();
           loadTemplates();

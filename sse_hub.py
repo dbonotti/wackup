@@ -192,6 +192,46 @@ class SSEHub:
                     }
         return result
 
+    def get_online_operators(self) -> List[str]:
+        """Devuelve la lista única de operadores que están activos actualmente."""
+        now = time.time()
+        online = set()
+        with self._presence_lock:
+            for ch, viewers in self._presence.items():
+                for cid, v in viewers.items():
+                    if v.get("expires_at", 0) > now:
+                        op = (v.get("operator") or "").strip()
+                        if op and op.lower() != "operador":
+                            online.add(op)
+        return sorted(list(online))
+
+    def kick_operator(self, operator_name: str) -> bool:
+        """Remueve todas las presencias activas asociadas a un operador."""
+        if not operator_name:
+            return False
+        clean_name = operator_name.strip().lower()
+        changed = False
+        with self._presence_lock:
+            for ch in list(self._presence.keys()):
+                viewers = self._presence[ch]
+                to_del = [
+                    cid for cid, v in viewers.items()
+                    if (v.get("operator") or "").strip().lower() == clean_name
+                ]
+                for cid in to_del:
+                    del viewers[cid]
+                    changed = True
+                if not viewers:
+                    del self._presence[ch]
+        if changed:
+            active_map = self.get_active_presence()
+            self.broadcast("presence_update", {
+                "event": "operator_kicked",
+                "kicked_operator": operator_name,
+                "active_presence": active_map
+            })
+        return changed
+
     def _purge_expired_presence(self) -> bool:
         """Elimina entradas cuya vigencia (TTL) haya expirado. Retorna True si hubo purgas."""
         now = time.time()
