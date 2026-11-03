@@ -95,13 +95,41 @@ def generate_chat_html_export(chat_id, embed_media=False, db_path=None):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT COALESCE(c.nombre, ct.nombre, ct.push_name, m.chat_id) AS display_name
-        FROM (SELECT DISTINCT chat_id FROM mensajes WHERE chat_id = ?) m
+        SELECT 
+            c.nombre AS chat_nombre,
+            meta.custom_name AS custom_name,
+            ct.nombre AS ct_nombre,
+            ct.push_name AS ct_push,
+            ct.numero AS ct_numero,
+            ct_can.nombre AS ct_can_nombre,
+            ct_can.push_name AS ct_can_push,
+            ct_can.numero AS ct_can_numero,
+            ca.canonical_id
+        FROM (SELECT ? AS chat_id) m
         LEFT JOIN chats c ON m.chat_id = c.chat_id
+        LEFT JOIN crm_contact_meta meta ON m.chat_id = meta.chat_id
         LEFT JOIN contactos ct ON m.chat_id = ct.contact_id
+        LEFT JOIN contact_aliases ca ON m.chat_id = ca.alias_id
+        LEFT JOIN contactos ct_can ON ca.canonical_id = ct_can.contact_id
     """, (chat_id,))
     row = cur.fetchone()
-    display_name = row["display_name"] if row else chat_id
+    if row:
+        row_d = dict(row)
+        phone = (
+            (chat_id.split("@")[0] if ("@c.us" in chat_id or "@s.whatsapp.net" in chat_id) else None)
+            or row_d.get("ct_numero")
+            or row_d.get("ct_can_numero")
+            or (row_d.get("canonical_id", "").split("@")[0] if row_d.get("canonical_id") and ("@c.us" in row_d["canonical_id"] or "@s.whatsapp.net" in row_d["canonical_id"]) else None)
+        )
+        display_name = db_manager.get_best_contact_display(
+            custom_name=row_d.get("custom_name"),
+            contact_name=row_d.get("ct_nombre") or row_d.get("ct_can_nombre") or row_d.get("chat_nombre"),
+            push_name=row_d.get("ct_push") or row_d.get("ct_can_push"),
+            phone_number=phone,
+            chat_id=chat_id
+        )
+    else:
+        display_name = chat_id
 
     contact_map = db_manager.build_contact_map(cur)
     cur.execute("""
@@ -1383,7 +1411,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             params = parse_qs(url.query)
             account_id, db_path, _ = self._resolve_account_params(params)
             limit = int(params.get("limit", ["30"])[0])
-            chats = db_manager.get_unanswered_chats(limit=limit, db_path=db_path)
+            days = int(params.get("days", ["7"])[0])
+            chats = db_manager.get_unanswered_chats(limit=limit, max_age_days=days, db_path=db_path)
             self.send_json(200, {
                 "ok": True,
                 "account_id": account_id,
@@ -1505,36 +1534,58 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             query = """
             SELECT 
                 c.chat_id,
-                COALESCE(
-                    NULLIF(c.nombre, c.chat_id),
-                    ct.nombre,
-                    ct_num.nombre,
-                    ct.push_name,
-                    ct_num.push_name,
-                    c.nombre,
-                    c.chat_id
-                ) AS display_name,
-                COALESCE(
-                    CASE WHEN c.chat_id LIKE '%@c.us' OR c.chat_id LIKE '%@s.whatsapp.net' THEN SUBSTR(c.chat_id, 1, INSTR(c.chat_id, '@') - 1) END,
-                    ct.numero,
-                    ct_num.numero
-                ) AS phone_number,
+                c.nombre AS chat_nombre,
+                meta.custom_name AS custom_name,
+                ct.nombre AS ct_nombre,
+                ct.push_name AS ct_push,
+                ct.numero AS ct_numero,
+                ct_num.nombre AS ct_num_nombre,
+                ct_num.push_name AS ct_num_push,
+                ct_num.numero AS ct_num_numero,
+                ct_can.nombre AS ct_can_nombre,
+                ct_can.push_name AS ct_can_push,
+                ct_can.numero AS ct_can_numero,
+                ca.canonical_id,
                 c.ultimo_mensaje AS last_msg,
                 c.ultimo_tipo AS last_tipo,
                 c.ultimo_timestamp AS last_ts
             FROM chats c
+            LEFT JOIN crm_contact_meta meta ON c.chat_id = meta.chat_id
             LEFT JOIN contactos ct ON c.chat_id = ct.contact_id
             LEFT JOIN contactos ct_num ON c.chat_id LIKE '%@c.us' AND REPLACE(c.chat_id, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
+            LEFT JOIN contact_aliases ca ON c.chat_id = ca.alias_id
+            LEFT JOIN contactos ct_can ON ca.canonical_id = ct_can.contact_id
             WHERE c.chat_id IS NOT NULL 
               AND c.chat_id != 'status@broadcast'
             ORDER BY c.ultimo_timestamp DESC
             """
             cur.execute(query)
-            chats = [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
             conn.close()
-            for ch in chats:
-                if ch.get("last_msg"):
-                    ch["last_msg"] = db_manager.resolve_mentions_in_text(ch["last_msg"], contact_map)
+            chats = []
+            for row_d in rows:
+                phone = (
+                    (row_d["chat_id"].split("@")[0] if ("@c.us" in row_d["chat_id"] or "@s.whatsapp.net" in row_d["chat_id"]) else None)
+                    or row_d.get("ct_numero")
+                    or row_d.get("ct_can_numero")
+                    or row_d.get("ct_num_numero")
+                    or (row_d.get("canonical_id", "").split("@")[0] if row_d.get("canonical_id") and ("@c.us" in row_d["canonical_id"] or "@s.whatsapp.net" in row_d["canonical_id"]) else None)
+                )
+                display_name = db_manager.get_best_contact_display(
+                    custom_name=row_d.get("custom_name"),
+                    contact_name=row_d.get("ct_nombre") or row_d.get("ct_can_nombre") or row_d.get("ct_num_nombre") or row_d.get("chat_nombre"),
+                    push_name=row_d.get("ct_push") or row_d.get("ct_can_push") or row_d.get("ct_num_push"),
+                    phone_number=phone,
+                    chat_id=row_d["chat_id"]
+                )
+                chats.append({
+                    "chat_id": row_d["chat_id"],
+                    "display_name": display_name,
+                    "phone_number": phone,
+                    "last_msg": db_manager.resolve_mentions_in_text(row_d["last_msg"], contact_map) if row_d.get("last_msg") else row_d.get("last_msg"),
+                    "last_tipo": row_d.get("last_tipo"),
+                    "last_ts": row_d.get("last_ts")
+                })
             self.send_json(200, chats)
             return
 
@@ -2200,13 +2251,105 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     self.send_json(400, {"ok": False, "error": "Falta chat_id"})
                     return
 
-                res = db_manager.upsert_contact_meta(chat_id, ticket_status=ticket_status, db_path=db_path)
+                extra_kwargs = {"radar_ignored": 0} if ticket_status == "open" else {}
+                res = db_manager.upsert_contact_meta(chat_id, ticket_status=ticket_status, db_path=db_path, **extra_kwargs)
                 sse_hub.get_sse_hub().broadcast("crm_update", {
                     "type": "ticket_updated",
                     "chat_id": chat_id,
                     "ticket_status": res.get("ticket_status", "none")
                 })
                 self.send_json(200, {"ok": True, "chat_id": chat_id, "ticket_status": res.get("ticket_status", "none")})
+                return
+
+            elif url.path == "/api/radar/dismiss":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                mode = payload.get("mode", "unanswered")
+                reason = payload.get("reason", "no_reply_needed")
+                operator_name = (
+                    payload.get("operator_name")
+                    or payload.get("operator")
+                    or payload.get("updated_by")
+                    or self.headers.get("X-WAckup-Operator")
+                    or self.headers.get("X-Operator-Name")
+                    or ""
+                )
+
+                if not chat_id:
+                    self.send_json(400, {"ok": False, "error": "Falta chat_id"})
+                    return
+
+                res = db_manager.dismiss_radar_chat(
+                    chat_id=chat_id,
+                    mode=mode,
+                    reason=reason,
+                    operator_name=operator_name,
+                    db_path=db_path
+                )
+                if not res.get("ok"):
+                    status_code = 403 if res.get("forbidden") else 400
+                    self.send_json(status_code, res)
+                    return
+
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "radar_dismissed",
+                    "chat_id": res.get("chat_id", chat_id),
+                    "reason": reason,
+                    "updated_by": operator_name
+                })
+                self.send_json(200, res)
+                return
+
+            elif url.path == "/api/radar/undo":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception as e:
+                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_id = payload.get("chat_id")
+                prev_state = payload.get("prev_state")
+                operator_name = (
+                    payload.get("operator_name")
+                    or payload.get("operator")
+                    or payload.get("updated_by")
+                    or self.headers.get("X-WAckup-Operator")
+                    or self.headers.get("X-Operator-Name")
+                    or ""
+                )
+
+                if not chat_id or not isinstance(prev_state, dict):
+                    self.send_json(400, {"ok": False, "error": "Datos insuficientes para deshacer"})
+                    return
+
+                res = db_manager.undo_radar_dismiss(
+                    chat_id=chat_id,
+                    prev_state=prev_state,
+                    operator_name=operator_name,
+                    db_path=db_path
+                )
+                if not res.get("ok"):
+                    status_code = 403 if res.get("forbidden") else 400
+                    self.send_json(status_code, res)
+                    return
+
+                sse_hub.get_sse_hub().broadcast("crm_update", {
+                    "type": "radar_restored",
+                    "chat_id": res.get("chat_id", chat_id),
+                    "updated_by": operator_name
+                })
+                self.send_json(200, res)
                 return
 
             elif url.path == "/api/support/templates":

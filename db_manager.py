@@ -5,7 +5,7 @@ import re
 import html
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import config
 from config import DB_FILE, BACKUP_DIR, ensure_data_dirs
 
@@ -400,6 +400,8 @@ def consolidate_contact_aliases(conn):
             else:
                 merged_notes = canon_notes
 
+            canon_dict = dict(canon_meta)
+            lid_dict = dict(lid_meta)
             merged_ticket = canon_meta["ticket_status"] if canon_meta["ticket_status"] != "none" else lid_meta["ticket_status"]
             merged_priority = max(canon_meta["support_priority"] or 0, lid_meta["support_priority"] or 0)
             merged_stage = canon_meta["sales_stage"] if canon_meta["sales_stage"] != "none" else lid_meta["sales_stage"]
@@ -407,18 +409,33 @@ def consolidate_contact_aliases(conn):
             merged_follow = canon_meta["follow_up_date"] or lid_meta["follow_up_date"]
             merged_name = canon_meta["custom_name"] or lid_meta["custom_name"]
             merged_updated = max(canon_meta["updated_at"] or 0, lid_meta["updated_at"] or 0, now_ts)
+            merged_dismissed = max(int(canon_dict.get("radar_dismissed_at") or 0), int(lid_dict.get("radar_dismissed_at") or 0))
+            merged_ignored = max(int(canon_dict.get("radar_ignored") or 0), int(lid_dict.get("radar_ignored") or 0))
 
-            cur.execute("""
-                UPDATE crm_contact_meta
-                SET custom_name = ?, ticket_status = ?, support_priority = ?,
-                    sales_stage = ?, estimated_value = ?, follow_up_date = ?,
-                    notes = ?, updated_at = ?
-                WHERE chat_id = ?
-            """, (
-                merged_name, merged_ticket, merged_priority,
-                merged_stage, merged_val, merged_follow,
-                merged_notes, merged_updated, canonical_id
-            ))
+            if "radar_dismissed_at" in canon_dict and "radar_ignored" in canon_dict:
+                cur.execute("""
+                    UPDATE crm_contact_meta
+                    SET custom_name = ?, ticket_status = ?, support_priority = ?,
+                        sales_stage = ?, estimated_value = ?, follow_up_date = ?,
+                        notes = ?, radar_dismissed_at = ?, radar_ignored = ?, updated_at = ?
+                    WHERE chat_id = ?
+                """, (
+                    merged_name, merged_ticket, merged_priority,
+                    merged_stage, merged_val, merged_follow,
+                    merged_notes, merged_dismissed, merged_ignored, merged_updated, canonical_id
+                ))
+            else:
+                cur.execute("""
+                    UPDATE crm_contact_meta
+                    SET custom_name = ?, ticket_status = ?, support_priority = ?,
+                        sales_stage = ?, estimated_value = ?, follow_up_date = ?,
+                        notes = ?, updated_at = ?
+                    WHERE chat_id = ?
+                """, (
+                    merged_name, merged_ticket, merged_priority,
+                    merged_stage, merged_val, merged_follow,
+                    merged_notes, merged_updated, canonical_id
+                ))
             cur.execute("DELETE FROM crm_contact_meta WHERE chat_id = ?", (lid_id,))
 
         # Consolidar crm_chat_tags y bitácora crm_contact_notes_log
@@ -460,6 +477,9 @@ def init_workspace_tables(conn):
         notes TEXT DEFAULT '',
         assigned_to TEXT DEFAULT '',
         updated_by TEXT DEFAULT '',
+        -- Control de descartes y exclusiones del Radar
+        radar_dismissed_at INTEGER DEFAULT 0,
+        radar_ignored INTEGER DEFAULT 0,
         updated_at INTEGER
     );
 
@@ -510,20 +530,28 @@ def init_workspace_tables(conn):
             default_templates
         )
 
-    # Migración idempotente para columnas de colaboración en crm_contact_meta
+    # Migración idempotente para columnas de colaboración y radar en crm_contact_meta
     cur.execute("PRAGMA table_info(crm_contact_meta)")
     existing_meta_cols = [row["name"] for row in cur.fetchall()]
     if "assigned_to" not in existing_meta_cols:
         cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN assigned_to TEXT DEFAULT ''")
     if "updated_by" not in existing_meta_cols:
         cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN updated_by TEXT DEFAULT ''")
+    if "radar_dismissed_at" not in existing_meta_cols:
+        cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN radar_dismissed_at INTEGER DEFAULT 0")
+    if "radar_ignored" not in existing_meta_cols:
+        cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN radar_ignored INTEGER DEFAULT 0")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_contact_assigned ON crm_contact_meta (assigned_to)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_contact_radar ON crm_contact_meta (radar_ignored, radar_dismissed_at)")
 
     # Consolidar alias canónicos y fusionar duplicados
     consolidate_contact_aliases(conn)
 
-def resolve_lid_phone_numbers(cur):
+def resolve_lid_phone_numbers(cur=None, db_path=None):
     """Limpia números ficticios (LID) en contactos @lid y vincula su número real desde contactos @s.whatsapp.net / @c.us."""
+    if cur is None:
+        with db_connection(db_path, write=True) as conn:
+            return resolve_lid_phone_numbers(conn.cursor())
     cur.execute("""
         UPDATE contactos
         SET numero = SUBSTR(contact_id, 1, INSTR(contact_id, '@') - 1)
@@ -569,6 +597,20 @@ def resolve_lid_phone_numbers(cur):
         )
         WHERE contact_id LIKE '%@lid' AND (numero IS NULL OR numero = '')
     """)
+    cur.execute("""
+        UPDATE contactos
+        SET numero = (
+            SELECT SUBSTR(m.remitente, 1, INSTR(m.remitente, '@') - 1)
+            FROM mensajes m
+            WHERE m.chat_id = contactos.contact_id
+              AND (m.remitente LIKE '%@c.us' OR m.remitente LIKE '%@s.whatsapp.net')
+              AND m.remitente != '0@c.us'
+              AND m.es_mio = 0
+            ORDER BY m.timestamp DESC
+            LIMIT 1
+        )
+        WHERE contact_id LIKE '%@lid' AND (numero IS NULL OR numero = '')
+    """)
 
 def format_phone_number(raw):
     """Formatea un número telefónico en formato internacional legible (+54 9 291 ...)."""
@@ -586,6 +628,58 @@ def format_phone_number(raw):
     if len(digits) > 4:
         return f"+{digits[:2]} {digits[2:]}"
     return f"+{digits}"
+
+def is_human_contact_name(name, chat_id=None):
+    """
+    Determina si un nombre es un nombre humano agendado o legítimo
+    y no un JID crudo (@lid, @c.us), un identificador opaco o un fallback numérico de LID.
+    """
+    if not name or not isinstance(name, str):
+        return False
+    clean = name.strip()
+    if not clean:
+        return False
+    if chat_id and clean.lower() == str(chat_id).strip().lower():
+        return False
+    if any(clean.lower().endswith(suffix) for suffix in ("@lid", "@c.us", "@s.whatsapp.net", "@broadcast")):
+        return False
+    # Si coincide exactamente con la parte antes del @ de un chat_id @lid
+    if chat_id and str(chat_id).endswith("@lid") and clean == str(chat_id).split("@")[0]:
+        return False
+    return True
+
+def get_best_contact_display(custom_name=None, chat_name=None, contact_name=None, push_name=None,
+                             phone_number=None, chat_id=None, canonical_id=None):
+    """
+    Devuelve el mejor nombre para mostrar a humanos:
+    1. custom_name de CRM o nombre agendado o push_name real.
+    2. Si no hay nombre real disponible, devuelve el número telefónico formateado (+54 9 351 ...).
+    3. Si no hay teléfono pero es grupo o newsletter, devuelve su título o fallback legible.
+    """
+    # 1. Probar nombres humanos en orden de prioridad
+    for cand in (custom_name, contact_name, chat_name, push_name):
+        if is_human_contact_name(cand, chat_id):
+            return cand.strip()
+
+    # 2. Si no hay nombre humano, resolver número telefónico
+    num = phone_number
+    if not num and canonical_id and str(canonical_id).endswith("@c.us"):
+        num = str(canonical_id).split("@")[0]
+    if not num and chat_id and (str(chat_id).endswith("@c.us") or str(chat_id).endswith("@s.whatsapp.net")):
+        num = str(chat_id).split("@")[0]
+
+    if num:
+        clean_num = re.sub(r'\D', '', str(num).split('@')[0])
+        if clean_num:
+            return format_phone_number(clean_num)
+
+    # 3. Fallbacks finales
+    if chat_id and str(chat_id).endswith("@g.us"):
+        return (chat_name if is_human_contact_name(chat_name, chat_id) else "Grupo de WhatsApp")
+    if chat_id and str(chat_id).endswith("@newsletter"):
+        return (chat_name if is_human_contact_name(chat_name, chat_id) else "Canal de WhatsApp")
+
+    return chat_id or "Sin nombre"
 
 def get_contacts_for_export(db_path=DB_FILE):
     """Obtiene la lista consolidada y sin duplicados de contactos con nombre y número de teléfono."""
@@ -1441,6 +1535,8 @@ def get_copilot_context(chat_query, db_path=None):
                sales_stage, estimated_value, follow_up_date, notes,
                coalesce(assigned_to, '') as assigned_to,
                coalesce(updated_by, '') as updated_by,
+               coalesce(radar_dismissed_at, 0) as radar_dismissed_at,
+               coalesce(radar_ignored, 0) as radar_ignored,
                updated_at
         FROM crm_contact_meta
         WHERE chat_id IN ({placeholders})
@@ -1458,12 +1554,18 @@ def get_copilot_context(chat_query, db_path=None):
         "notes": "",
         "assigned_to": "",
         "updated_by": "",
+        "radar_dismissed_at": 0,
+        "radar_ignored": 0,
         "updated_at": None
     }
     if "assigned_to" not in crm_meta:
         crm_meta["assigned_to"] = ""
     if "updated_by" not in crm_meta:
         crm_meta["updated_by"] = ""
+    if "radar_dismissed_at" not in crm_meta:
+        crm_meta["radar_dismissed_at"] = 0
+    if "radar_ignored" not in crm_meta:
+        crm_meta["radar_ignored"] = 0
 
     # Obtener notas históricas de la bitácora colaborativa
     cur.execute(f"""
@@ -1530,7 +1632,16 @@ def get_copilot_context(chat_query, db_path=None):
         except Exception:
             return None
 
-    display_name = crm_meta.get("custom_name") or contact_name or query_str
+    clean_phone = re.sub(r'\D', '', str(phone_number).split('@')[0]) if phone_number else ""
+    display_name = get_best_contact_display(
+        custom_name=crm_meta.get("custom_name"),
+        chat_name=contact_name,
+        contact_name=contact_name,
+        push_name=None,
+        phone_number=clean_phone or phone_number,
+        chat_id=effective_chat_id,
+        canonical_id=canonical_chat_id
+    )
 
     return {
         "ok": True,
@@ -1593,22 +1704,35 @@ def get_chat_sla(chat_ids, db_path=None):
         hours = round(sec / 3600, 1)
         return f"~{hours} h"
 
-def get_unanswered_chats(limit=30, db_path=None):
+def get_unanswered_chats(limit=30, max_age_days=7, db_path=None):
     """
     Radar de chats sin responder: devuelve conversaciones individuales donde el último mensaje
-    es del cliente (es_mio = 0) o cuyo ticket_status es 'open', ordenados por tiempo de espera.
+    es del cliente (es_mio = 0) dentro de la ventana de antigüedad (por defecto últimos 7 días)
+    o cuyo ticket_status es 'open', excluyendo contactos ignorados o mensajes ya descartados.
     Aprovecha las columnas desnormalizadas en chats para respuesta ultrarrápida sin escaneo de mensajes.
     """
+    now_ts = int(time.time())
+    min_ts = (now_ts - int(max_age_days * 86400)) if (max_age_days and max_age_days > 0) else 0
+
     with db_connection(db_path, write=False) as conn:
         cur = conn.cursor()
         cur.execute("""
             SELECT 
                 ch.chat_id,
+                ca.canonical_id,
                 ch.ultimo_es_mio as es_mio,
                 ch.ultimo_mensaje as contenido,
                 ch.ultimo_timestamp as timestamp,
-                coalesce(c.custom_name, ch.nombre, con.nombre, con.push_name, ch.chat_id) as display_name,
-                con.numero as phone_number,
+                c.custom_name,
+                ch.nombre as chat_nombre,
+                con.nombre as contact_nombre,
+                con.push_name as push_name,
+                coalesce(
+                    con.numero,
+                    con_can.numero,
+                    case when ca.canonical_id like '%@c.us' then replace(ca.canonical_id, '@c.us', '') end,
+                    case when ch.chat_id like '%@c.us' or ch.chat_id like '%@s.whatsapp.net' then substr(ch.chat_id, 1, instr(ch.chat_id, '@') - 1) end
+                ) as phone_number,
                 coalesce(c.ticket_status, 'none') as ticket_status,
                 coalesce(c.support_priority, 0) as support_priority,
                 coalesce(c.assigned_to, '') as assigned_to,
@@ -1617,18 +1741,27 @@ def get_unanswered_chats(limit=30, db_path=None):
             LEFT JOIN contact_aliases ca ON ch.chat_id = ca.alias_id
             LEFT JOIN crm_contact_meta c ON coalesce(ca.canonical_id, ch.chat_id) = c.chat_id
             LEFT JOIN contactos con ON ch.chat_id = con.contact_id OR coalesce(ca.canonical_id, ch.chat_id) = (con.numero || '@c.us')
+            LEFT JOIN contactos con_can ON ca.canonical_id = con_can.contact_id
             WHERE ch.chat_id IS NOT NULL 
               AND ch.chat_id NOT LIKE '%@g.us'
               AND ch.chat_id NOT LIKE '%@newsletter'
               AND ch.chat_id != 'status@broadcast'
-              AND (ch.ultimo_es_mio = 0 OR c.ticket_status = 'open')
               AND ch.ultimo_timestamp IS NOT NULL
+              AND coalesce(c.radar_ignored, 0) = 0
+              AND (
+                  c.ticket_status = 'open'
+                  OR (
+                      ch.ultimo_es_mio = 0
+                      AND ch.ultimo_timestamp >= ?
+                      AND ch.ultimo_timestamp > coalesce(c.radar_dismissed_at, 0)
+                  )
+              )
+            GROUP BY coalesce(ca.canonical_id, ch.chat_id)
             ORDER BY ch.ultimo_timestamp DESC
             LIMIT ?
-        """, (limit,))
+        """, (min_ts, limit))
         rows = cur.fetchall()
 
-    now_ts = int(time.time())
     result = []
     for r in rows:
         diff = max(0, now_ts - (r["timestamp"] or now_ts))
@@ -1645,10 +1778,23 @@ def get_unanswered_chats(limit=30, db_path=None):
         if len(snippet) > 60:
             snippet = snippet[:57] + "..."
 
+        phone = r["phone_number"]
+        clean_phone = re.sub(r'\D', '', str(phone).split('@')[0]) if phone else ""
+        disp_name = get_best_contact_display(
+            custom_name=r["custom_name"],
+            chat_name=r["chat_nombre"],
+            contact_name=r["contact_nombre"],
+            push_name=r["push_name"],
+            phone_number=clean_phone or phone,
+            chat_id=r["chat_id"],
+            canonical_id=r["canonical_id"]
+        )
+
         result.append({
             "chat_id": r["chat_id"],
-            "display_name": r["display_name"] or r["chat_id"],
-            "phone_number": r["phone_number"],
+            "canonical_id": r["canonical_id"] or r["chat_id"],
+            "display_name": disp_name,
+            "phone_number": clean_phone or phone or "",
             "last_message": snippet,
             "timestamp": r["timestamp"],
             "waiting_str": time_str,
@@ -1663,22 +1809,33 @@ def get_unanswered_chats(limit=30, db_path=None):
 def get_sales_followups(limit=30, db_path=None):
     """
     Radar comercial de seguimiento de ventas:
-    Devuelve chats con presupuestos abiertos (sales_stage = 'quoted'),
-    leads con fecha de seguimiento agendada, o presupuestos enviados por nosotros
-    hace más de 48h sin confirmación comercial (sales_stage != 'won' y != 'lost').
+    Devuelve chats con presupuestos abiertos (sales_stage = 'quoted'/'lead'),
+    leads con fecha de seguimiento vencida o de hoy (follow_up_date <= hoy),
+    o presupuestos enviados por nosotros hace más de 48h sin confirmación comercial,
+    excluyendo contactos ignorados o descartados.
     Aprovecha las columnas desnormalizadas en chats y contact_aliases.
     """
     now_ts = int(time.time())
+    today_str = datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d")
     with db_connection(db_path, write=False) as conn:
         cur = conn.cursor()
         cur.execute("""
             SELECT 
                 ch.chat_id,
+                ca.canonical_id,
                 ch.ultimo_es_mio as es_mio,
                 ch.ultimo_mensaje as contenido,
                 ch.ultimo_timestamp as timestamp,
-                coalesce(c.custom_name, ch.nombre, con.nombre, con.push_name, ch.chat_id) as display_name,
-                con.numero as phone_number,
+                c.custom_name,
+                ch.nombre as chat_nombre,
+                con.nombre as contact_nombre,
+                con.push_name as push_name,
+                coalesce(
+                    con.numero,
+                    con_can.numero,
+                    case when ca.canonical_id like '%@c.us' then replace(ca.canonical_id, '@c.us', '') end,
+                    case when ch.chat_id like '%@c.us' or ch.chat_id like '%@s.whatsapp.net' then substr(ch.chat_id, 1, instr(ch.chat_id, '@') - 1) end
+                ) as phone_number,
                 coalesce(c.sales_stage, 'none') as sales_stage,
                 coalesce(c.estimated_value, 0.0) as estimated_value,
                 c.follow_up_date,
@@ -1688,26 +1845,39 @@ def get_sales_followups(limit=30, db_path=None):
             LEFT JOIN contact_aliases ca ON ch.chat_id = ca.alias_id
             LEFT JOIN crm_contact_meta c ON coalesce(ca.canonical_id, ch.chat_id) = c.chat_id
             LEFT JOIN contactos con ON ch.chat_id = con.contact_id OR coalesce(ca.canonical_id, ch.chat_id) = (con.numero || '@c.us')
+            LEFT JOIN contactos con_can ON ca.canonical_id = con_can.contact_id
             WHERE ch.chat_id IS NOT NULL 
               AND ch.chat_id NOT LIKE '%@g.us'
               AND ch.chat_id NOT LIKE '%@newsletter'
               AND ch.chat_id != 'status@broadcast'
               AND ch.ultimo_timestamp IS NOT NULL
+              AND coalesce(c.radar_ignored, 0) = 0
               AND (
-                  c.sales_stage IN ('lead', 'quoted') 
-                  OR (c.follow_up_date IS NOT NULL AND c.follow_up_date != '')
-                  OR (ch.ultimo_es_mio = 1 AND (ch.ultimo_mensaje LIKE '%$%' OR ch.ultimo_mensaje LIKE '%USD%' OR ch.ultimo_mensaje LIKE '%presupuesto%') AND (? - ch.ultimo_timestamp) >= 172800 AND coalesce(c.sales_stage, 'none') NOT IN ('won', 'lost'))
+                  (c.follow_up_date IS NOT NULL AND c.follow_up_date != '' AND c.follow_up_date <= ?)
+                  OR (
+                      (c.follow_up_date IS NULL OR c.follow_up_date = '')
+                      AND (
+                          c.sales_stage IN ('lead', 'quoted', 'propuesta', 'negociacion', 'contactado')
+                          OR (
+                              ch.ultimo_es_mio = 1
+                              AND (ch.ultimo_mensaje LIKE '%$%' OR ch.ultimo_mensaje LIKE '%USD%' OR ch.ultimo_mensaje LIKE '%presupuesto%')
+                              AND (? - ch.ultimo_timestamp) >= 172800
+                              AND coalesce(c.sales_stage, 'none') NOT IN ('won', 'lost', 'ganado', 'perdido')
+                              AND ch.ultimo_timestamp > coalesce(c.radar_dismissed_at, 0)
+                          )
+                      )
+                  )
               )
             GROUP BY coalesce(ca.canonical_id, ch.chat_id)
             ORDER BY 
                 CASE 
                     WHEN c.follow_up_date IS NOT NULL AND c.follow_up_date != '' THEN 1 
-                    WHEN c.sales_stage = 'quoted' THEN 2 
+                    WHEN c.sales_stage IN ('quoted', 'propuesta') THEN 2 
                     ELSE 3 
                 END ASC,
                 ch.ultimo_timestamp DESC
             LIMIT ?
-        """, (now_ts, limit))
+        """, (today_str, now_ts, limit))
         rows = cur.fetchall()
 
     result = []
@@ -1726,10 +1896,23 @@ def get_sales_followups(limit=30, db_path=None):
         if len(snippet) > 60:
             snippet = snippet[:57] + "..."
 
+        phone = r["phone_number"]
+        clean_phone = re.sub(r'\D', '', str(phone).split('@')[0]) if phone else ""
+        disp_name = get_best_contact_display(
+            custom_name=r["custom_name"],
+            chat_name=r["chat_nombre"],
+            contact_name=r["contact_nombre"],
+            push_name=r["push_name"],
+            phone_number=clean_phone or phone,
+            chat_id=r["chat_id"],
+            canonical_id=r["canonical_id"]
+        )
+
         result.append({
             "chat_id": r["chat_id"],
-            "display_name": r["display_name"] or r["chat_id"],
-            "phone_number": r["phone_number"],
+            "canonical_id": r["canonical_id"] or r["chat_id"],
+            "display_name": disp_name,
+            "phone_number": clean_phone or phone or "",
             "last_message": snippet,
             "timestamp": r["timestamp"],
             "waiting_str": time_str,
@@ -1754,6 +1937,8 @@ def get_contact_meta(chat_id, db_path=None):
                    sales_stage, estimated_value, follow_up_date, notes,
                    coalesce(assigned_to, '') as assigned_to,
                    coalesce(updated_by, '') as updated_by,
+                   coalesce(radar_dismissed_at, 0) as radar_dismissed_at,
+                   coalesce(radar_ignored, 0) as radar_ignored,
                    updated_at
             FROM crm_contact_meta
             WHERE chat_id = ?
@@ -1765,6 +1950,10 @@ def get_contact_meta(chat_id, db_path=None):
                 d["assigned_to"] = ""
             if "updated_by" not in d or d["updated_by"] is None:
                 d["updated_by"] = ""
+            if "radar_dismissed_at" not in d or d["radar_dismissed_at"] is None:
+                d["radar_dismissed_at"] = 0
+            if "radar_ignored" not in d or d["radar_ignored"] is None:
+                d["radar_ignored"] = 0
             return d
     return {
         "chat_id": canonical_id,
@@ -1777,12 +1966,15 @@ def get_contact_meta(chat_id, db_path=None):
         "notes": "",
         "assigned_to": "",
         "updated_by": "",
+        "radar_dismissed_at": 0,
+        "radar_ignored": 0,
         "updated_at": None
     }
 
 def upsert_contact_meta(chat_id, custom_name=None, ticket_status=None, support_priority=None,
                         sales_stage=None, estimated_value=None, follow_up_date=None,
                         notes=None, assigned_to=None, updated_by=None,
+                        radar_dismissed_at=None, radar_ignored=None,
                         expected_updated_at=None, db_path=None):
     """
     Actualiza o inserta metadatos CRM de forma 100% atómica bajo una única transacción SQLite.
@@ -1829,7 +2021,7 @@ def upsert_contact_meta(chat_id, custom_name=None, ticket_status=None, support_p
             INSERT INTO crm_contact_meta (
                 chat_id, custom_name, ticket_status, support_priority,
                 sales_stage, estimated_value, follow_up_date, notes,
-                assigned_to, updated_by, updated_at
+                assigned_to, updated_by, radar_dismissed_at, radar_ignored, updated_at
             ) VALUES (
                 ?, ?, 
                 COALESCE(?, 'none'), 
@@ -1840,6 +2032,8 @@ def upsert_contact_meta(chat_id, custom_name=None, ticket_status=None, support_p
                 COALESCE(?, ''), 
                 COALESCE(?, ''),
                 COALESCE(?, ''),
+                COALESCE(?, 0),
+                COALESCE(?, 0),
                 ?
             )
             ON CONFLICT(chat_id) DO UPDATE SET
@@ -1852,14 +2046,16 @@ def upsert_contact_meta(chat_id, custom_name=None, ticket_status=None, support_p
                 notes = CASE WHEN ? IS NOT NULL THEN excluded.notes ELSE crm_contact_meta.notes END,
                 assigned_to = CASE WHEN ? IS NOT NULL THEN excluded.assigned_to ELSE crm_contact_meta.assigned_to END,
                 updated_by = CASE WHEN ? IS NOT NULL THEN excluded.updated_by ELSE crm_contact_meta.updated_by END,
+                radar_dismissed_at = CASE WHEN ? IS NOT NULL THEN excluded.radar_dismissed_at ELSE COALESCE(crm_contact_meta.radar_dismissed_at, 0) END,
+                radar_ignored = CASE WHEN ? IS NOT NULL THEN excluded.radar_ignored ELSE COALESCE(crm_contact_meta.radar_ignored, 0) END,
                 updated_at = excluded.updated_at
         """, (
             canonical_id, custom_name, ticket_status, support_priority,
             sales_stage, estimated_value, follow_up_date, notes,
-            assigned_to, updated_by, now_ts,
+            assigned_to, updated_by, radar_dismissed_at, radar_ignored, now_ts,
             custom_name, ticket_status, support_priority,
             sales_stage, estimated_value, follow_up_date, notes,
-            assigned_to, updated_by
+            assigned_to, updated_by, radar_dismissed_at, radar_ignored
         ))
 
     # Registrar operadores conocidos en la configuración del nodo
@@ -1875,6 +2071,241 @@ def upsert_contact_meta(chat_id, custom_name=None, ticket_status=None, support_p
             pass
 
     return get_contact_meta(canonical_id, db_path=db_path)
+
+def can_operator_dismiss_chat(assigned_to, operator_name):
+    """
+    Permite el descarte rápido únicamente si el chat está sin asignar
+    o si está asignado al mismo operador (insensible a mayúsculas/espacios).
+    """
+    assigned = (assigned_to or "").strip()
+    if not assigned:
+        return True
+    op = (operator_name or "").strip()
+    return bool(op) and (assigned.lower() == op.lower())
+
+def dismiss_radar_chat(chat_id, mode="unanswered", reason="no_reply_needed", operator_name="", db_path=None):
+    """
+    Descarta o resuelve un chat desde el Radar de forma atómica con control de propiedad
+    y registro automático en la bitácora colaborativa del contacto.
+    """
+    if not chat_id:
+        return {"ok": False, "error": "chat_id requerido"}
+
+    now_sec = int(time.time())
+    now_ms = now_sec * 1000
+    author = (operator_name or "").strip() or "Operador"
+
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        canonical_id = resolve_canonical_chat_id(cur, chat_id)
+
+        cur.execute("""
+            SELECT ticket_status, sales_stage, follow_up_date,
+                   coalesce(assigned_to, '') as assigned_to,
+                   coalesce(radar_dismissed_at, 0) as radar_dismissed_at,
+                   coalesce(radar_ignored, 0) as radar_ignored
+            FROM crm_contact_meta
+            WHERE chat_id = ?
+        """, (canonical_id,))
+        row = cur.fetchone()
+        cur_ticket = row["ticket_status"] if row and row["ticket_status"] else "none"
+        cur_stage = row["sales_stage"] if row and row["sales_stage"] else "none"
+        cur_followup = row["follow_up_date"] if row and row["follow_up_date"] else ""
+        cur_assigned = row["assigned_to"] if row and row["assigned_to"] else ""
+        cur_dismissed_at = int(row["radar_dismissed_at"] or 0) if row else 0
+        cur_ignored = int(row["radar_ignored"] or 0) if row else 0
+
+        if not can_operator_dismiss_chat(cur_assigned, operator_name):
+            return {
+                "ok": False,
+                "forbidden": True,
+                "assigned_to": cur_assigned,
+                "error": f"Este chat está asignado a {cur_assigned}. Solo su responsable puede descartarlo."
+            }
+
+        # Obtener el timestamp máximo de mensajes conocidos para este contacto y sus alias
+        cur.execute("""
+            SELECT MAX(ultimo_timestamp) as max_ts
+            FROM chats
+            WHERE chat_id = ? OR chat_id = ?
+               OR chat_id IN (SELECT alias_id FROM contact_aliases WHERE canonical_id = ?)
+        """, (chat_id, canonical_id, canonical_id))
+        ts_row = cur.fetchone()
+        max_ultimo_ts = int(ts_row["max_ts"]) if (ts_row and ts_row["max_ts"]) else now_sec
+
+        prev_state = {
+            "ticket_status": cur_ticket,
+            "sales_stage": cur_stage,
+            "follow_up_date": cur_followup,
+            "radar_dismissed_at": cur_dismissed_at,
+            "radar_ignored": cur_ignored
+        }
+
+        new_ticket = None
+        new_stage = None
+        new_followup = None
+        new_dismissed_at = None
+        new_ignored = None
+
+        if reason == "no_reply_needed":
+            new_dismissed_at = max_ultimo_ts
+            if cur_ticket == "open":
+                new_ticket = "resolved"
+            log_msg = "🔕 [Radar] Descartado: No requiere respuesta"
+        elif reason == "resolved_other_channel":
+            new_dismissed_at = max_ultimo_ts
+            new_ticket = "resolved"
+            log_msg = "📞 [Radar] Descartado: Atendido por otra vía"
+        elif reason == "ignore_personal":
+            new_ignored = 1
+            new_dismissed_at = max_ultimo_ts
+            if cur_ticket == "open":
+                new_ticket = "none"
+            log_msg = "🏠 [Radar] Excluido del Radar: Contacto personal / No comercial"
+        elif reason == "ignore_spam":
+            new_ignored = 1
+            new_dismissed_at = max_ultimo_ts
+            if cur_ticket == "open":
+                new_ticket = "none"
+            log_msg = "🗑️ [Radar] Excluido del Radar: Spam / Equivocado"
+        elif reason == "sale_won":
+            new_stage = "won"
+            new_followup = ""
+            new_dismissed_at = max_ultimo_ts
+            log_msg = "✅ [Radar Ventas] Cerrado como Venta ganada"
+        elif reason == "sale_lost":
+            new_stage = "lost"
+            new_followup = ""
+            new_dismissed_at = max_ultimo_ts
+            log_msg = "❌ [Radar Ventas] Descartado: Presupuesto rechazado / Sin respuesta"
+        elif reason == "postpone_3d":
+            target_date = (datetime.fromtimestamp(now_sec) + timedelta(days=3)).strftime("%Y-%m-%d")
+            new_followup = target_date
+            if cur_stage in ("none", ""):
+                new_stage = "quoted"
+            log_msg = f"⏳ [Radar Ventas] Seguimiento pospuesto al {target_date} (+3 días)"
+        elif reason == "not_a_quote":
+            new_stage = "none"
+            new_followup = ""
+            new_dismissed_at = max_ultimo_ts
+            log_msg = "🚫 [Radar Ventas] Descartado: No era presupuesto"
+        elif reason == "reactivate_radar":
+            new_ignored = 0
+            new_dismissed_at = 0
+            log_msg = "🔔 [Radar] Contacto reactivado en el Radar"
+        else:
+            return {"ok": False, "error": f"Motivo desconocido: {reason}"}
+
+        cur.execute("""
+            INSERT INTO crm_contact_meta (
+                chat_id, ticket_status, sales_stage, follow_up_date,
+                updated_by, radar_dismissed_at, radar_ignored, updated_at
+            ) VALUES (
+                ?,
+                COALESCE(?, 'none'),
+                COALESCE(?, 'none'),
+                ?,
+                ?,
+                COALESCE(?, 0),
+                COALESCE(?, 0),
+                ?
+            )
+            ON CONFLICT(chat_id) DO UPDATE SET
+                ticket_status = CASE WHEN ? IS NOT NULL THEN excluded.ticket_status ELSE crm_contact_meta.ticket_status END,
+                sales_stage = CASE WHEN ? IS NOT NULL THEN excluded.sales_stage ELSE crm_contact_meta.sales_stage END,
+                follow_up_date = CASE WHEN ? IS NOT NULL THEN excluded.follow_up_date ELSE crm_contact_meta.follow_up_date END,
+                updated_by = excluded.updated_by,
+                radar_dismissed_at = CASE WHEN ? IS NOT NULL THEN excluded.radar_dismissed_at ELSE COALESCE(crm_contact_meta.radar_dismissed_at, 0) END,
+                radar_ignored = CASE WHEN ? IS NOT NULL THEN excluded.radar_ignored ELSE COALESCE(crm_contact_meta.radar_ignored, 0) END,
+                updated_at = excluded.updated_at
+        """, (
+            canonical_id, new_ticket, new_stage, new_followup,
+            (operator_name or "").strip(), new_dismissed_at, new_ignored, now_ms,
+            new_ticket, new_stage, new_followup,
+            new_dismissed_at, new_ignored
+        ))
+
+        cur.execute("""
+            INSERT INTO crm_contact_notes_log (chat_id, author, content, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (canonical_id, author, log_msg, now_sec))
+        note_id = cur.lastrowid
+        prev_state["note_id"] = note_id
+
+    if operator_name and operator_name.strip():
+        try:
+            config.update_system_settings(add_operator=operator_name.strip())
+        except Exception:
+            pass
+
+    meta = get_contact_meta(canonical_id, db_path=db_path)
+    return {
+        "ok": True,
+        "chat_id": canonical_id,
+        "mode": mode,
+        "reason": reason,
+        "log_message": log_msg,
+        "prev_state": prev_state,
+        "meta": meta
+    }
+
+def undo_radar_dismiss(chat_id, prev_state, operator_name="", db_path=None):
+    """
+    Revierte un descarte reciente del Radar restaurando los metadatos previos
+    y eliminando la nota automática generada en la bitácora.
+    """
+    if not chat_id or not isinstance(prev_state, dict):
+        return {"ok": False, "error": "Datos insuficientes para deshacer"}
+
+    now_ms = int(time.time() * 1000)
+
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        canonical_id = resolve_canonical_chat_id(cur, chat_id)
+
+        cur.execute("SELECT coalesce(assigned_to, '') as assigned_to FROM crm_contact_meta WHERE chat_id = ?", (canonical_id,))
+        row = cur.fetchone()
+        cur_assigned = row["assigned_to"] if row and row["assigned_to"] else ""
+        if not can_operator_dismiss_chat(cur_assigned, operator_name):
+            return {
+                "ok": False,
+                "forbidden": True,
+                "assigned_to": cur_assigned,
+                "error": f"Este chat está asignado a {cur_assigned}."
+            }
+
+        prev_ticket = prev_state.get("ticket_status", "none")
+        prev_stage = prev_state.get("sales_stage", "none")
+        prev_followup = prev_state.get("follow_up_date", "")
+        prev_dismissed_at = int(prev_state.get("radar_dismissed_at") or 0)
+        prev_ignored = int(prev_state.get("radar_ignored") or 0)
+        note_id = prev_state.get("note_id")
+
+        cur.execute("""
+            UPDATE crm_contact_meta
+            SET ticket_status = ?,
+                sales_stage = ?,
+                follow_up_date = ?,
+                radar_dismissed_at = ?,
+                radar_ignored = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE chat_id = ?
+        """, (
+            prev_ticket, prev_stage, prev_followup,
+            prev_dismissed_at, prev_ignored,
+            (operator_name or "").strip(), now_ms, canonical_id
+        ))
+
+        if note_id:
+            cur.execute("DELETE FROM crm_contact_notes_log WHERE id = ? AND chat_id = ?", (note_id, canonical_id))
+
+    meta = get_contact_meta(canonical_id, db_path=db_path)
+    return {
+        "ok": True,
+        "chat_id": canonical_id,
+        "meta": meta
+    }
 
 def add_contact_note_log(chat_id, author, content, db_path=None):
     """
@@ -2077,8 +2508,16 @@ def get_kanban_board(board_type="sales", db_path=None):
     cur.execute("""
         SELECT 
             c.chat_id,
-            coalesce(c.custom_name, ch.nombre, con.nombre, con.push_name, c.chat_id) as display_name,
-            con.numero as phone_number,
+            ca.canonical_id,
+            c.custom_name,
+            ch.nombre as chat_nombre,
+            con.nombre as contact_nombre,
+            con.push_name as push_name,
+            coalesce(
+                con.numero,
+                case when ca.canonical_id like '%@c.us' then replace(ca.canonical_id, '@c.us', '') end,
+                case when c.chat_id like '%@c.us' or c.chat_id like '%@s.whatsapp.net' then substr(c.chat_id, 1, instr(c.chat_id, '@') - 1) end
+            ) as phone_number,
             coalesce(c.sales_stage, 'none') as sales_stage,
             coalesce(c.estimated_value, 0.0) as estimated_value,
             c.follow_up_date,
@@ -2091,6 +2530,7 @@ def get_kanban_board(board_type="sales", db_path=None):
             ch.ultimo_es_mio as last_from_me,
             ch.ultimo_timestamp as last_ts
         FROM crm_contact_meta c
+        LEFT JOIN contact_aliases ca ON c.chat_id = ca.alias_id
         LEFT JOIN chats ch ON c.chat_id = ch.chat_id
         LEFT JOIN contactos con ON c.chat_id = con.contact_id OR c.chat_id = (con.numero || '@c.us')
         WHERE c.chat_id NOT IN (SELECT alias_id FROM contact_aliases)
@@ -2112,6 +2552,18 @@ def get_kanban_board(board_type="sales", db_path=None):
             return f"hace {int(diff // 86400)}d"
 
     for r in rows:
+        phone = r.get("phone_number")
+        clean_phone = re.sub(r'\D', '', str(phone).split('@')[0]) if phone else ""
+        r["display_name"] = get_best_contact_display(
+            custom_name=r.get("custom_name"),
+            chat_name=r.get("chat_nombre"),
+            contact_name=r.get("contact_nombre"),
+            push_name=r.get("push_name"),
+            phone_number=clean_phone or phone,
+            chat_id=r.get("chat_id"),
+            canonical_id=r.get("canonical_id")
+        )
+        r["phone_number"] = clean_phone or phone or ""
         r["last_activity_str"] = _fmt_activity(r.get("last_ts"))
         if r.get("last_message"):
             r["last_message"] = r["last_message"][:65]
@@ -2190,8 +2642,15 @@ def get_rfm_dormant_clients(days=45, min_messages=10, limit=5, db_path=None):
             s.chat_id,
             s.total_msgs,
             s.last_ts,
-            coalesce(c.custom_name, ch.nombre, con.nombre, con.push_name, s.chat_id) as display_name,
-            con.numero as phone_number,
+            ch.nombre as chat_nombre,
+            c.custom_name as crm_custom,
+            con.nombre as con_nombre,
+            con.push_name as con_push,
+            con.numero as con_numero,
+            con_can.nombre as con_can_nombre,
+            con_can.push_name as con_can_push,
+            con_can.numero as con_can_numero,
+            ca.canonical_id,
             coalesce(c.sales_stage, 'none') as sales_stage,
             coalesce(c.estimated_value, 0.0) as estimated_value,
             lm.contenido as last_message,
@@ -2199,6 +2658,8 @@ def get_rfm_dormant_clients(days=45, min_messages=10, limit=5, db_path=None):
         FROM client_stats s
         LEFT JOIN chats ch ON s.chat_id = ch.chat_id
         LEFT JOIN contactos con ON s.chat_id = con.contact_id OR s.chat_id = (con.numero || '@c.us')
+        LEFT JOIN contact_aliases ca ON s.chat_id = ca.alias_id
+        LEFT JOIN contactos con_can ON ca.canonical_id = con_can.contact_id
         LEFT JOIN crm_contact_meta c ON s.chat_id = c.chat_id
         LEFT JOIN latest_msgs lm ON s.chat_id = lm.chat_id AND lm.rn = 1
         GROUP BY s.chat_id
@@ -2211,13 +2672,27 @@ def get_rfm_dormant_clients(days=45, min_messages=10, limit=5, db_path=None):
 
     result = []
     for r in rows:
-        name = r["display_name"] or r["chat_id"]
-        first_name = name.split()[0] if name else "Estimado/a"
+        row_d = dict(r)
+        phone = (
+            (row_d["chat_id"].split("@")[0] if ("@c.us" in row_d["chat_id"] or "@s.whatsapp.net" in row_d["chat_id"]) else None)
+            or row_d.get("con_numero")
+            or row_d.get("con_can_numero")
+            or (row_d.get("canonical_id", "").split("@")[0] if row_d.get("canonical_id") and ("@c.us" in row_d["canonical_id"] or "@s.whatsapp.net" in row_d["canonical_id"]) else None)
+        )
+        display_name = get_best_contact_display(
+            custom_name=row_d.get("crm_custom"),
+            contact_name=row_d.get("con_nombre") or row_d.get("con_can_nombre") or row_d.get("chat_nombre"),
+            push_name=row_d.get("con_push") or row_d.get("con_can_push"),
+            phone_number=phone,
+            chat_id=row_d["chat_id"]
+        )
+
+        first_name = display_name.split()[0] if is_human_contact_name(display_name, row_d["chat_id"]) else "Estimado/a"
         if len(first_name) > 20 or first_name.startswith("+"):
             first_name = "Estimado/a"
 
-        days_inactive = max(0, (now_ts - r["last_ts"]) // 86400) if r["last_ts"] else 0
-        last_dt_str = datetime.fromtimestamp(r["last_ts"]).strftime("%d/%m/%Y") if r["last_ts"] else ""
+        days_inactive = max(0, (now_ts - row_d["last_ts"]) // 86400) if row_d["last_ts"] else 0
+        last_dt_str = datetime.fromtimestamp(row_d["last_ts"]).strftime("%d/%m/%Y") if row_d["last_ts"] else ""
 
         suggested = (
             f"¡Hola {first_name}! ¿Cómo estás? Te escribo para saludarte y ver cómo andás. "
@@ -2225,10 +2700,10 @@ def get_rfm_dormant_clients(days=45, min_messages=10, limit=5, db_path=None):
         )
 
         result.append({
-            "chat_id": r["chat_id"],
-            "display_name": name,
-            "phone_number": r["phone_number"],
-            "total_messages": r["total_msgs"],
+            "chat_id": row_d["chat_id"],
+            "display_name": display_name,
+            "phone_number": phone,
+            "total_messages": row_d["total_msgs"],
             "days_inactive": days_inactive,
             "last_message_date": last_dt_str,
             "last_message": (r["last_message"][:75] if r["last_message"] else ""),

@@ -65,17 +65,54 @@
   // =========================================================================
   // FEEDBACK Y PORTAPAPELES
   // =========================================================================
-  function showToast(message) {
+  let toastHideTimer = null;
+
+  function showToast(message, options = {}) {
     const toast = document.getElementById("toast-notification");
     if (!toast) return;
-    toast.textContent = message;
-    toast.style.display = "block";
+
+    if (toastHideTimer) {
+      clearTimeout(toastHideTimer);
+      toastHideTimer = null;
+    }
+
+    const hasAction = Boolean(options && options.actionLabel && typeof options.onAction === "function");
+    const duration = (options && options.duration) ? options.duration : (hasAction ? 5000 : 2500);
+
+    if (hasAction) {
+      toast.classList.add("toast-interactive");
+      toast.innerHTML = `
+        <span class="toast-msg">${escapeHtml(message)}</span>
+        <button type="button" class="toast-undo-btn">${escapeHtml(options.actionLabel)}</button>
+      `;
+      const btn = toast.querySelector(".toast-undo-btn");
+      if (btn) {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (toastHideTimer) {
+            clearTimeout(toastHideTimer);
+            toastHideTimer = null;
+          }
+          toast.style.display = "none";
+          toast.classList.remove("toast-interactive");
+          options.onAction();
+        });
+      }
+    } else {
+      toast.classList.remove("toast-interactive");
+      toast.textContent = message;
+    }
+
+    toast.style.display = hasAction ? "flex" : "block";
     toast.style.animation = "none";
     void toast.offsetWidth; // Reflow
     toast.style.animation = "";
-    setTimeout(() => {
+
+    toastHideTimer = setTimeout(() => {
       toast.style.display = "none";
-    }, 2500);
+      toast.classList.remove("toast-interactive");
+      toastHideTimer = null;
+    }, duration);
   }
 
   async function copyToClipboard(text, successMsg = "¡Copiado! Pega con Ctrl+V en WhatsApp") {
@@ -86,6 +123,41 @@
     } catch (err) {
       console.warn("[WAckup] Error al copiar al portapapeles:", err);
     }
+  }
+
+  function isHumanContactName(name, jid) {
+    if (!name) return false;
+    const str = String(name).trim();
+    if (!str) return false;
+    if (jid && str.toLowerCase() === String(jid).trim().toLowerCase()) return false;
+    const lower = str.toLowerCase();
+    if (lower.endsWith("@lid") || lower.endsWith("@c.us") || lower.endsWith("@s.whatsapp.net") || lower.endsWith("@g.us") || lower.endsWith("@broadcast")) {
+      return false;
+    }
+    const digitsOnly = str.replace(/\D/g, "");
+    if (digitsOnly === str && str.length >= 12) {
+      return false;
+    }
+    return true;
+  }
+
+  function formatPhoneNumber(rawPhone) {
+    if (!rawPhone) return "";
+    const raw = String(rawPhone).split("@")[0].replace(/\D/g, "");
+    if (!raw) return "";
+    if (/^549\d{10}$/.test(raw)) {
+      return `+54 9 ${raw.substring(3, 6)} ${raw.substring(6, 9)}-${raw.substring(9)}`;
+    }
+    if (/^54\d{10}$/.test(raw)) {
+      return `+54 ${raw.substring(2, 5)} ${raw.substring(5, 8)}-${raw.substring(8)}`;
+    }
+    if (/^1\d{10}$/.test(raw)) {
+      return `+1 ${raw.substring(1, 4)} ${raw.substring(4, 7)}-${raw.substring(7)}`;
+    }
+    if (/^\d{7,15}$/.test(raw)) {
+      return `+${raw}`;
+    }
+    return raw;
   }
 
   // =========================================================================
@@ -241,11 +313,13 @@
       const phoneTextEl = document.getElementById("contact-phone-text");
       const slaEl = document.getElementById("contact-sla");
 
-      const displayName = data.display_name || data.contact_name || chatQuery;
+      const rawName = data.display_name || data.contact_name;
       const phoneNum = data.phone_number || data.contact_number || "";
+      const isHuman = isHumanContactName(rawName, data.chat_id);
+      const displayName = isHuman ? rawName : (phoneNum ? formatPhoneNumber(phoneNum) : (rawName || chatQuery));
       currentContactDisplayName = displayName;
 
-      const formattedPhone = phoneNum ? `+${String(phoneNum).replace(/^\+/, "")}` : (data.chat_id || "");
+      const formattedPhone = phoneNum ? formatPhoneNumber(phoneNum) : (data.chat_id || "");
       if (nameEl) {
         nameEl.textContent = displayName;
         nameEl.title = displayName;
@@ -256,8 +330,9 @@
         phoneEl.textContent = formattedPhone;
       }
       if (phoneEl) {
-        phoneEl.setAttribute("data-phone", formattedPhone);
-        phoneEl.title = `Clic para copiar teléfono: ${formattedPhone}`;
+        const cleanPhone = phoneNum ? String(phoneNum).replace(/\D/g, "") : formattedPhone;
+        phoneEl.setAttribute("data-phone", cleanPhone);
+        phoneEl.title = `Clic para copiar teléfono: ${cleanPhone}`;
       }
 
       if (slaEl) {
@@ -275,11 +350,17 @@
 
       // Limpiar búsqueda anterior del chat
       const searchInput = document.getElementById("input-search-chat");
+      const searchClearBtn = document.getElementById("btn-search-clear");
       const searchRes = document.getElementById("chat-search-results");
       const navBar = document.getElementById("search-nav-bar");
+      const navPrev = document.getElementById("btn-search-prev");
+      const navNext = document.getElementById("btn-search-next");
       if (searchInput) searchInput.value = "";
+      if (searchClearBtn) searchClearBtn.style.display = "none";
       if (searchRes) searchRes.innerHTML = "";
       if (navBar) navBar.style.display = "none";
+      if (navPrev) navPrev.disabled = true;
+      if (navNext) navNext.disabled = true;
       currentSearchResults = [];
       currentSearchIndex = -1;
       currentSearchQuery = "";
@@ -295,6 +376,13 @@
 
       const crmMeta = data.crm || {};
 
+      // Banner si el contacto fue excluido permanentemente del Radar
+      const ignoredBanner = document.getElementById("radar-ignored-banner");
+      const isRadarIgnored = Boolean(Number(crmMeta.radar_ignored || data.radar_ignored || 0));
+      if (ignoredBanner) {
+        ignoredBanner.style.display = isRadarIgnored ? "flex" : "none";
+      }
+
       // Ticket
       const ticketStatus = crmMeta.ticket_status || data.ticket_status || "none";
       document.querySelectorAll(".btn-ticket").forEach(btn => {
@@ -306,7 +394,9 @@
       const dealInput = document.getElementById("input-deal-value");
       const followupInput = document.getElementById("input-followup-date");
 
-      const stageVal = crmMeta.sales_stage || data.sales_stage || "none";
+      const rawStage = crmMeta.sales_stage || data.sales_stage || "none";
+      const legacyStageMap = { propuesta: "quoted", ganado: "won", perdido: "lost" };
+      const stageVal = legacyStageMap[rawStage] || rawStage;
       const estVal = crmMeta.estimated_value !== undefined ? crmMeta.estimated_value : data.deal_value;
       const followVal = crmMeta.follow_up_date || data.followup_date || "";
 
@@ -777,7 +867,7 @@
               chat_id: currentChatId,
               sales_stage: stageSelect.value,
               estimated_value: parseFloat(dealInput.value) || 0,
-              follow_up_date: followupInput.value || null
+              follow_up_date: followupInput.value || ""
             }
           });
           showToast("Pipeline comercial actualizado");
@@ -940,11 +1030,25 @@
   function setupChatSearch() {
     const input = document.getElementById("input-search-chat");
     const btn = document.getElementById("btn-search-chat");
+    const btnClear = document.getElementById("btn-search-clear");
     const btnPrev = document.getElementById("btn-search-prev");
     const btnNext = document.getElementById("btn-search-next");
     const resultsContainer = document.getElementById("chat-search-results");
     const navBar = document.getElementById("search-nav-bar");
     const navCount = document.getElementById("search-nav-count");
+
+    const clearSearch = () => {
+      if (input) input.value = "";
+      if (btnClear) btnClear.style.display = "none";
+      if (resultsContainer) resultsContainer.innerHTML = "";
+      if (navBar) navBar.style.display = "none";
+      currentSearchResults = [];
+      currentSearchIndex = -1;
+      currentSearchQuery = "";
+      if (btnPrev) btnPrev.disabled = true;
+      if (btnNext) btnNext.disabled = true;
+      if (input) input.focus();
+    };
 
     const updateNavUI = () => {
       if (!navBar || !navCount) return;
@@ -956,8 +1060,10 @@
       }
       navBar.style.display = "flex";
       navCount.textContent = `Coincidencia ${currentSearchIndex + 1} de ${currentSearchResults.length}`;
-      if (btnPrev) btnPrev.disabled = (currentSearchIndex >= currentSearchResults.length - 1);
-      if (btnNext) btnNext.disabled = (currentSearchIndex <= 0);
+      // Flecha arriba (▲): se deshabilita si estamos en el primer resultado (arriba en la lista visual)
+      if (btnPrev) btnPrev.disabled = (currentSearchIndex <= 0);
+      // Flecha abajo (▼): se deshabilita si estamos en el último resultado (abajo en la lista visual)
+      if (btnNext) btnNext.disabled = (currentSearchIndex >= currentSearchResults.length - 1);
 
       // Resaltar elemento activo en la lista y scrollear suavemente hacia él
       if (resultsContainer) {
@@ -976,15 +1082,23 @@
     const navigateMatch = (direction) => {
       if (!currentSearchResults || currentSearchResults.length === 0) return;
       if (direction === "prev" || direction === "up") {
-        // Hacia arriba en el tiempo (más antiguo) -> siguiente en la lista ordenada desc
-        if (currentSearchIndex < currentSearchResults.length - 1) {
-          currentSearchIndex++;
+        // Hacia arriba en la lista visual de resultados (coincidencia anterior, hacia índice 0)
+        if (currentSearchIndex > 0) {
+          currentSearchIndex--;
+          updateNavUI();
+        } else if (currentSearchResults.length > 1) {
+          // Ciclar al final de la lista
+          currentSearchIndex = currentSearchResults.length - 1;
           updateNavUI();
         }
       } else if (direction === "next" || direction === "down") {
-        // Hacia abajo en el tiempo (más reciente) -> anterior en la lista ordenada desc
-        if (currentSearchIndex > 0) {
-          currentSearchIndex--;
+        // Hacia abajo en la lista visual de resultados (coincidencia siguiente, hacia índice final)
+        if (currentSearchIndex < currentSearchResults.length - 1) {
+          currentSearchIndex++;
+          updateNavUI();
+        } else if (currentSearchResults.length > 1) {
+          // Ciclar al inicio de la lista
+          currentSearchIndex = 0;
           updateNavUI();
         }
       }
@@ -993,16 +1107,16 @@
     const doSearch = async (forceNew = false) => {
       const q = (input && input.value || "").trim();
       if (!q) {
+        clearSearch();
         if (resultsContainer) resultsContainer.innerHTML = '<div class="empty-subtext">Ingresa una palabra o término para buscar.</div>';
-        currentSearchResults = [];
-        currentSearchIndex = -1;
-        updateNavUI();
         return;
       }
 
-      // Si es la misma consulta y ya tenemos resultados, Enter navega a la siguiente coincidencia hacia arriba
+      if (btnClear) btnClear.style.display = "inline-flex";
+
+      // Si es la misma consulta y ya tenemos resultados, Enter navega hacia abajo a la siguiente coincidencia
       if (!forceNew && q.toLowerCase() === currentSearchQuery.toLowerCase() && currentSearchResults.length > 0) {
-        navigateMatch("prev");
+        navigateMatch("next");
         return;
       }
 
@@ -1033,18 +1147,26 @@
     };
 
     if (btn) btn.addEventListener("click", () => doSearch(true));
+    if (btnClear) btnClear.addEventListener("click", clearSearch);
     if (btnPrev) btnPrev.addEventListener("click", () => navigateMatch("prev"));
     if (btnNext) btnNext.addEventListener("click", () => navigateMatch("next"));
 
     if (input) {
+      input.addEventListener("input", () => {
+        const hasText = (input.value || "").trim().length > 0;
+        if (btnClear) btnClear.style.display = hasText ? "inline-flex" : "none";
+      });
+
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
           if (e.shiftKey) {
-            navigateMatch("next");
+            navigateMatch("prev");
           } else {
             doSearch(false);
           }
+        } else if (e.key === "Escape") {
+          clearSearch();
         }
       });
     }
@@ -1116,8 +1238,8 @@
         if (navCount) navCount.textContent = `Coincidencia ${idx + 1} de ${results.length}`;
         const btnPrev = document.getElementById("btn-search-prev");
         const btnNext = document.getElementById("btn-search-next");
-        if (btnPrev) btnPrev.disabled = (idx >= results.length - 1);
-        if (btnNext) btnNext.disabled = (idx <= 0);
+        if (btnPrev) btnPrev.disabled = (idx <= 0);
+        if (btnNext) btnNext.disabled = (idx >= results.length - 1);
         container.querySelectorAll(".search-result-item").forEach((el, i) => {
           el.classList.toggle("active-match", i === idx);
         });
@@ -1138,6 +1260,125 @@
   // =========================================================================
   // PESTAÑA 3: RADAR (SIN RESPONDER / SEGUIMIENTOS VENTAS)
   // =========================================================================
+  function canDismissRadarItem(item) {
+    const assigned = ((item && item.assigned_to) || "").trim();
+    if (!assigned) return true;
+    const me = (operatorName || "").trim();
+    return Boolean(me) && assigned.toLowerCase() === me.toLowerCase();
+  }
+
+  function closeAllRadarReasonMenus(exceptEl = null) {
+    document.querySelectorAll(".radar-item.menu-open").forEach(card => {
+      if (card === exceptEl) return;
+      card.classList.remove("menu-open");
+      const menu = card.querySelector(".radar-reason-menu");
+      if (menu) menu.style.display = "none";
+      const moreBtn = card.querySelector(".btn-radar-more");
+      if (moreBtn) {
+        moreBtn.classList.remove("active");
+        moreBtn.textContent = "⋯";
+      }
+      const salesBtn = card.querySelector(".btn-radar-sales-act");
+      if (salesBtn) {
+        salesBtn.classList.remove("active");
+      }
+    });
+  }
+
+  async function executeRadarDismiss(item, mode, reason, cardEl, toastSummary) {
+    if (!item || !item.chat_id) return;
+    if (!canDismissRadarItem(item)) {
+      showToast(`🔒 Este chat está asignado a ${item.assigned_to}`);
+      return;
+    }
+
+    if (cardEl) {
+      cardEl.classList.add("dismissing");
+    }
+
+    try {
+      const res = await apiFetch("/api/radar/dismiss", {
+        method: "POST",
+        body: {
+          account_id: currentAccountId,
+          chat_id: item.chat_id,
+          mode: mode,
+          reason: reason,
+          operator_name: operatorName
+        }
+      });
+
+      await loadRadarData();
+      if (currentChatId && (currentChatId === item.chat_id || currentChatId === res.chat_id || currentAssociatedIds.includes(item.chat_id))) {
+        if (currentChatQuery) loadChatContext(currentChatQuery);
+      }
+
+      const prevState = res && res.prev_state ? res.prev_state : null;
+      const targetChatId = (res && res.chat_id) || item.chat_id;
+
+      if (prevState) {
+        showToast(toastSummary || "Chat descartado del Radar", {
+          actionLabel: "Deshacer",
+          duration: 5000,
+          onAction: async () => {
+            try {
+              await apiFetch("/api/radar/undo", {
+                method: "POST",
+                body: {
+                  account_id: currentAccountId,
+                  chat_id: targetChatId,
+                  prev_state: prevState,
+                  operator_name: operatorName
+                }
+              });
+              showToast("↩️ Acción deshecha");
+              await loadRadarData();
+              if (currentChatId && (currentChatId === targetChatId || currentAssociatedIds.includes(targetChatId))) {
+                if (currentChatQuery) loadChatContext(currentChatQuery);
+              }
+            } catch (undoErr) {
+              showToast(undoErr.message || "No se pudo deshacer");
+            }
+          }
+        });
+      } else {
+        showToast(toastSummary || "Chat actualizado");
+      }
+    } catch (err) {
+      if (cardEl) {
+        cardEl.classList.remove("dismissing");
+      }
+      showToast(err.message || "No se pudo descartar el chat");
+    }
+  }
+
+  function setupRadarIgnoredBanner() {
+    const btnReactivate = document.getElementById("btn-reactivate-radar");
+    if (!btnReactivate) return;
+    btnReactivate.addEventListener("click", async () => {
+      if (!currentChatId) return;
+      try {
+        await apiFetch("/api/radar/dismiss", {
+          method: "POST",
+          body: {
+            account_id: currentAccountId,
+            chat_id: currentChatId,
+            mode: "unanswered",
+            reason: "reactivate_radar",
+            operator_name: operatorName
+          }
+        });
+        const banner = document.getElementById("radar-ignored-banner");
+        if (banner) banner.style.display = "none";
+        showToast("🔔 Contacto reactivado en el Radar");
+        if (currentChatQuery) loadChatContext(currentChatQuery);
+        loadRadarData();
+      } catch (err) {
+        showToast(err.message || "Error al reactivar en el Radar");
+      }
+    });
+  }
+
   function setupRadarTabs() {
     const btnUnanswered = document.getElementById("btn-radar-unanswered");
     const btnSales = document.getElementById("btn-radar-sales");
@@ -1159,6 +1400,18 @@
         loadRadarData();
       });
     }
+
+    // Cerrar menús de motivos de descarte al hacer clic fuera o presionar Escape
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".radar-item")) {
+        closeAllRadarReasonMenus();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeAllRadarReasonMenus();
+      }
+    });
   }
 
   async function loadRadarData() {
@@ -1168,7 +1421,7 @@
 
     try {
       if (currentRadarMode === "unanswered") {
-        const data = await apiFetch(`/api/support/unanswered?account_id=${encodeURIComponent(currentAccountId)}`);
+        const data = await apiFetch(`/api/support/unanswered?account_id=${encodeURIComponent(currentAccountId)}&days=7`);
         const items = Array.isArray(data) ? data : (data && (data.chats || data.unanswered) ? (data.chats || data.unanswered) : []);
 
         const countBadge = document.getElementById("count-unanswered");
@@ -1210,30 +1463,113 @@
       filtered = filtered.filter(it => !it.assigned_to);
     }
 
+    // Deduplicación defensiva
+    const seen = new Set();
+    filtered = filtered.filter(it => {
+      const key = it.chat_id || it.display_name;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     if (!filtered || filtered.length === 0) {
-      container.innerHTML = '<div class="empty-subtext">🎉 ¡Excelente! No tienes mensajes pendientes de respuesta.</div>';
+      container.innerHTML = '<div class="empty-subtext">🎉 ¡Excelente! No tienes mensajes pendientes de respuesta (últimos 7 días).</div>';
       return;
     }
 
     filtered.forEach(item => {
       const el = document.createElement("div");
       el.className = "radar-item";
-      const name = item.display_name || item.nombre || item.contact_name || item.chat_id;
+      const rawName = item.display_name || item.nombre || item.contact_name;
+      const phone = item.phone_number;
+      const isHuman = isHumanContactName(rawName, item.chat_id);
+      const name = isHuman ? rawName : (phone ? formatPhoneNumber(phone) : (rawName || item.chat_id));
+      const copyQuery = (isHuman && rawName) ? rawName : (phone ? String(phone).replace(/\D/g, "") : (name || item.chat_id));
       const snippet = item.last_message || item.ultimo_mensaje || "(Mensaje multimedia/vacío)";
       const waitTime = item.waiting_str || (item.minutos_espera ? `Hace ${item.minutos_espera}m` : (item.espera || ""));
       const assignBadge = item.assigned_to ? `<span class="badge-assign" style="font-size:10px; color:#38bdf8;">👤 ${escapeHtml(item.assigned_to)}</span>` : "";
+      const canDismiss = canDismissRadarItem(item);
+
+      const actionsHtml = canDismiss
+        ? `
+          <button type="button" class="btn-radar-dismiss" title="Descartar pendiente (No requiere respuesta)">✓</button>
+          <button type="button" class="btn-radar-more" title="Más opciones de descarte o exclusión">⋯</button>
+        `
+        : `<button type="button" class="btn-radar-locked" title="Asignado a ${escapeHtml(item.assigned_to)} — Solo su responsable puede descartarlo">🔒</button>`;
 
       el.innerHTML = `
         <div class="radar-item-top">
-          <span class="radar-item-name">${escapeHtml(name)} ${assignBadge}</span>
-          <span class="radar-item-time">${escapeHtml(waitTime)}</span>
+          <span class="radar-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${assignBadge}</span>
+          <div class="radar-item-right">
+            <span class="radar-item-time">${escapeHtml(waitTime)}</span>
+            <span class="radar-item-actions">${actionsHtml}</span>
+          </div>
         </div>
         <div class="radar-item-snippet">${escapeHtml(snippet)}</div>
+        ${canDismiss ? `
+        <div class="radar-reason-menu" style="display:none;">
+          <div class="radar-reason-label">Descartar con motivo (se registra en bitácora):</div>
+          <div class="radar-reason-grid">
+            <button type="button" class="btn-radar-reason success" data-reason="no_reply_needed" data-toast="✓ Descartado (No requiere respuesta)">👍 No requiere resp.</button>
+            <button type="button" class="btn-radar-reason" data-reason="resolved_other_channel" data-toast="📞 Descartado (Atendido por otra vía)">📞 Otra vía</button>
+            <button type="button" class="btn-radar-reason" data-reason="ignore_personal" data-toast="🏠 Contacto excluido (Personal)">🏠 Personal / Ignorar</button>
+            <button type="button" class="btn-radar-reason danger" data-reason="ignore_spam" data-toast="🗑️ Contacto excluido (Spam)">🗑️ Spam / Equiv.</button>
+          </div>
+        </div>
+        ` : ""}
       `;
 
+      const quickBtn = el.querySelector(".btn-radar-dismiss");
+      if (quickBtn) {
+        quickBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          executeRadarDismiss(item, "unanswered", "no_reply_needed", el, "✓ Descartado (No requiere respuesta)");
+        });
+      }
+
+      const moreBtn = el.querySelector(".btn-radar-more");
+      const menuEl = el.querySelector(".radar-reason-menu");
+      if (moreBtn && menuEl) {
+        moreBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const isOpen = menuEl.style.display !== "none";
+          closeAllRadarReasonMenus(el);
+          if (isOpen) {
+            menuEl.style.display = "none";
+            el.classList.remove("menu-open");
+            moreBtn.classList.remove("active");
+            moreBtn.textContent = "⋯";
+          } else {
+            menuEl.style.display = "block";
+            el.classList.add("menu-open");
+            moreBtn.classList.add("active");
+            moreBtn.textContent = "✕";
+            menuEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          }
+        });
+
+        menuEl.addEventListener("click", (e) => e.stopPropagation());
+        menuEl.querySelectorAll(".btn-radar-reason").forEach(rBtn => {
+          rBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const rCode = rBtn.getAttribute("data-reason");
+            const rToast = rBtn.getAttribute("data-toast");
+            executeRadarDismiss(item, "unanswered", rCode, el, rToast);
+          });
+        });
+      }
+
+      const lockBtn = el.querySelector(".btn-radar-locked");
+      if (lockBtn) {
+        lockBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showToast(`🔒 Asignado a ${item.assigned_to} (solo su responsable puede descartarlo)`);
+        });
+      }
+
       el.addEventListener("click", () => {
-        loadChatContext(item.chat_id || name);
-        copyToClipboard(name, `Contacto "${name}" copiado para buscar en WhatsApp Web`);
+        loadChatContext(item.chat_id || copyQuery);
+        copyToClipboard(copyQuery, `Contacto "${copyQuery}" copiado para buscar en WhatsApp Web`);
       });
 
       container.appendChild(el);
@@ -1252,30 +1588,111 @@
       filtered = filtered.filter(it => !it.assigned_to);
     }
 
+    // Deduplicación defensiva
+    const seen = new Set();
+    filtered = filtered.filter(it => {
+      const key = it.chat_id || it.display_name;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     if (!filtered || filtered.length === 0) {
       container.innerHTML = '<div class="empty-subtext">No hay seguimientos de ventas pendientes hoy.</div>';
       return;
     }
 
+    const stageLabels = {
+      lead: "Lead",
+      quoted: "Cotiz.",
+      propuesta: "Cotiz.",
+      contactado: "En conv.",
+      negociacion: "Negoc.",
+      none: "48h+"
+    };
+
     filtered.forEach(item => {
       const el = document.createElement("div");
       el.className = "radar-item";
-      const name = item.display_name || item.contact_name || item.chat_id;
-      const stage = item.sales_stage || "lead";
+      const rawName = item.display_name || item.contact_name;
+      const phone = item.phone_number;
+      const isHuman = isHumanContactName(rawName, item.chat_id);
+      const name = isHuman ? rawName : (phone ? formatPhoneNumber(phone) : (rawName || item.chat_id));
+      const copyQuery = (isHuman && rawName) ? rawName : (phone ? String(phone).replace(/\D/g, "") : (name || item.chat_id));
+      const rawStage = item.sales_stage || "lead";
+      const stage = stageLabels[rawStage] || rawStage;
       const value = item.estimated_value ? `$${item.estimated_value}` : "";
       const assignBadge = item.assigned_to ? `<span class="badge-assign" style="font-size:10px; color:#38bdf8;">👤 ${escapeHtml(item.assigned_to)}</span>` : "";
+      const canDismiss = canDismissRadarItem(item);
+
+      const actionsHtml = canDismiss
+        ? `<button type="button" class="btn-radar-sales-act" title="Resolver o posponer seguimiento comercial">✓▾</button>`
+        : `<button type="button" class="btn-radar-locked" title="Asignado a ${escapeHtml(item.assigned_to)} — Solo su responsable puede resolverlo">🔒</button>`;
 
       el.innerHTML = `
         <div class="radar-item-top">
-          <span class="radar-item-name">${escapeHtml(name)} ${assignBadge}</span>
-          <span class="radar-item-time">${escapeHtml(stage)} ${escapeHtml(value)}</span>
+          <span class="radar-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${assignBadge}</span>
+          <div class="radar-item-right">
+            <span class="radar-item-time">${escapeHtml(stage)} ${escapeHtml(value)}</span>
+            <span class="radar-item-actions">${actionsHtml}</span>
+          </div>
         </div>
         <div class="radar-item-snippet">${escapeHtml(item.last_message || item.notes || "Sin notas")}</div>
+        ${canDismiss ? `
+        <div class="radar-reason-menu" style="display:none;">
+          <div class="radar-reason-label">Resolver oportunidad (actualiza embudo y bitácora):</div>
+          <div class="radar-reason-grid">
+            <button type="button" class="btn-radar-reason success" data-reason="sale_won" data-toast="✅ Marcado como Venta ganada">✅ Venta ganada</button>
+            <button type="button" class="btn-radar-reason danger" data-reason="sale_lost" data-toast="❌ Presupuesto descartado (Perdida)">❌ Rechazado / Perd.</button>
+            <button type="button" class="btn-radar-reason" data-reason="postpone_3d" data-toast="⏳ Seguimiento pospuesto +3 días">⏳ Posponer +3 días</button>
+            <button type="button" class="btn-radar-reason" data-reason="not_a_quote" data-toast="🚫 Quitado de seguimientos">🚫 No era presup.</button>
+            <button type="button" class="btn-radar-reason full-col" data-reason="ignore_personal" data-toast="🏠 Contacto excluido permanentemente">🏠 Contacto personal / Ignorar siempre</button>
+          </div>
+        </div>
+        ` : ""}
       `;
 
+      const salesBtn = el.querySelector(".btn-radar-sales-act");
+      const menuEl = el.querySelector(".radar-reason-menu");
+      if (salesBtn && menuEl) {
+        salesBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const isOpen = menuEl.style.display !== "none";
+          closeAllRadarReasonMenus(el);
+          if (isOpen) {
+            menuEl.style.display = "none";
+            el.classList.remove("menu-open");
+            salesBtn.classList.remove("active");
+          } else {
+            menuEl.style.display = "block";
+            el.classList.add("menu-open");
+            salesBtn.classList.add("active");
+            menuEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          }
+        });
+
+        menuEl.addEventListener("click", (e) => e.stopPropagation());
+        menuEl.querySelectorAll(".btn-radar-reason").forEach(rBtn => {
+          rBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const rCode = rBtn.getAttribute("data-reason");
+            const rToast = rBtn.getAttribute("data-toast");
+            executeRadarDismiss(item, "sales", rCode, el, rToast);
+          });
+        });
+      }
+
+      const lockBtn = el.querySelector(".btn-radar-locked");
+      if (lockBtn) {
+        lockBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showToast(`🔒 Asignado a ${item.assigned_to} (solo su responsable puede resolverlo)`);
+        });
+      }
+
       el.addEventListener("click", () => {
-        loadChatContext(item.chat_id || name);
-        copyToClipboard(name, `Contacto "${name}" copiado para buscar en WhatsApp Web`);
+        loadChatContext(item.chat_id || copyQuery);
+        copyToClipboard(copyQuery, `Contacto "${copyQuery}" copiado para buscar en WhatsApp Web`);
       });
 
       container.appendChild(el);
@@ -1286,22 +1703,70 @@
   // CONFIGURACIÓN DE CONEXIÓN LOCAL / LAN
   // =========================================================================
   function setupConnectionConfig() {
-    const toggleBtn = document.getElementById("btn-toggle-connection");
-    const body = document.getElementById("connection-body");
-    const arrow = document.getElementById("accordion-arrow");
+    const toggleBtn = document.getElementById("btn-toggle-settings");
+    const closeBtn = document.getElementById("btn-close-settings");
+    const panel = document.getElementById("settings-panel");
+    const backdrop = document.getElementById("settings-backdrop");
     const saveBtn = document.getElementById("btn-save-cfg");
     const feedback = document.getElementById("cfg-feedback");
 
-    if (toggleBtn && body) {
-      toggleBtn.addEventListener("click", () => {
-        const isClosed = body.style.display === "none";
-        body.style.display = isClosed ? "block" : "none";
-        if (arrow) arrow.textContent = isClosed ? "▲" : "▼";
+    function openSettings() {
+      if (panel) panel.style.display = "block";
+      if (backdrop) backdrop.style.display = "block";
+      if (toggleBtn) toggleBtn.classList.add("active");
+
+      // Cargar config actual por si cambió en segundo plano
+      chrome.runtime.sendMessage({ action: "get_config" }, (res) => {
+        if (res && res.config) {
+          operatorName = res.config.operatorName || "";
+          currentServerUrl = res.config.serverUrl || "http://127.0.0.1:8080";
+          currentOfficePin = res.config.officePin || "";
+          const urlInput = document.getElementById("cfg-server-url");
+          const pinInput = document.getElementById("cfg-office-pin");
+          const opInput = document.getElementById("cfg-operator-name");
+
+          if (urlInput) urlInput.value = currentServerUrl;
+          if (pinInput) pinInput.value = currentOfficePin;
+          if (opInput) opInput.value = operatorName;
+        }
       });
     }
 
-    // Cargar config actual desde el service worker
+    function closeSettings() {
+      if (panel) panel.style.display = "none";
+      if (backdrop) backdrop.style.display = "none";
+      if (toggleBtn) toggleBtn.classList.remove("active");
+    }
+
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", () => {
+        const isOpen = panel && panel.style.display !== "none";
+        if (isOpen) {
+          closeSettings();
+        } else {
+          openSettings();
+        }
+      });
+    }
+
+    if (closeBtn) {
+      closeBtn.addEventListener("click", closeSettings);
+    }
+
+    if (backdrop) {
+      backdrop.addEventListener("click", closeSettings);
+    }
+
+    // Cerrar con Escape si está abierto
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && panel && panel.style.display !== "none") {
+        closeSettings();
+      }
+    });
+
+    // Cargar config actual desde el service worker al inicio
     chrome.runtime.sendMessage({ action: "get_config" }, (res) => {
+      const prevOp = operatorName;
       if (res && res.config) {
         operatorName = res.config.operatorName || "";
         currentServerUrl = res.config.serverUrl || "http://127.0.0.1:8080";
@@ -1315,6 +1780,9 @@
         if (opInput) opInput.value = operatorName;
       }
       connectSidePanelSSE();
+      if (operatorName !== prevOp) {
+        loadRadarData();
+      }
     });
 
     // Cargar operadores conocidos desde la red si es posible
@@ -1352,6 +1820,7 @@
           connectSidePanelSSE();
           loadWorkspaceProfile();
           loadTemplates();
+          loadRadarData();
           if (currentChatQuery) loadChatContext(currentChatQuery);
         });
       });
@@ -1419,6 +1888,12 @@
       btnSyncAllFull.addEventListener("click", () => {
         chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: true });
         showToast("Sincronizando historial completo...");
+        const panel = document.getElementById("settings-panel");
+        const backdrop = document.getElementById("settings-backdrop");
+        const toggleBtn = document.getElementById("btn-toggle-settings");
+        if (panel) panel.style.display = "none";
+        if (backdrop) backdrop.style.display = "none";
+        if (toggleBtn) toggleBtn.classList.remove("active");
       });
     }
 
@@ -1534,6 +2009,7 @@
     setupTemplateFilter();
     setupChatSearch();
     setupRadarTabs();
+    setupRadarIgnoredBanner();
     setupAssignFilterButtons();
     setupConnectionConfig();
     setupMessageListener();

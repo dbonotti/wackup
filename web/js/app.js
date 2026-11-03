@@ -528,36 +528,56 @@
       return fallbackStr && fallbackStr.includes(' ') ? fallbackStr.split(' ')[1].substring(0, 5) : '';
     }
 
+    function isHumanContactName(name, jid) {
+      if (!name) return false;
+      const str = String(name).trim();
+      if (!str) return false;
+      if (jid && str.toLowerCase() === String(jid).trim().toLowerCase()) return false;
+      const lower = str.toLowerCase();
+      if (lower.endsWith('@lid') || lower.endsWith('@c.us') || lower.endsWith('@s.whatsapp.net') || lower.endsWith('@g.us') || lower.endsWith('@broadcast')) {
+        return false;
+      }
+      const digitsOnly = str.replace(/\D/g, '');
+      if (digitsOnly === str && str.length >= 12) {
+        return false;
+      }
+      return true;
+    }
+
     function formatPhoneNumber(rawPhone) {
       if (!rawPhone) return '';
-      const raw = String(rawPhone).split('@')[0].replace(/\\D/g, '');
+      const raw = String(rawPhone).split('@')[0].replace(/\D/g, '');
       if (!raw) return '';
-      if (/^549\\d{10}$/.test(raw)) {
+      if (/^549\d{10}$/.test(raw)) {
         return `+54 9 ${raw.substring(3, 6)} ${raw.substring(6, 9)}-${raw.substring(9)}`;
       }
-      if (/^54\\d{10}$/.test(raw)) {
+      if (/^54\d{10}$/.test(raw)) {
         return `+54 ${raw.substring(2, 5)} ${raw.substring(5, 8)}-${raw.substring(8)}`;
       }
-      if (/^1\\d{10}$/.test(raw)) {
+      if (/^1\d{10}$/.test(raw)) {
         return `+1 ${raw.substring(1, 4)} ${raw.substring(4, 7)}-${raw.substring(7)}`;
       }
-      if (/^\\d{7,15}$/.test(raw)) {
+      if (/^\d{7,15}$/.test(raw)) {
         return `+${raw}`;
       }
       return raw;
     }
 
-    function formatFriendlyName(name, jid) {
-      if (name && !name.endsWith('@c.us') && !name.endsWith('@g.us') && !name.endsWith('@lid') && !name.endsWith('@broadcast')) {
+    function formatFriendlyName(name, jid, phone) {
+      if (isHumanContactName(name, jid)) {
         return name;
       }
+      if (phone) {
+        const formatted = formatPhoneNumber(phone);
+        if (formatted) return formatted;
+      }
       const raw = (name || jid || '').split('@')[0];
-      if (/^549\\d{10}$/.test(raw)) {
-        return `+54 9 ${raw.substring(3, 6)} ${raw.substring(6, 9)}-${raw.substring(9)}`;
+      const isLid = (jid && String(jid).endsWith('@lid')) || (name && String(name).endsWith('@lid'));
+      if (!isLid && raw) {
+        const formattedRaw = formatPhoneNumber(raw);
+        if (formattedRaw) return formattedRaw;
       }
-      if (/^\\d{10,}$/.test(raw)) {
-        return `+${raw}`;
-      }
+      if (phone) return formatPhoneNumber(phone);
       return raw || 'Desconocido';
     }
 
@@ -1120,7 +1140,7 @@
         li.id = safeDomId('chat-', chat.chat_id);
         li.onclick = () => selectChat(chat);
         
-        const friendlyTitle = formatFriendlyName(chat.display_name, chat.chat_id);
+        const friendlyTitle = formatFriendlyName(chat.display_name, chat.chat_id, chat.phone_number);
         const initial = (friendlyTitle || '?')[0].toUpperCase();
         const avatarBg = getColorForName(friendlyTitle);
 
@@ -1232,7 +1252,7 @@
           matchedContacts.slice(0, 10).forEach(chat => {
             const li = document.createElement('li');
             li.className = 'unified-contact-item';
-            const title = formatFriendlyName(chat.display_name, chat.chat_id);
+            const title = formatFriendlyName(chat.display_name, chat.chat_id, chat.phone_number);
             const initial = title ? title.charAt(0).toUpperCase() : '?';
             const color = getColorForName(title);
             li.onclick = () => {
@@ -1273,7 +1293,8 @@
         results.forEach(item => {
           const li = document.createElement('li');
           li.className = 'search-item';
-          const title = formatFriendlyName(item.chat_nombre, item.chat_id);
+          const knownChat = allChats.find(c => c.chat_id === item.chat_id);
+          const title = formatFriendlyName(item.chat_nombre, item.chat_id, item.phone_number || knownChat?.phone_number);
           li.onclick = () => {
             let chat = allChats.find(c => c.chat_id === item.chat_id);
             if (!chat) {
@@ -1356,15 +1377,15 @@
         if (btnCopilot) btnCopilot.classList.remove('active');
       }
 
-      const friendlyTitle = formatFriendlyName(chat.display_name, chat.chat_id);
-      document.getElementById('headerTitle').textContent = friendlyTitle;
-      
       const isGroup = chat.chat_id.endsWith('@g.us');
       const isNewsletter = chat.chat_id.endsWith('@newsletter');
       const knownChat = allChats.find(c => c.chat_id === chat.chat_id) || chat;
       const rawPhone = (!isGroup && !isNewsletter)
-        ? (knownChat.phone_number || ((chat.chat_id.endsWith('@c.us') || chat.chat_id.endsWith('@s.whatsapp.net')) ? chat.chat_id.split('@')[0] : null))
+        ? (chat.phone_number || knownChat.phone_number || ((chat.chat_id.endsWith('@c.us') || chat.chat_id.endsWith('@s.whatsapp.net')) ? chat.chat_id.split('@')[0] : null))
         : null;
+
+      const friendlyTitle = formatFriendlyName(chat.display_name, chat.chat_id, rawPhone);
+      document.getElementById('headerTitle').textContent = friendlyTitle;
 
       const headerSubEl = document.getElementById('headerSub');
       if (isGroup) {

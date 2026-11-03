@@ -18,9 +18,38 @@
         <span id="profile-badge" class="badge-profile" title="Perfil de Espacio de Trabajo (clic para cambiar)">CRM</span>
         <button id="btn-update-ext" class="btn-icon btn-update" style="display:none;" title="Actualizar extensión">🔄 Actualizar</button>
         <button id="btn-sync-recent" class="btn-icon" title="Sincronizar novedades (Shift+clic: historial completo)">🔄</button>
+        <button id="btn-toggle-settings" class="btn-icon" title="Configuración del Servidor">⚙️</button>
       </div>
     </div>
   </header>
+
+  <!-- PANEL FLOTANTE DE CONFIGURACIÓN DEL SERVIDOR -->
+  <div id="settings-backdrop" class="settings-backdrop" style="display:none;"></div>
+  <div id="settings-panel" class="settings-drawer" style="display:none;">
+    <div class="settings-drawer-header">
+      <span class="settings-drawer-title">⚙️ Configuración del Servidor</span>
+      <button id="btn-close-settings" class="btn-close-settings" title="Cerrar">✕</button>
+    </div>
+    <div class="settings-drawer-body">
+      <div class="form-group mb-2">
+        <label for="cfg-server-url">URL del Servidor (Local o IP LAN):</label>
+        <input type="text" id="cfg-server-url" class="form-control" placeholder="http://127.0.0.1:8080">
+      </div>
+      <div class="form-group mb-2">
+        <label for="cfg-office-pin">PIN de Oficina (Opcional):</label>
+        <input type="password" id="cfg-office-pin" class="form-control" placeholder="PIN de acceso LAN">
+      </div>
+      <div class="form-group mb-2">
+        <label for="cfg-operator-name">Nombre de Operador:</label>
+        <input type="text" id="cfg-operator-name" class="form-control" placeholder="Ej: Juan">
+      </div>
+      <div class="settings-actions">
+        <button id="btn-save-cfg" class="btn-primary full-width">Guardar Configuración</button>
+        <button id="btn-sync-all-full" class="btn-secondary full-width">📥 Sincronizar Historial Completo</button>
+      </div>
+      <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
+    </div>
+  </div>
 
   <!-- VISTA EN CASO DE MODO SOLO RESPALDO -->
   <div id="view-backup-only" class="backup-only-view" style="display: none;">
@@ -64,6 +93,12 @@
         <!-- Alerta de Semáforo Anti-Colisión -->
         <div id="presence-banner" class="presence-alert" style="display:none;">
           <span>👁️</span> <span id="presence-text"><b>Ana</b> está viendo este chat ahora</span>
+        </div>
+
+        <!-- Aviso de Contacto Excluido del Radar (solo visible si está ignorado) -->
+        <div id="radar-ignored-banner" class="radar-ignored-banner" style="display:none;">
+          <span>🔕 Excluido del Radar</span>
+          <button id="btn-reactivate-radar" class="btn-reactivate-radar" type="button" title="Volver a incluir este contacto en el Radar">Reactivar</button>
         </div>
 
         <!-- Tarjeta de Contacto Activo (Diseño Compacto) -->
@@ -117,10 +152,10 @@
                 <option value="none">Sin Etapa Comercial</option>
                 <option value="lead">🌱 Lead / Contacto Nuevo</option>
                 <option value="contactado">💬 En Conversación</option>
-                <option value="propuesta">📄 Presupuesto Enviado</option>
+                <option value="quoted">📄 Presupuesto Enviado</option>
                 <option value="negociacion">🤝 En Negociación</option>
-                <option value="ganado">🎉 Venta Concretada</option>
-                <option value="perdido">❌ Descartado</option>
+                <option value="won">🎉 Venta Concretada</option>
+                <option value="lost">❌ Descartado</option>
               </select>
             </div>
             <div class="form-group half-width">
@@ -189,10 +224,13 @@
         <div class="section-card">
           <div class="card-title">🔍 Buscar en este Chat</div>
           <div class="search-input-group">
-            <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar palabras en este chat...">
-            <button id="btn-search-prev" class="btn-secondary btn-nav-search" title="Coincidencia anterior (más arriba en el chat) [Enter]" disabled>▲</button>
-            <button id="btn-search-next" class="btn-secondary btn-nav-search" title="Coincidencia siguiente (más abajo en el chat) [Shift+Enter]" disabled>▼</button>
-            <button id="btn-search-chat" class="btn-primary">Buscar</button>
+            <div class="search-field-wrapper">
+              <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar en este chat...">
+              <button id="btn-search-clear" class="btn-search-clear" title="Limpiar búsqueda" type="button" style="display:none;">✕</button>
+            </div>
+            <button id="btn-search-prev" class="btn-nav-search" title="Coincidencia anterior (hacia arriba) [Shift+Enter]" disabled type="button">▲</button>
+            <button id="btn-search-next" class="btn-nav-search" title="Coincidencia siguiente (hacia abajo) [Enter]" disabled type="button">▼</button>
+            <button id="btn-search-chat" class="btn-search-exec" title="Buscar [Enter]" type="button">🔍</button>
           </div>
           <div id="search-nav-bar" class="search-nav-bar" style="display: none;">
             <span id="search-nav-count" class="search-nav-count">0 de 0</span>
@@ -223,35 +261,6 @@
         <!-- Lista de Contactos de Radar -->
         <div id="radar-items-container" class="radar-list">
           <div class="empty-subtext">Cargando radar...</div>
-        </div>
-
-        <!-- Panel Plegable de Conexión del Servidor -->
-        <div class="connection-accordion">
-          <button id="btn-toggle-connection" class="accordion-header">
-            <span>⚙️ Configuración del Servidor</span>
-            <span id="accordion-arrow">▼</span>
-          </button>
-          <div id="connection-body" class="accordion-body" style="display:none;">
-            <div class="form-group mb-2">
-              <label for="cfg-server-url">URL del Servidor (Local o IP LAN):</label>
-              <input type="text" id="cfg-server-url" class="form-control" placeholder="http://127.0.0.1:8080">
-            </div>
-            <div class="form-group mb-2">
-              <label for="cfg-office-pin">PIN de Oficina (Opcional):</label>
-              <input type="password" id="cfg-office-pin" class="form-control" placeholder="PIN de acceso LAN">
-            </div>
-            <div class="form-group mb-2">
-              <label for="cfg-operator-name">Nombre de Operador:</label>
-              <input type="text" id="cfg-operator-name" class="form-control" placeholder="Ej: Juan">
-            </div>
-            <div class="form-actions">
-              <button id="btn-save-cfg" class="btn-primary full-width">Guardar Configuración</button>
-            </div>
-            <div class="form-actions mt-2">
-              <button id="btn-sync-all-full" class="btn-secondary full-width" style="font-size: 11px;">📥 Sincronizar Historial Completo</button>
-            </div>
-            <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
-          </div>
         </div>
       </section>
 

@@ -92,6 +92,8 @@ const ALLOWED_ENDPOINTS = [
   { method: "POST", pattern: /^\/api\/support\/templates\/?$/ },
   { method: "POST", pattern: /^\/api\/sales\/pipeline\/?$/ },
   { method: "GET", pattern: /^\/api\/sales\/radar(\?.*)?$/ },
+  { method: "POST", pattern: /^\/api\/radar\/dismiss\/?$/ },
+  { method: "POST", pattern: /^\/api\/radar\/undo\/?$/ },
   { method: "GET", pattern: /^\/api\/crm\/rfm\/dormant(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/crm\/support\/metrics(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/search(\?.*)?$/ },
