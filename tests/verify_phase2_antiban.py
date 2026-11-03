@@ -25,7 +25,10 @@ class TestPhase2AntiBanAndSidePanel(unittest.TestCase):
             data = json.load(f)
 
         self.assertEqual(data.get("manifest_version"), 3, "Debe ser Manifest V3")
-        self.assertEqual(data.get("version"), "3.0.0", "La versión declarada debe ser 3.0.0")
+        version_file = os.path.join(PROJECT_ROOT, "VERSION")
+        with open(version_file, "r", encoding="utf-8") as vf:
+            expected_ver = vf.read().strip()
+        self.assertEqual(data.get("version"), expected_ver, f"La versión declarada debe coincidir con {expected_ver}")
 
         # Permisos
         permissions = data.get("permissions", [])

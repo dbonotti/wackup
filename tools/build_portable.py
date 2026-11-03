@@ -143,7 +143,8 @@ def copy_production_files(dist_wackup_dir: str):
         "iniciar_visor.bat",
         "Iniciar_WAckup.vbs",
         "ver_logs.bat",
-        "README.md"
+        "README.md",
+        "MANUAL_DE_USUARIO.md"
     ]
 
     for fname in allowed_root_files:

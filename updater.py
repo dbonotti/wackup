@@ -39,7 +39,7 @@ def get_current_version(target_dir: Optional[str] = None) -> str:
                     return v
         except Exception:
             pass
-    return "3.0.0"
+    return "3.0.1"
 
 
 def parse_semver(version_str: str) -> Tuple[int, int, int]:
