@@ -1153,6 +1153,10 @@
         }
 
         const previewText = formatPreview(chat.last_msg, chat.last_tipo);
+        const tags = Array.isArray(chat.tags) ? chat.tags : [];
+        const tagsHtml = tags.length > 0 
+          ? `<div class="chat-tags-row">${tags.slice(0, 3).map(t => `<span class="chat-tag-pill" onclick="event.stopPropagation(); filterByTag('${escapeHtml(t)}');" title="Filtrar conversaciones por etiqueta: ${escapeHtml(t)}">🏷️ ${escapeHtml(t)}</span>`).join('')}${tags.length > 3 ? `<span class="chat-tag-pill more" title="${escapeHtml(tags.slice(3).join(', '))}">+${tags.length - 3}</span>` : ''}</div>`
+          : '';
 
         li.innerHTML = `
           <div class="chat-avatar" style="background-color: ${avatarBg};">${initial}</div>
@@ -1162,11 +1166,28 @@
               <span class="chat-time">${timeStr}</span>
             </div>
             <div class="chat-preview">${escapeHtml(previewText)}</div>
+            ${tagsHtml}
           </div>
         `;
         list.appendChild(li);
       });
     }
+
+    function filterByTag(tagName) {
+      if (!tagName) return;
+      const cleanTag = String(tagName).trim().replace(/^[#🏷️\s]+/, '');
+      if (!cleanTag) return;
+      if (typeof currentWorkspaceView !== 'undefined' && currentWorkspaceView !== 'conversations') {
+        switchWorkspaceView('conversations');
+      }
+      const input = document.getElementById('searchInput');
+      if (input) {
+        input.value = '#' + cleanTag;
+        handleSearchInput();
+        input.focus();
+      }
+    }
+    window.filterByTag = filterByTag;
 
     function setSearchMode(mode) {
       currentMode = mode;
@@ -1233,28 +1254,55 @@
       if (chatList) chatList.style.display = 'none';
       if (unifiedResults) unifiedResults.style.display = 'block';
 
-      // 1. Filtrado instantáneo de Contactos y Grupos
+      // 1. Filtrado instantáneo de Contactos y Grupos (incluye etiquetas)
       const q = query.toLowerCase();
+      let isTagOnlySearch = false;
+      let targetTag = q;
+      if (q.startsWith('#')) {
+        isTagOnlySearch = true;
+        targetTag = q.slice(1).trim();
+      } else if (q.startsWith('tag:')) {
+        isTagOnlySearch = true;
+        targetTag = q.slice(4).trim();
+      }
+
       const matchedContacts = allChats.filter(c => {
+        const tags = Array.isArray(c.tags) ? c.tags : [];
+        const hasMatchingTag = tags.some(t => {
+          const tLower = (t || '').toLowerCase();
+          return isTagOnlySearch ? (targetTag === '' || tLower.includes(targetTag)) : tLower.includes(q);
+        });
+
+        if (isTagOnlySearch) {
+          return hasMatchingTag;
+        }
+
         const name = (c.display_name || '').toLowerCase();
         const id = (c.chat_id || '').toLowerCase();
         const last = (c.last_msg || '').toLowerCase();
         const phone = (c.phone_number || '').toLowerCase();
         const phoneFmt = formatPhoneNumber(c.phone_number).toLowerCase();
-        return name.includes(q) || id.includes(q) || last.includes(q) || phone.includes(q) || phoneFmt.includes(q);
+        return name.includes(q) || id.includes(q) || last.includes(q) || phone.includes(q) || phoneFmt.includes(q) || hasMatchingTag;
       });
 
       if (contactsList) {
         contactsList.innerHTML = '';
         if (matchedContacts.length === 0) {
-          contactsList.innerHTML = '<li style="padding: 10px 14px; font-size: 12px; color: var(--text-muted);">Sin contactos o grupos coincidentes</li>';
+          contactsList.innerHTML = isTagOnlySearch
+            ? `<li style="padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center;">Ningún contacto tiene la etiqueta "${escapeHtml(targetTag)}"</li>`
+            : '<li style="padding: 10px 14px; font-size: 12px; color: var(--text-muted);">Sin contactos o grupos coincidentes</li>';
         } else {
-          matchedContacts.slice(0, 10).forEach(chat => {
+          const limit = isTagOnlySearch ? 100 : 20;
+          matchedContacts.slice(0, limit).forEach(chat => {
             const li = document.createElement('li');
             li.className = 'unified-contact-item';
             const title = formatFriendlyName(chat.display_name, chat.chat_id, chat.phone_number);
             const initial = title ? title.charAt(0).toUpperCase() : '?';
             const color = getColorForName(title);
+            const tags = Array.isArray(chat.tags) ? chat.tags : [];
+            const tagsHtml = tags.length > 0 
+              ? `<div class="chat-tags-row" style="margin-top: 3px;">${tags.slice(0, 3).map(t => `<span class="chat-tag-pill" onclick="event.stopPropagation(); filterByTag('${escapeHtml(t)}');" title="Filtrar por: ${escapeHtml(t)}">🏷️ ${escapeHtml(t)}</span>`).join('')}${tags.length > 3 ? `<span class="chat-tag-pill more" title="${escapeHtml(tags.slice(3).join(', '))}">+${tags.length - 3}</span>` : ''}</div>`
+              : '';
             li.onclick = () => {
               closeSearchAndRestoreChats(chat.chat_id);
               selectChat(chat);
@@ -1264,6 +1312,7 @@
               <div class="unified-contact-details">
                 <div class="unified-contact-name">${escapeHtml(title)}</div>
                 <div class="unified-contact-sub">${escapeHtml(chat.last_msg || formatPhoneNumber(chat.phone_number) || chat.chat_id)}</div>
+                ${tagsHtml}
               </div>
             `;
             contactsList.appendChild(li);
@@ -1273,10 +1322,16 @@
 
       // 2. Búsqueda en todo el historial con FTS5 (debounce 300ms)
       clearTimeout(searchDebounceTimer);
-      if (messagesList) {
-        messagesList.innerHTML = '<li style="padding: 14px; font-size: 12px; color: var(--text-time); text-align: center;">Buscando en mensajes indexados (FTS5)...</li>';
+      if (isTagOnlySearch) {
+        if (messagesList) {
+          messagesList.innerHTML = `<li style="padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center;">🏷️ Filtrando contactos con etiqueta <b>${escapeHtml(targetTag || 'todas')}</b> (${matchedContacts.length} encontrados)</li>`;
+        }
+      } else {
+        if (messagesList) {
+          messagesList.innerHTML = '<li style="padding: 14px; font-size: 12px; color: var(--text-time); text-align: center;">Buscando en mensajes indexados (FTS5)...</li>';
+        }
+        searchDebounceTimer = setTimeout(() => performGlobalSearch(query), 300);
       }
-      searchDebounceTimer = setTimeout(() => performGlobalSearch(query), 300);
     }
 
     async function performGlobalSearch(query) {
@@ -2653,10 +2708,12 @@
         return;
       }
       container.innerHTML = tags.map(t => {
-        const tagName = escapeHtml(t.tag || t);
+        const rawTag = (t && typeof t === 'object') ? (t.tag || '') : String(t || '');
+        const tagName = escapeHtml(rawTag);
+        if (!tagName) return '';
         return `
           <span class="tag-pill" style="display: inline-flex; align-items: center; gap: 4px; background: var(--bg-hover); border: 1px solid var(--border-color); padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;">
-            <span>${tagName}</span>
+            <span onclick="filterByTag('${tagName}')" style="cursor: pointer;" title="Filtrar conversaciones con la etiqueta '${tagName}'">🏷️ ${tagName}</span>
             <span onclick="removeCopilotTag('${tagName}')" style="cursor: pointer; opacity: 0.6; font-weight: bold; margin-left: 2px;" title="Eliminar etiqueta">×</span>
           </span>
         `;
@@ -2681,6 +2738,14 @@
         const data = await res.json();
         if (data && data.ok) {
           renderCopilotTags(data.tags);
+          const newTags = (data.tags || []).map(t => (t && typeof t === 'object') ? t.tag : t);
+          if (allChats) {
+            const chat = allChats.find(c => c.chat_id === selectedChatId || (c.canonical_id && c.canonical_id === selectedChatId));
+            if (chat) {
+              chat.tags = newTags;
+              renderChats(allChats);
+            }
+          }
           showToast(`✅ Etiqueta "${tag.trim()}" agregada`);
         }
       } catch (e) {
@@ -2703,6 +2768,14 @@
         const data = await res.json();
         if (data && data.ok) {
           renderCopilotTags(data.tags);
+          const newTags = (data.tags || []).map(t => (t && typeof t === 'object') ? t.tag : t);
+          if (allChats) {
+            const chat = allChats.find(c => c.chat_id === selectedChatId || (c.canonical_id && c.canonical_id === selectedChatId));
+            if (chat) {
+              chat.tags = newTags;
+              renderChats(allChats);
+            }
+          }
           showToast(`🗑️ Etiqueta "${tag}" eliminada`);
         }
       } catch (e) {
@@ -2846,7 +2919,7 @@
             return;
           }
           container.innerHTML = data.tags.map(t => `
-            <div class="tag-badge-pill">
+            <div class="tag-badge-pill" onclick="filterByTag('${escapeHtml(t.tag)}')" title="Filtrar conversaciones con la etiqueta '${escapeHtml(t.tag)}'">
               <span>🏷️ ${escapeHtml(t.tag)}</span>
               <span class="tag-badge-count" title="${t.count} chat(s)">${t.count}</span>
             </div>
@@ -3429,6 +3502,34 @@
           updatePresenceBanners();
           renderTeamOperatorsList();
           break;
+
+        case 'tags_updated': {
+          const targetId = msg.chat_id;
+          const newTags = (msg.tags || []).map(t => (t && typeof t === 'object') ? t.tag : t);
+          if (allChats) {
+            const chat = allChats.find(c => c.chat_id === targetId || (c.canonical_id && c.canonical_id === targetId));
+            if (chat) {
+              chat.tags = newTags;
+              const searchInput = document.getElementById('searchInput');
+              if (searchInput && searchInput.value.trim()) {
+                handleSearchInput();
+              } else {
+                renderChats(allChats);
+              }
+            }
+          }
+          const matchesActive = selectedChatId && (
+            selectedChatId === targetId ||
+            (selectedChatAssociatedIds && selectedChatAssociatedIds.includes(targetId))
+          );
+          if (matchesActive) {
+            renderCopilotTags(msg.tags || []);
+          }
+          if (currentWorkspaceView === 'templates') {
+            loadAllWorkspaceTags();
+          }
+          break;
+        }
 
         case 'crm_update': {
           const matchesActiveChat = selectedChatId && (

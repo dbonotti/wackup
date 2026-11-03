@@ -1531,6 +1531,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             conn = db_manager.get_connection(db_path)
             cur = conn.cursor()
             contact_map = db_manager.build_contact_map(cur)
+            tags_map = db_manager.get_all_chats_tags_map(cur)
             query = """
             SELECT 
                 c.chat_id,
@@ -1578,10 +1579,13 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     phone_number=phone,
                     chat_id=row_d["chat_id"]
                 )
+                chat_tags = tags_map.get(row_d["chat_id"]) or (tags_map.get(row_d.get("canonical_id")) if row_d.get("canonical_id") else None) or []
                 chats.append({
                     "chat_id": row_d["chat_id"],
+                    "canonical_id": row_d.get("canonical_id"),
                     "display_name": display_name,
                     "phone_number": phone,
+                    "tags": chat_tags,
                     "last_msg": db_manager.resolve_mentions_in_text(row_d["last_msg"], contact_map) if row_d.get("last_msg") else row_d.get("last_msg"),
                     "last_tipo": row_d.get("last_tipo"),
                     "last_ts": row_d.get("last_ts")

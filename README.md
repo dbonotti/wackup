@@ -15,26 +15,38 @@
 
 ---
 
-## 🌟 Novedades de WAckup 3.0
+## 🌟 Novedades y Capacidades de WAckup 3.0
 
 1. **Paquete Portable "Doble Clic":**  
    Ya no requiere tener Python ni Git instalados en la PC. El paquete incluye un runtime Python embebido autónomo.
 2. **Copiloto Nativo en Panel Lateral (`chrome.sidePanel`):**  
-   Integrado limpiamente en la interfaz de Chromium (Chrome, Edge, Brave), sin tocar el diseño de WhatsApp Web.
-3. **Visor Web con App Rail Lateral:**  
+   Integrado limpiamente en la interfaz de Chromium (Chrome, Edge, Brave), sin tocar el diseño de WhatsApp Web. Incluye panel colapsable de ajustes rápidos en el encabezado.
+3. **Radar de Atención Inteligente & Gestión de Pendientes:**  
+   - Ventana operativa de los últimos 7 días para evitar sobrecarga de chats antiguos.
+   - Descarte rápido en 1 clic y descarte fundamentado con registro en bitácora (*No requiere respuesta, Resuelto por otro canal, Personal, Spam*).
+   - Control de permisos: bloqueo de descarte si el chat está asignado a otro compañero.
+   - Acciones comerciales ágiles (*Posponer 3 días, Venta ganada, Venta perdida*) y notificación toast con **Deshacer (Undo)** inmediato.
+4. **Resolución Automática de Contactos `@lid`:**  
+   Identifica y traduce automáticamente chats con identificador `@lid` a su número telefónico real formateado, permitiendo copiar el número limpio en 1 clic para ubicarlo al instante en el buscador nativo de WhatsApp Web.
+5. **Sistema de Etiquetas y Filtros Rápidos:**  
+   - Filtro interactivo por clic en el Directorio de Etiquetas (`Alt + 3`) o desde el Copiloto (`Alt + 1`).
+   - Búsqueda directa por `#etiqueta` o `tag:etiqueta` en la barra de búsqueda unificada.
+   - Mini-pastillas visuales de etiquetas en cada conversación de la lista lateral y resultados de búsqueda.
+   - Sincronización en tiempo real vía WebSockets (`tags_updated`) entre la extensión y el Visor Web.
+6. **Visor Web con App Rail Lateral:**  
    Diseño responsivo (`1280x720` a `4K`) con 4 espacios de trabajo:
    - `💬 Conversaciones`: Visor histórico, reproductor multimedia con streaming HTTP Range y búsqueda indexada FTS5.
    - `🎯 Radar de Atención & Métricas`: Embudo de no respondidos, SLA de respuesta y mapa de calor de horarios pico.
    - `🏷️ CRM Comercial & Plantillas`: Tablero Kanban de ventas, notas compartidas y respuestas rápidas configurables.
    - `⚙️ Sistema y Red`: Copias de seguridad en caliente, logs en vivo, diagnóstico y configuración LAN.
-4. **Modo Equipo en Red Local (LAN):**  
+7. **Modo Equipo en Red Local (LAN):**  
    Múltiples compañeros en la misma oficina pueden conectarse simultáneamente al Visor y al Copiloto usando un **PIN simple de 6 dígitos**.
-5. **Semáforo Anti-Colisión y Bitácora en Tiempo Real:**  
+8. **Semáforo Anti-Colisión y Bitácora en Tiempo Real:**  
    Vía Server-Sent Events (`SSE`), visualiza quién está viendo cada chat para no pisarse al responder, y registra una bitácora cronológica inmutable por contacto.
-6. **Actualizador Nativo por HTTPS:**  
+9. **Actualizador Nativo por HTTPS:**  
    Comprueba y aplica actualizaciones desde GitHub Releases sin Git, generando antes un backup consistente con `sqlite3.Connection.backup()`.
-7. **Bandeja del Sistema (System Tray):**  
-   Ejecución silenciosa junto al reloj de Windows sin ventanas de consola CMD abiertas.
+10. **Bandeja del Sistema (System Tray):**  
+    Ejecución silenciosa junto al reloj de Windows sin ventanas de consola CMD abiertas.
 
 ---
 

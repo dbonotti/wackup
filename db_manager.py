@@ -2429,6 +2429,39 @@ def list_all_tags(db_path=None):
         rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+def get_all_chats_tags_map(cur=None, db_path=None):
+    """Retorna un diccionario {chat_id: [tag1, tag2, ...]} con resolución de alias para todos los chats."""
+    def _execute(c):
+        try:
+            c.execute("SELECT alias_id, canonical_id FROM contact_aliases")
+            alias_to_canon = {}
+            canon_to_aliases = {}
+            for a_id, can_id in c.fetchall():
+                alias_to_canon[a_id] = can_id
+                canon_to_aliases.setdefault(can_id, []).append(a_id)
+
+            c.execute("SELECT chat_id, tag FROM crm_chat_tags")
+            tag_map = {}
+            for c_id, tag in c.fetchall():
+                if not tag:
+                    continue
+                tag_map.setdefault(c_id, set()).add(tag)
+                canon = alias_to_canon.get(c_id)
+                if canon:
+                    tag_map.setdefault(canon, set()).add(tag)
+                for alias in canon_to_aliases.get(c_id, []):
+                    tag_map.setdefault(alias, set()).add(tag)
+
+            return {k: sorted(list(v)) for k, v in tag_map.items()}
+        except Exception as e:
+            logger.error(f"Error en get_all_chats_tags_map: {e}")
+            return {}
+
+    if cur is not None:
+        return _execute(cur)
+    with db_connection(db_path, write=False) as conn:
+        return _execute(conn.cursor())
+
 def list_quick_templates(profile_type=None, db_path=None):
     """Devuelve las plantillas de respuesta rápida filtradas por tipo o todas."""
     conn = get_connection(db_path)
