@@ -1643,6 +1643,9 @@ def get_copilot_context(chat_query, db_path=None):
         canonical_id=canonical_chat_id
     )
 
+    is_group = bool(effective_chat_id and effective_chat_id.endswith("@g.us"))
+    is_newsletter = bool(effective_chat_id and effective_chat_id.endswith("@newsletter"))
+
     return {
         "ok": True,
         "chat_id": effective_chat_id,
@@ -1650,6 +1653,8 @@ def get_copilot_context(chat_query, db_path=None):
         "display_name": display_name,
         "contact_name": contact_name,
         "phone_number": phone_number,
+        "is_group": is_group,
+        "is_newsletter": is_newsletter,
         "crm": crm_meta,
         "assigned_to": crm_meta.get("assigned_to", ""),
         "updated_by": crm_meta.get("updated_by", ""),

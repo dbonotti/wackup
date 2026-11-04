@@ -17,7 +17,7 @@
 5. [Guía del Copiloto Lateral (Extensión Chromium)](#5-guía-del-copiloto-lateral-extensión-chromium)
    - [5.1 Conexión Asistida al Servidor y Selección de Operador](#51-conexión-asistida-al-servidor-y-selección-de-operador)
    - [5.2 Semáforo Anti-Colisión en Tiempo Real](#52-semáforo-anti-colisión-en-tiempo-real)
-   - [5.3 Tarjeta del Contacto y Resolución de Contactos `@lid`](#53-tarjeta-del-contacto-y-resolución-de-contactos-lid)
+   - [5.3 Tarjeta del Contacto, Grupos y Resolución de Contactos `@lid`](#53-tarjeta-del-contacto-grupos-y-resolución-de-contactos-lid)
    - [5.4 Búsqueda en el Chat (FTS5) en la Solapa Gestión](#54-búsqueda-en-el-chat-fts5-en-la-solapa-gestión)
    - [5.5 CRM Rápido: Notas, Etiquetas y Respuestas Rápidas](#55-crm-rápido-notas-etiquetas-y-respuestas-rápidas)
    - [5.6 Solapa Radar en el Copiloto](#56-solapa-radar-en-el-copiloto)
@@ -202,22 +202,34 @@ Cuando usted selecciona una conversación en WhatsApp Web, el Copiloto informa d
 
 ---
 
-### 5.3 Tarjeta del Contacto y Resolución de Contactos `@lid`
+### 5.3 Tarjeta del Contacto, Grupos y Resolución de Contactos `@lid`
 
-WhatsApp Web utiliza frecuentemente identificadores internos anónimos (denominados `LID`, como `123456789@lid`) que ocultan el número telefónico real del usuario.
+La cabecera de la solapa **Gestión** adapta su visualización según el tipo de conversación activa en WhatsApp Web:
 
-* El Copiloto inspecciona las capas de sincronización y **resuelve automáticamente el `@lid` a su número telefónico internacional real** (ejemplo: `+54 9 11 9876-5432`).
-* Incluye un botón **📋 Copiar número**: con 1 clic copia el número limpio para que pueda pegarlo en el buscador oficial de WhatsApp Web si necesita abrir el chat directamente.
-* **Métrica de SLA:** Muestra el tiempo promedio de respuesta del cliente y permite asignar el operador responsable.
+* **Contactos Individuales:**
+  - Identificados con el avatar **`👤`**.
+  - **Resolución de `@lid`:** WhatsApp Web utiliza frecuentemente identificadores internos anónimos (`123456789@lid`) que ocultan el número real. El Copiloto inspecciona la base de datos y **resuelve automáticamente el `@lid` a su número telefónico internacional real** (ejemplo: `+54 9 11 9876-5432`).
+  - **Botón 📋 Copiar teléfono:** Con 1 clic copia el número limpio para pegarlo en WhatsApp Web u otras herramientas.
+* **Grupos de WhatsApp (`@g.us`):**
+  - Identificados automáticamente con el avatar **`👥`**.
+  - En lugar de mostrar el identificador técnico crudo e ilegible (`120363...@g.us`) simulando un teléfono, muestra una insignia descriptiva con el conteo de mensajes registrados: **`👥 Grupo · X msgs`** (o *Grupo de WhatsApp* si no tiene mensajes previos).
+  - Al hacer clic, copia el identificador técnico del grupo aclarando expresamente *"ID de grupo copiado"*.
+* **Canales de WhatsApp (`@newsletter`):**
+  - Identificados con el avatar **`📢`** y la insignia **`📢 Canal · X msgs`**.
+* **Métrica de SLA y Asignación:** Muestra el tiempo promedio histórico de respuesta y permite designar el operador del equipo responsable.
 
 ---
 
 ### 5.4 Búsqueda en el Chat (FTS5) en la Solapa Gestión
 
-El buscador por texto completo SQLite FTS5 se encuentra integrado directamente en la solapa principal **Gestión**, situado inmediatamente debajo de la tarjeta del contacto:
+El buscador por texto completo SQLite FTS5 se encuentra integrado directamente en la solapa principal **Gestión**, situado inmediatamente debajo de la tarjeta del contacto, con un diseño limpio y optimizado:
 
-* **Búsqueda Instantánea:** Ingrese un término (ej. *presupuesto, CBU, comprobante, dirección, modelo*) y presione `Enter` o el botón `🔍`.
-* **Navegación Interactiva:** Utilice los botones `▲` (coincidencia anterior / `Shift + Enter`) y `▼` (siguiente coincidencia / `Enter`). La barra informativa indicará la posición activa (ej. *Coincidencia 2 de 7*).
+* **Campo de Búsqueda Despejado:** El campo de texto aprovecha prácticamente todo el ancho disponible para facilitar la escritura y lectura de consultas largas, libre de controles innecesarios cuando no hay búsquedas activas.
+* **Búsqueda Instantánea:** Ingrese un término (ej. *presupuesto, CBU, comprobante, dirección, modelo*) y presione `Enter` o el botón `🔍 Buscar`.
+* **Barra de Navegación Dinámica:** Al existir coincidencias, se despliega automáticamente una barra interactiva con:
+  - Contador de posición activa (`🎯 Coincidencia X de Y`).
+  - Botones de salto rápido `▲` (coincidencia anterior / `Shift + Enter`) y `▼` (siguiente coincidencia / `Enter`).
+  - Al limpiar la búsqueda o si no hay resultados, la barra y las flechas se ocultan para mantener la interfaz limpia.
 * **Acciones en Coincidencias:**
   - **📋 Copiar:** Copia el contenido del mensaje al portapapeles.
   - **↗ Ver en Visor:** Abre la conversación directamente posicionada en ese mensaje en el Visor Web central.

@@ -315,27 +315,78 @@
       const phoneEl = document.getElementById("contact-phone");
       const phoneTextEl = document.getElementById("contact-phone-text");
       const slaEl = document.getElementById("contact-sla");
+      const typeIconEl = document.getElementById("contact-type-icon");
 
       const rawName = data.display_name || data.contact_name;
       const phoneNum = data.phone_number || data.contact_number || "";
       const isHuman = isHumanContactName(rawName, data.chat_id);
+      const isGroup = Boolean(data.is_group || (currentChatId && currentChatId.endsWith("@g.us")));
+      const isNewsletter = Boolean(data.is_newsletter || (currentChatId && currentChatId.endsWith("@newsletter")));
+      const totalMsgs = (data.stats && typeof data.stats.total_messages === "number") ? data.stats.total_messages : 0;
+
       const displayName = isHuman ? rawName : (phoneNum ? formatPhoneNumber(phoneNum) : (rawName || chatQuery));
       currentContactDisplayName = displayName;
 
-      const formattedPhone = phoneNum ? formatPhoneNumber(phoneNum) : (data.chat_id || "");
+      if (typeIconEl) {
+        if (isGroup) {
+          typeIconEl.textContent = "👥";
+          typeIconEl.title = "Grupo de WhatsApp";
+        } else if (isNewsletter) {
+          typeIconEl.textContent = "📢";
+          typeIconEl.title = "Canal de WhatsApp";
+        } else {
+          typeIconEl.textContent = "👤";
+          typeIconEl.title = "Contacto individual";
+        }
+      }
+
       if (nameEl) {
         nameEl.textContent = displayName;
         nameEl.title = displayName;
       }
-      if (phoneTextEl) {
-        phoneTextEl.textContent = formattedPhone;
-      } else if (phoneEl) {
-        phoneEl.textContent = formattedPhone;
-      }
-      if (phoneEl) {
-        const cleanPhone = phoneNum ? String(phoneNum).replace(/\D/g, "") : formattedPhone;
-        phoneEl.setAttribute("data-phone", cleanPhone);
-        phoneEl.title = `Clic para copiar teléfono: ${cleanPhone}`;
+
+      if (isGroup) {
+        const groupLabel = totalMsgs > 0 ? `👥 Grupo · ${totalMsgs} msgs` : "👥 Grupo de WhatsApp";
+        if (phoneTextEl) {
+          phoneTextEl.textContent = groupLabel;
+        } else if (phoneEl) {
+          phoneEl.textContent = groupLabel;
+        }
+        if (phoneEl) {
+          phoneEl.setAttribute("data-phone", currentChatId);
+          phoneEl.setAttribute("data-copy-label", `ID de grupo copiado: ${currentChatId}`);
+          phoneEl.title = `ID de grupo: ${currentChatId} (Clic para copiar)`;
+          phoneEl.classList.add("is-group");
+          phoneEl.classList.remove("is-newsletter");
+        }
+      } else if (isNewsletter) {
+        const newsLabel = totalMsgs > 0 ? `📢 Canal · ${totalMsgs} msgs` : "📢 Canal de WhatsApp";
+        if (phoneTextEl) {
+          phoneTextEl.textContent = newsLabel;
+        } else if (phoneEl) {
+          phoneEl.textContent = newsLabel;
+        }
+        if (phoneEl) {
+          phoneEl.setAttribute("data-phone", currentChatId);
+          phoneEl.setAttribute("data-copy-label", `ID de canal copiado: ${currentChatId}`);
+          phoneEl.title = `ID de canal: ${currentChatId} (Clic para copiar)`;
+          phoneEl.classList.add("is-newsletter");
+          phoneEl.classList.remove("is-group");
+        }
+      } else {
+        const formattedPhone = phoneNum ? formatPhoneNumber(phoneNum) : (data.chat_id || "");
+        if (phoneTextEl) {
+          phoneTextEl.textContent = formattedPhone || "--";
+        } else if (phoneEl) {
+          phoneEl.textContent = formattedPhone || "--";
+        }
+        if (phoneEl) {
+          const cleanPhone = phoneNum ? String(phoneNum).replace(/\D/g, "") : formattedPhone;
+          phoneEl.setAttribute("data-phone", cleanPhone);
+          phoneEl.setAttribute("data-copy-label", `Teléfono copiado: ${cleanPhone}`);
+          phoneEl.title = cleanPhone ? `Clic para copiar teléfono: ${cleanPhone}` : "Sin teléfono";
+          phoneEl.classList.remove("is-group", "is-newsletter");
+        }
       }
 
       if (slaEl) {
@@ -648,8 +699,9 @@
     phoneBtn.addEventListener("click", () => {
       const phoneTextEl = document.getElementById("contact-phone-text");
       const phoneToCopy = phoneBtn.getAttribute("data-phone") || (phoneTextEl ? phoneTextEl.textContent : phoneBtn.textContent).trim();
+      const copyLabel = phoneBtn.getAttribute("data-copy-label") || `Copiado: ${phoneToCopy}`;
       if (phoneToCopy && phoneToCopy !== "--" && !phoneToCopy.includes("Cargando")) {
-        copyToClipboard(phoneToCopy, `Teléfono copiado: ${phoneToCopy}`);
+        copyToClipboard(phoneToCopy, copyLabel);
         phoneBtn.classList.add("copied");
         setTimeout(() => {
           phoneBtn.classList.remove("copied");
@@ -990,10 +1042,9 @@
       }
       navBar.style.display = "flex";
       navCount.textContent = `Coincidencia ${currentSearchIndex + 1} de ${currentSearchResults.length}`;
-      // Flecha arriba (▲): se deshabilita si estamos en el primer resultado (arriba en la lista visual)
-      if (btnPrev) btnPrev.disabled = (currentSearchIndex <= 0);
-      // Flecha abajo (▼): se deshabilita si estamos en el último resultado (abajo en la lista visual)
-      if (btnNext) btnNext.disabled = (currentSearchIndex >= currentSearchResults.length - 1);
+      const hasMultiple = currentSearchResults.length > 1;
+      if (btnPrev) btnPrev.disabled = !hasMultiple;
+      if (btnNext) btnNext.disabled = !hasMultiple;
 
       // Resaltar elemento activo en la lista y scrollear suavemente hacia él
       if (resultsContainer) {
@@ -1168,8 +1219,9 @@
         if (navCount) navCount.textContent = `Coincidencia ${idx + 1} de ${results.length}`;
         const btnPrev = document.getElementById("btn-search-prev");
         const btnNext = document.getElementById("btn-search-next");
-        if (btnPrev) btnPrev.disabled = (idx <= 0);
-        if (btnNext) btnNext.disabled = (idx >= results.length - 1);
+        const hasMultiple = results.length > 1;
+        if (btnPrev) btnPrev.disabled = !hasMultiple;
+        if (btnNext) btnNext.disabled = !hasMultiple;
         container.querySelectorAll(".search-result-item").forEach((el, i) => {
           el.classList.toggle("active-match", i === idx);
         });
