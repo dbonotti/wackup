@@ -429,13 +429,6 @@
       // Presencia inmediata al abrir chat
       updatePresenceBanner(activePresenceMap);
       sendPresenceHeartbeat();
-
-      // Ficha: Entidades comerciales
-      renderEntities(data.extracted_info || data.detected_entities || {});
-
-      // Ficha: Precios cotizados
-      renderPrices(data.quoted_prices || data.detected_prices || []);
-
     } catch (err) {
       console.warn("[WAckup] Error al cargar contexto de chat:", err);
     }
@@ -958,74 +951,8 @@
   }
 
   // =========================================================================
-  // PESTAÑA 2: FICHA (ENTIDADES, PRECIOS, BÚSQUEDA FTS5)
+  // BÚSQUEDA FTS5 EN CONVERSACIÓN (EN PESTAÑA GESTIÓN)
   // =========================================================================
-  function renderEntities(entities) {
-    const container = document.getElementById("entities-container");
-    if (!container) return;
-    container.innerHTML = "";
-
-    const chips = [];
-    if (Array.isArray(entities.emails)) entities.emails.forEach(v => chips.push({ type: "Email", val: v }));
-    if (Array.isArray(entities.tax_ids)) entities.tax_ids.forEach(v => chips.push({ type: "CUIT/DNI", val: v }));
-    if (Array.isArray(entities.bank_details)) entities.bank_details.forEach(v => chips.push({ type: "CBU/Alias", val: v }));
-    if (Array.isArray(entities.cuit)) entities.cuit.forEach(v => chips.push({ type: "CUIT/CUIL", val: v }));
-    if (Array.isArray(entities.dni)) entities.dni.forEach(v => chips.push({ type: "DNI", val: v }));
-    if (Array.isArray(entities.email)) entities.email.forEach(v => chips.push({ type: "Email", val: v }));
-    if (Array.isArray(entities.cbu)) entities.cbu.forEach(v => chips.push({ type: "CBU/CVU", val: v }));
-    if (Array.isArray(entities.alias)) entities.alias.forEach(v => chips.push({ type: "Alias", val: v }));
-
-    if (chips.length === 0) {
-      container.innerHTML = '<div class="empty-subtext">No se detectaron CUITs, DNIs, emails ni cuentas bancarias en este chat.</div>';
-      return;
-    }
-
-    chips.forEach(c => {
-      const chipEl = document.createElement("div");
-      chipEl.className = "entity-chip";
-      chipEl.innerHTML = `
-        <span class="entity-type">${escapeHtml(c.type)}</span>
-        <span class="entity-value">${escapeHtml(c.val)}</span>
-      `;
-      chipEl.addEventListener("click", () => {
-        copyToClipboard(c.val, `Copiado ${c.type}: ${c.val}`);
-      });
-      container.appendChild(chipEl);
-    });
-  }
-
-  function renderPrices(prices) {
-    const container = document.getElementById("prices-history-list");
-    if (!container) return;
-    container.innerHTML = "";
-
-    if (!Array.isArray(prices) || prices.length === 0) {
-      container.innerHTML = '<div class="empty-subtext">Sin precios detectados.</div>';
-      return;
-    }
-
-    prices.forEach(p => {
-      const item = document.createElement("div");
-      item.className = "price-item";
-      let valStr = "";
-      if (p && typeof p === "object") {
-        const rawNum = p.price !== undefined ? p.price : p.amount;
-        valStr = p.amount_formatted || (rawNum !== undefined ? `$${Number(rawNum).toLocaleString()}` : "");
-      } else {
-        valStr = `$${p}`;
-      }
-      const dateStr = (p && (p.date_str || (p.date ? String(p.date).substring(0, 10) : ""))) || "";
-      item.innerHTML = `
-        <span class="price-val">${escapeHtml(valStr)}</span>
-        <span class="price-date">${escapeHtml(dateStr)}</span>
-      `;
-      item.addEventListener("click", () => {
-        copyToClipboard(valStr, `Copiado precio: ${valStr}`);
-      });
-      container.appendChild(item);
-    });
-  }
-
   let currentSearchResults = [];
   let currentSearchIndex = -1;
   let currentSearchQuery = "";

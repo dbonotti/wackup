@@ -17,9 +17,10 @@
 5. [Guía del Copiloto Lateral (Extensión Chromium)](#5-guía-del-copiloto-lateral-extensión-chromium)
    - [5.1 Conexión Asistida al Servidor y Selección de Operador](#51-conexión-asistida-al-servidor-y-selección-de-operador)
    - [5.2 Semáforo Anti-Colisión en Tiempo Real](#52-semáforo-anti-colisión-en-tiempo-real)
-   - [5.3 Ficha del Contacto y Resolución de Contactos `@lid`](#53-ficha-del-contacto-y-resolución-de-contactos-lid)
-   - [5.4 CRM Rápido: Notas, Etiquetas y Respuestas Rápidas](#54-crm-rápido-notas-etiquetas-y-respuestas-rápidas)
-   - [5.5 Pestaña Radar en el Copiloto](#55-pestaña-radar-en-el-copiloto)
+   - [5.3 Tarjeta del Contacto y Resolución de Contactos `@lid`](#53-tarjeta-del-contacto-y-resolución-de-contactos-lid)
+   - [5.4 Búsqueda en el Chat (FTS5) en la Solapa Gestión](#54-búsqueda-en-el-chat-fts5-en-la-solapa-gestión)
+   - [5.5 CRM Rápido: Notas, Etiquetas y Respuestas Rápidas](#55-crm-rápido-notas-etiquetas-y-respuestas-rápidas)
+   - [5.6 Solapa Radar en el Copiloto](#56-solapa-radar-en-el-copiloto)
 6. [Guía del Visor Web Central](#6-guía-del-visor-web-central)
    - [6.1 Espacio 1: Conversaciones y Búsqueda Avanzada](#61-espacio-1-conversaciones-y-búsqueda-avanzada)
    - [6.2 Espacio 2: Radar de Atención y Métricas (SLA)](#62-espacio-2-radar-de-atención-y-métricas-sla)
@@ -157,15 +158,17 @@ El Copiloto funciona dentro del panel lateral nativo de Chromium (`chrome.sidePa
 +------------------------------------+--------------------------+
 |                                    |  WAckup Copilot       ⚙️ |
 |                                    |--------------------------|
-|                                    | 🟢 Dario (En este chat)  |
-|          WhatsApp Web              |--------------------------|
-|                                    | 👤 Juan Pérez            |
-|       (web.whatsapp.com)           | 📞 +54 9 11 1234-5678    |
+|                                    | [📝 Gestión]  [🔔 Radar] |
+|                                    |--------------------------|
+|          WhatsApp Web              | 👁️ Martín (en este chat)|
+|       (web.whatsapp.com)           | 👤 Juan Pérez  (SLA: 4m) |
+|                                    | 📞 +54 9 11 1234-5678 📋 |
+|                                    |--------------------------|
+|                                    | 🔍 Buscar en este Chat   |
+|                                    | [presupuesto...] [▲][▼]🔍|
+|                                    |--------------------------|
 |                                    | 🏷️ [Cliente] [#VIP]      |
-|                                    |--------------------------|
-|                                    | 📝 Nota Privada:         |
-|                                    | [Interesado en Plan Pro] |
-|                                    |--------------------------|
+|                                    | 📝 Nota Fija & Bitácora  |
 |                                    | ⚡ Respuestas Rápidas    |
 +------------------------------------+--------------------------+
 ```
@@ -199,26 +202,41 @@ Cuando usted selecciona una conversación en WhatsApp Web, el Copiloto informa d
 
 ---
 
-### 5.3 Ficha del Contacto y Resolución de Contactos `@lid`
+### 5.3 Tarjeta del Contacto y Resolución de Contactos `@lid`
 
 WhatsApp Web utiliza frecuentemente identificadores internos anónimos (denominados `LID`, como `123456789@lid`) que ocultan el número telefónico real del usuario.
 
 * El Copiloto inspecciona las capas de sincronización y **resuelve automáticamente el `@lid` a su número telefónico internacional real** (ejemplo: `+54 9 11 9876-5432`).
 * Incluye un botón **📋 Copiar número**: con 1 clic copia el número limpio para que pueda pegarlo en el buscador oficial de WhatsApp Web si necesita abrir el chat directamente.
+* **Métrica de SLA:** Muestra el tiempo promedio de respuesta del cliente y permite asignar el operador responsable.
 
 ---
 
-### 5.4 CRM Rápido: Notas, Etiquetas y Respuestas Rápidas
+### 5.4 Búsqueda en el Chat (FTS5) en la Solapa Gestión
 
-* **Notas Privadas:** Puede escribir anotaciones internas (como preferencias del cliente, datos de facturación o acuerdos previos) que quedan guardadas en el servidor y son visibles para todo el equipo.
-* **Etiquetas Dinámicas:** Visualice las etiquetas del contacto y asigne nuevas con 1 clic.
-* **Respuestas Rápidas:** Haga clic sobre cualquier plantilla guardada (ej. *Bienvenida*, *Precios*, *Datos Bancarios*). La plantilla se copiará al portapapeles y se mostrará una notificación toast: basta con presionar `Ctrl + V` en el chat de WhatsApp y presionar Enter.
+El buscador por texto completo SQLite FTS5 se encuentra integrado directamente en la solapa principal **Gestión**, situado inmediatamente debajo de la tarjeta del contacto:
+
+* **Búsqueda Instantánea:** Ingrese un término (ej. *presupuesto, CBU, comprobante, dirección, modelo*) y presione `Enter` o el botón `🔍`.
+* **Navegación Interactiva:** Utilice los botones `▲` (coincidencia anterior / `Shift + Enter`) y `▼` (siguiente coincidencia / `Enter`). La barra informativa indicará la posición activa (ej. *Coincidencia 2 de 7*).
+* **Acciones en Coincidencias:**
+  - **📋 Copiar:** Copia el contenido del mensaje al portapapeles.
+  - **↗ Ver en Visor:** Abre la conversación directamente posicionada en ese mensaje en el Visor Web central.
+  - **Limpieza rápida:** Presione `Escape` o el botón `✕` para limpiar la consulta y colapsar la lista de resultados.
 
 ---
 
-### 5.5 Pestaña Radar en el Copiloto
+### 5.5 CRM Rápido: Notas, Etiquetas y Respuestas Rápidas
 
-Permite al operador consultar sus chats pendientes de respuesta directamente desde el panel lateral, filtrados para evitar conversaciones antiguas y ordenados por urgencia.
+* **Notas Privadas y Bitácora:** Puede escribir una nota fija permanente (preferencias, acuerdos) y agregar entradas cronológicas en el hilo rápido de la bitácora de equipo.
+* **Etiquetas Dinámicas:** Visualice las etiquetas asignadas al contacto y agregue nuevas con un clic.
+* **Pipeline y Tickets:** Configure etapa comercial, valor del trato ($) y estado de ticket (*Abierto*, *En Espera*, *Resuelto*).
+* **Respuestas Rápidas:** Haga clic sobre cualquier plantilla guardada (ej. *Bienvenida*, *Precios*, *Datos Bancarios*). La plantilla se copiará al portapapeles: basta con presionar `Ctrl + V` en WhatsApp Web y enviar.
+
+---
+
+### 5.6 Solapa Radar en el Copiloto
+
+Permite al operador consultar sus chats pendientes de respuesta o con seguimiento comercial agendado directamente desde el panel lateral, filtrados para evitar conversaciones antiguas y clasificados por prioridad y operador asignado.
 
 ---
 

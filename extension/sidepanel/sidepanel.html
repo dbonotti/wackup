@@ -83,9 +83,6 @@
       <button class="tab-btn active" data-tab="tab-management">
         <span>📝</span> Gestión
       </button>
-      <button class="tab-btn" data-tab="tab-card">
-        <span>📇</span> Ficha
-      </button>
       <button class="tab-btn" data-tab="tab-radar">
         <span>🔔</span> Radar <span id="radar-count-badge" class="tab-badge" style="display:none;">0</span>
       </button>
@@ -132,6 +129,27 @@
               </select>
             </div>
           </div>
+        </div>
+
+        <!-- Búsqueda FTS5 en la Conversación -->
+        <div id="sec-chat-search" class="section-card">
+          <div class="section-title-row">
+            <span class="card-title">🔍 Buscar en este Chat</span>
+          </div>
+          <div class="search-input-group">
+            <div class="search-field-wrapper">
+              <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar en este chat...">
+              <button id="btn-search-clear" class="btn-search-clear" title="Limpiar búsqueda" type="button" style="display:none;">✕</button>
+            </div>
+            <button id="btn-search-prev" class="btn-nav-search" title="Coincidencia anterior (hacia arriba) [Shift+Enter]" disabled type="button">▲</button>
+            <button id="btn-search-next" class="btn-nav-search" title="Coincidencia siguiente (hacia abajo) [Enter]" disabled type="button">▼</button>
+            <button id="btn-search-chat" class="btn-search-exec" title="Buscar [Enter]" type="button">🔍</button>
+          </div>
+          <div id="search-nav-bar" class="search-nav-bar" style="display: none;">
+            <span id="search-nav-count" class="search-nav-count">0 de 0</span>
+            <span id="search-nav-hint" class="search-nav-hint">Usa ▲ / ▼ para navegar</span>
+          </div>
+          <div id="chat-search-results" class="search-results-list"></div>
         </div>
 
         <!-- Etiquetas de Contacto -->
@@ -212,46 +230,7 @@
         </div>
       </section>
 
-      <!-- PESTAÑA 2: FICHA -->
-      <section id="tab-card" class="tab-pane">
-        <!-- Entidades Comerciales Detectadas -->
-        <div class="section-card">
-          <div class="section-title-row">
-            <span class="card-title">📌 Datos Detectados en Mensajes</span>
-            <span class="hint-pill">1 Clic para copiar</span>
-          </div>
-          <div id="entities-container" class="entities-grid">
-            <div class="empty-subtext">No se han detectado CUITs, DNIs, emails ni cuentas bancarias aún en este chat.</div>
-          </div>
-        </div>
 
-        <!-- Historial de Precios Cotizados -->
-        <div class="section-card">
-          <div class="card-title">💰 Presupuestos y Precios Mencionados</div>
-          <div id="prices-history-list" class="prices-list">
-            <div class="empty-subtext">Sin precios detectados.</div>
-          </div>
-        </div>
-
-        <!-- Búsqueda FTS5 en la Conversación -->
-        <div class="section-card">
-          <div class="card-title">🔍 Buscar en este Chat</div>
-          <div class="search-input-group">
-            <div class="search-field-wrapper">
-              <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar en este chat...">
-              <button id="btn-search-clear" class="btn-search-clear" title="Limpiar búsqueda" type="button" style="display:none;">✕</button>
-            </div>
-            <button id="btn-search-prev" class="btn-nav-search" title="Coincidencia anterior (hacia arriba) [Shift+Enter]" disabled type="button">▲</button>
-            <button id="btn-search-next" class="btn-nav-search" title="Coincidencia siguiente (hacia abajo) [Enter]" disabled type="button">▼</button>
-            <button id="btn-search-chat" class="btn-search-exec" title="Buscar [Enter]" type="button">🔍</button>
-          </div>
-          <div id="search-nav-bar" class="search-nav-bar" style="display: none;">
-            <span id="search-nav-count" class="search-nav-count">0 de 0</span>
-            <span id="search-nav-hint" class="search-nav-hint">Usa ▲ / ▼ para navegar</span>
-          </div>
-          <div id="chat-search-results" class="search-results-list"></div>
-        </div>
-      </section>
 
       <!-- PESTAÑA 3: RADAR -->
       <section id="tab-radar" class="tab-pane">

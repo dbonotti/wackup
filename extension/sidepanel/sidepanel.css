@@ -600,68 +600,8 @@ label {
 }
 
 /* =========================================================================
-   PESTAÑA 2: FICHA (ENTIDADES, PRECIOS, BÚSQUEDA)
+   MÓDULO DE BÚSQUEDA FTS5 (PESTAÑA GESTIÓN)
    ========================================================================= */
-.entities-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.entity-chip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: #0f172a;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 9px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.entity-chip:hover {
-  background: #1e3a8a;
-  border-color: #3b82f6;
-}
-
-.entity-type {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: #38bdf8;
-}
-
-.entity-value {
-  font-size: 12px;
-  font-family: monospace;
-  color: #f8fafc;
-}
-
-.prices-list {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  max-height: 150px;
-  overflow-y: auto;
-}
-
-.price-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: #0f172a;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 5px 8px;
-  font-size: 11px;
-}
-.price-val {
-  font-weight: 700;
-  color: #34d399;
-}
-.price-date {
-  color: var(--text-dim);
-}
 
 .search-input-group {
   display: flex;
