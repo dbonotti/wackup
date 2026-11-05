@@ -687,32 +687,60 @@ def get_best_contact_display(custom_name=None, chat_name=None, contact_name=None
                              phone_number=None, chat_id=None, canonical_id=None):
     """
     Devuelve el mejor nombre para mostrar a humanos:
-    1. custom_name de CRM o nombre agendado o push_name real.
-    2. Si no hay nombre real disponible, devuelve el número telefónico formateado (+54 9 351 ...).
-    3. Si no hay teléfono pero es grupo o newsletter, devuelve su título o fallback legible.
+    1. Si es grupo o newsletter, devuelve su título legible.
+    2. Si es contacto individual y tiene nombre personalizado (CRM) o agendado, devuelve dicho nombre.
+    3. Si es contacto no agendado, devuelve su número telefónico formateado (ej. '+54 9 291 508-0263'),
+       exactamente igual que WhatsApp Web para facilitar la búsqueda visual.
+    4. Si no hay teléfono disponible, utiliza push_name como último recurso antes del chat_id.
     """
-    # 1. Probar nombres humanos en orden de prioridad
-    for cand in (custom_name, contact_name, chat_name, push_name):
-        if is_human_contact_name(cand, chat_id):
-            return cand.strip()
+    cid_str = str(chat_id or "")
+    is_group = cid_str.endswith("@g.us")
+    is_newsletter = cid_str.endswith("@newsletter")
 
-    # 2. Si no hay nombre humano, resolver número telefónico
+    if is_group:
+        for cand in (custom_name, chat_name, contact_name):
+            if is_human_contact_name(cand, chat_id):
+                return cand.strip()
+        return "Grupo de WhatsApp"
+
+    if is_newsletter:
+        for cand in (custom_name, chat_name, contact_name):
+            if is_human_contact_name(cand, chat_id):
+                return cand.strip()
+        return "Canal de WhatsApp"
+
+    # 1. Contacto individual: Probar nombres agendados o CRM (no números telefónicos crudos)
+    for cand in (custom_name, contact_name):
+        if is_human_contact_name(cand, chat_id):
+            clean = cand.strip()
+            digits = re.sub(r'\D', '', clean)
+            has_letters = bool(re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]', clean))
+            if has_letters or len(digits) < 6:
+                return clean
+
+    # Si hay chat_name con letras (agendado en la app/dispositivo)
+    if is_human_contact_name(chat_name, chat_id):
+        clean_chat = chat_name.strip()
+        digits_chat = re.sub(r'\D', '', clean_chat)
+        has_letters = bool(re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]', clean_chat))
+        if has_letters or len(digits_chat) < 6:
+            return clean_chat
+
+    # 2. Contacto NO agendado: Resolver y formatear número de teléfono (estilo WhatsApp Web)
     num = phone_number
     if not num and canonical_id and str(canonical_id).endswith("@c.us"):
         num = str(canonical_id).split("@")[0]
-    if not num and chat_id and (str(chat_id).endswith("@c.us") or str(chat_id).endswith("@s.whatsapp.net")):
-        num = str(chat_id).split("@")[0]
+    if not num and (cid_str.endswith("@c.us") or cid_str.endswith("@s.whatsapp.net")):
+        num = cid_str.split("@")[0]
 
     if num:
         clean_num = re.sub(r'\D', '', str(num).split('@')[0])
-        if clean_num:
+        if clean_num and len(clean_num) >= 6:
             return format_phone_number(clean_num)
 
-    # 3. Fallbacks finales
-    if chat_id and str(chat_id).endswith("@g.us"):
-        return (chat_name if is_human_contact_name(chat_name, chat_id) else "Grupo de WhatsApp")
-    if chat_id and str(chat_id).endswith("@newsletter"):
-        return (chat_name if is_human_contact_name(chat_name, chat_id) else "Canal de WhatsApp")
+    # 3. Si no hay número de teléfono disponible, usar el push_name como último recurso
+    if is_human_contact_name(push_name, chat_id):
+        return push_name.strip()
 
     return chat_id or "Sin nombre"
 
@@ -1499,6 +1527,7 @@ def get_copilot_context(chat_query, db_path=None):
 
     found_ids = set()
     contact_name = None
+    contact_push_name = None
     phone_number = None
 
     # 1. Buscar en chats por chat_id o nombre exacto
@@ -1519,8 +1548,10 @@ def get_copilot_context(chat_query, db_path=None):
     crow = cur.fetchone()
     if crow:
         found_ids.add(crow["contact_id"])
-        if not contact_name:
-            contact_name = crow["nombre"] or crow["push_name"]
+        if crow["push_name"]:
+            contact_push_name = crow["push_name"]
+        if crow["nombre"]:
+            contact_name = crow["nombre"]
         if crow["numero"]:
             phone_number = crow["numero"]
             found_ids.add(f"{crow['numero']}@c.us")
@@ -1537,7 +1568,10 @@ def get_copilot_context(chat_query, db_path=None):
         crow = cur.fetchone()
         if crow:
             found_ids.add(crow["contact_id"])
-            contact_name = crow["nombre"] or crow["push_name"]
+            if crow["push_name"]:
+                contact_push_name = crow["push_name"]
+            if crow["nombre"]:
+                contact_name = crow["nombre"]
             if crow["numero"]:
                 phone_number = crow["numero"]
                 found_ids.add(f"{crow['numero']}@c.us")
@@ -1724,6 +1758,9 @@ def get_copilot_context(chat_query, db_path=None):
         "display_name": display_name,
         "contact_name": contact_name,
         "phone_number": phone_number,
+        "push_name": contact_push_name,
+        "saved_name": contact_name,
+        "is_saved": bool(crm_meta.get("custom_name") or (contact_name and is_human_contact_name(contact_name, effective_chat_id))),
         "is_group": is_group,
         "is_newsletter": is_newsletter,
         "crm": crm_meta,

@@ -348,6 +348,7 @@
     .chat-info { flex: 1; overflow: hidden; }
     .chat-header-row { display: flex; justify-content: space-between; align-items: baseline; }
     .chat-name { font-size: 15px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-pushname-tag { font-size: 12px; font-weight: 400; color: var(--text-time); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
     .chat-time { font-size: 11px; color: var(--text-time); flex-shrink: 0; margin-left: 6px; }
     .chat-preview { font-size: 13.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
     .chat-tags-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }

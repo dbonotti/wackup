@@ -299,6 +299,36 @@ class TestRadarManagement(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_unsaved_contact_display_name_shows_phone_and_keeps_pushname(self):
+        """Verifica que contactos no agendados muestren su teléfono y preserven push_name."""
+        unsaved_lid = "100296327987372@lid"
+        unsaved_phone = "5492915080263"
+        push_name = "Juliana"
+
+        with db_manager.db_connection(self.db_path, write=True) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO chats (chat_id, nombre, ultimo_timestamp, ultimo_mensaje, ultimo_es_mio) VALUES (?, ?, ?, ?, ?)",
+                (unsaved_lid, None, int(time.time()), "Hola", 0)
+            )
+            cur.execute(
+                "INSERT INTO contactos (contact_id, numero, nombre, push_name) VALUES (?, ?, ?, ?)",
+                (unsaved_lid, unsaved_phone, None, push_name)
+            )
+
+        disp = db_manager.get_best_contact_display(
+            contact_name=None,
+            push_name=push_name,
+            phone_number=unsaved_phone,
+            chat_id=unsaved_lid
+        )
+        self.assertEqual(disp, "+54 9 291 508-0263")
+
+        ctx = db_manager.get_copilot_context(unsaved_lid, db_path=self.db_path)
+        self.assertEqual(ctx["display_name"], "+54 9 291 508-0263")
+        self.assertEqual(ctx["push_name"], "Juliana")
+        self.assertFalse(ctx["is_saved"])
+
 
 if __name__ == "__main__":
     unittest.main()

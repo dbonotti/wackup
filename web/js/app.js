@@ -1158,11 +1158,21 @@
           ? `<div class="chat-tags-row">${tags.slice(0, 3).map(t => `<span class="chat-tag-pill" onclick="event.stopPropagation(); filterByTag('${escapeHtml(t)}');" title="Filtrar conversaciones por etiqueta: ${escapeHtml(t)}">🏷️ ${escapeHtml(t)}</span>`).join('')}${tags.length > 3 ? `<span class="chat-tag-pill more" title="${escapeHtml(tags.slice(3).join(', '))}">+${tags.length - 3}</span>` : ''}</div>`
           : '';
 
+        const hasPushName = (!chat.is_saved && chat.push_name);
+        const pushNameHint = hasPushName
+          ? `<span class="chat-pushname-tag" title="Nombre en perfil de WhatsApp: ~${escapeHtml(chat.push_name)}">~${escapeHtml(chat.push_name)}</span>`
+          : '';
+        const itemTooltip = hasPushName
+          ? `${friendlyTitle} (Perfil WhatsApp: ~${chat.push_name})`
+          : friendlyTitle;
+
+        li.title = itemTooltip;
+
         li.innerHTML = `
           <div class="chat-avatar" style="background-color: ${avatarBg};">${initial}</div>
           <div class="chat-info">
             <div class="chat-header-row">
-              <span class="chat-name">${escapeHtml(friendlyTitle)}</span>
+              <span class="chat-name">${escapeHtml(friendlyTitle)}${pushNameHint}</span>
               <span class="chat-time">${timeStr}</span>
             </div>
             <div class="chat-preview">${escapeHtml(previewText)}</div>
@@ -1278,11 +1288,13 @@
         }
 
         const name = (c.display_name || '').toLowerCase();
+        const push = (c.push_name || '').toLowerCase();
+        const saved = (c.saved_name || '').toLowerCase();
         const id = (c.chat_id || '').toLowerCase();
         const last = (c.last_msg || '').toLowerCase();
         const phone = (c.phone_number || '').toLowerCase();
         const phoneFmt = formatPhoneNumber(c.phone_number).toLowerCase();
-        return name.includes(q) || id.includes(q) || last.includes(q) || phone.includes(q) || phoneFmt.includes(q) || hasMatchingTag;
+        return name.includes(q) || push.includes(q) || saved.includes(q) || id.includes(q) || last.includes(q) || phone.includes(q) || phoneFmt.includes(q) || hasMatchingTag;
       });
 
       if (contactsList) {
@@ -1303,6 +1315,7 @@
             const tagsHtml = tags.length > 0 
               ? `<div class="chat-tags-row" style="margin-top: 3px;">${tags.slice(0, 3).map(t => `<span class="chat-tag-pill" onclick="event.stopPropagation(); filterByTag('${escapeHtml(t)}');" title="Filtrar por: ${escapeHtml(t)}">🏷️ ${escapeHtml(t)}</span>`).join('')}${tags.length > 3 ? `<span class="chat-tag-pill more" title="${escapeHtml(tags.slice(3).join(', '))}">+${tags.length - 3}</span>` : ''}</div>`
               : '';
+            const pushTag = (!chat.is_saved && chat.push_name) ? ` <span class="chat-pushname-tag" title="Perfil WhatsApp: ~${escapeHtml(chat.push_name)}">~${escapeHtml(chat.push_name)}</span>` : '';
             li.onclick = () => {
               closeSearchAndRestoreChats(chat.chat_id);
               selectChat(chat);
@@ -1310,7 +1323,7 @@
             li.innerHTML = `
               <div class="unified-contact-avatar" style="background: ${color}">${escapeHtml(initial)}</div>
               <div class="unified-contact-details">
-                <div class="unified-contact-name">${escapeHtml(title)}</div>
+                <div class="unified-contact-name">${escapeHtml(title)}${pushTag}</div>
                 <div class="unified-contact-sub">${escapeHtml(chat.last_msg || formatPhoneNumber(chat.phone_number) || chat.chat_id)}</div>
                 ${tagsHtml}
               </div>
@@ -1449,15 +1462,32 @@
         headerSubEl.textContent = 'Canal de WhatsApp';
       } else if (rawPhone) {
         const formattedPhone = formatPhoneNumber(rawPhone);
-        headerSubEl.innerHTML = `
-          <span class="header-phone-row">
-            <span class="header-phone-text">${escapeHtml(formattedPhone)}</span>
-            <button type="button" class="btn-copy-phone" onclick="copyChatPhone('${escapeHtml(formattedPhone)}', this)" title="Copiar número de teléfono">
-              <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-              <span class="copy-label">Copiar</span>
-            </button>
-          </span>
-        `;
+        const pushName = (chat.push_name || knownChat.push_name);
+        const isSaved = (chat.is_saved !== undefined ? chat.is_saved : (knownChat ? knownChat.is_saved : false));
+
+        if (!isSaved && pushName) {
+          headerSubEl.innerHTML = `
+            <span class="header-phone-row">
+              <span class="header-pushname-tag" style="background: rgba(0,168,132,0.12); color: #00a884; border: 1px solid rgba(0,168,132,0.25); padding: 1px 7px; border-radius: 10px; font-size: 11.5px; font-weight: 500;" title="Nombre cargado en perfil de WhatsApp">~${escapeHtml(pushName)}</span>
+              <span style="opacity: 0.4; margin: 0 4px;">•</span>
+              <span class="header-phone-text">${escapeHtml(formattedPhone)}</span>
+              <button type="button" class="btn-copy-phone" onclick="copyChatPhone('${escapeHtml(formattedPhone)}', this)" title="Copiar número de teléfono">
+                <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                <span class="copy-label">Copiar</span>
+              </button>
+            </span>
+          `;
+        } else {
+          headerSubEl.innerHTML = `
+            <span class="header-phone-row">
+              <span class="header-phone-text">${escapeHtml(formattedPhone)}</span>
+              <button type="button" class="btn-copy-phone" onclick="copyChatPhone('${escapeHtml(formattedPhone)}', this)" title="Copiar número de teléfono">
+                <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                <span class="copy-label">Copiar</span>
+              </button>
+            </span>
+          `;
+        }
       } else {
         headerSubEl.textContent = 'Conversación directa';
       }
@@ -2019,6 +2049,35 @@
         const secSales = document.getElementById('copilotSecSales');
         if (secTicket) secTicket.style.display = (profile === 'full' || profile === 'support') ? 'flex' : 'none';
         if (secSales) secSales.style.display = (profile === 'full' || profile === 'sales') ? 'flex' : 'none';
+
+        // 1b. Tarjeta de contacto / perfil
+        const contactCard = document.getElementById('copilotContactCard');
+        const phoneVal = document.getElementById('copilotContactPhone');
+        const pushRow = document.getElementById('copilotPushNameRow');
+        const pushVal = document.getElementById('copilotContactPush');
+        const agendaStatus = document.getElementById('copilotAgendaStatus');
+
+        if (contactCard && !data.is_group && !data.is_newsletter) {
+          contactCard.style.display = 'block';
+          if (phoneVal) phoneVal.textContent = data.phone_number ? formatPhoneNumber(data.phone_number) : (data.chat_id || '--');
+          if (data.push_name) {
+            if (pushRow) pushRow.style.display = 'flex';
+            if (pushVal) pushVal.textContent = `~${data.push_name}`;
+          } else {
+            if (pushRow) pushRow.style.display = 'none';
+          }
+          if (agendaStatus) {
+            if (data.is_saved) {
+              agendaStatus.innerHTML = `✓ Agendado como: <b>${escapeHtml(data.saved_name || data.contact_name || '')}</b>`;
+              agendaStatus.style.color = '#10b981';
+            } else {
+              agendaStatus.innerHTML = `⚠️ Contacto no agendado en libreta`;
+              agendaStatus.style.color = 'var(--text-time)';
+            }
+          }
+        } else if (contactCard) {
+          contactCard.style.display = 'none';
+        }
 
         // 2. SLA
         if (slaEl) slaEl.textContent = data.sla || 'Sin datos suficientes';

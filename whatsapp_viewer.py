@@ -1585,12 +1585,19 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     or row_d.get("ct_num_numero")
                     or (row_d.get("canonical_id", "").split("@")[0] if row_d.get("canonical_id") and ("@c.us" in row_d["canonical_id"] or "@s.whatsapp.net" in row_d["canonical_id"]) else None)
                 )
+                push_name = row_d.get("ct_push") or row_d.get("ct_can_push") or row_d.get("ct_num_push")
+                saved_name = row_d.get("custom_name") or row_d.get("ct_nombre") or row_d.get("ct_can_nombre") or row_d.get("ct_num_nombre")
                 display_name = db_manager.get_best_contact_display(
                     custom_name=row_d.get("custom_name"),
-                    contact_name=row_d.get("ct_nombre") or row_d.get("ct_can_nombre") or row_d.get("ct_num_nombre") or row_d.get("chat_nombre"),
-                    push_name=row_d.get("ct_push") or row_d.get("ct_can_push") or row_d.get("ct_num_push"),
+                    contact_name=saved_name or row_d.get("chat_nombre"),
+                    push_name=push_name,
                     phone_number=phone,
                     chat_id=row_d["chat_id"]
+                )
+                is_saved = bool(
+                    saved_name and 
+                    db_manager.is_human_contact_name(saved_name, row_d["chat_id"]) and 
+                    (bool(re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]', str(saved_name))) or len(re.sub(r'\D', '', str(saved_name))) < 6)
                 )
                 chat_tags = tags_map.get(row_d["chat_id"]) or (tags_map.get(row_d.get("canonical_id")) if row_d.get("canonical_id") else None) or []
                 chats.append({
@@ -1598,6 +1605,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     "canonical_id": row_d.get("canonical_id"),
                     "display_name": display_name,
                     "phone_number": phone,
+                    "push_name": push_name,
+                    "saved_name": saved_name if is_saved else None,
+                    "is_saved": is_saved,
                     "tags": chat_tags,
                     "last_msg": db_manager.resolve_mentions_in_text(row_d["last_msg"], contact_map) if row_d.get("last_msg") else row_d.get("last_msg"),
                     "last_tipo": row_d.get("last_tipo"),
