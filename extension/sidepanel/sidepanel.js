@@ -33,6 +33,7 @@
   let pipelineDebounceTimer = null;
   let templatesList = [];
   let currentRadarMode = "unanswered"; // "unanswered" | "sales"
+  let latestDiskVersion = null;
 
   // =========================================================================
   // COMUNICACIÓN CON EL SERVICE WORKER
@@ -2061,8 +2062,16 @@
 
     if (btnUpdateExt) {
       btnUpdateExt.addEventListener("click", () => {
-        showToast("Actualizando extensión...");
-        chrome.runtime.sendMessage({ action: "reload_extension" });
+        const verText = latestDiskVersion ? ` a la versión v${latestDiskVersion}` : "";
+        const confirmed = window.confirm(
+          `Nueva versión disponible de WAckup${verText}.\n\n` +
+          `Para aplicar la actualización y reactivar la sincronización, se recargará la extensión y la pestaña de WhatsApp Web automáticamente.\n\n` +
+          `¿Deseas continuar?`
+        );
+        if (!confirmed) return;
+
+        showToast("Actualizando y recargando WhatsApp Web...");
+        chrome.runtime.sendMessage({ action: "reload_extension", reloadWhatsAppTabs: true });
       });
     }
 
@@ -2111,6 +2120,7 @@
       if (request.action === "extension_version_info") {
         const btnUpdate = document.getElementById("btn-update-ext");
         if (btnUpdate && request.diskVer && request.installedVer && request.diskVer !== request.installedVer) {
+          latestDiskVersion = request.diskVer;
           btnUpdate.style.display = "inline-flex";
           btnUpdate.textContent = `🔄 v${request.diskVer}`;
           btnUpdate.title = `Actualizar extensión a v${request.diskVer} (instalada: v${request.installedVer})`;

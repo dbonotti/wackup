@@ -5,7 +5,8 @@
   "description": "WAckup 3.0: Copiloto nativo sidePanel, CRM comercial, atención y respaldo pasivo local para WhatsApp Web",
   "permissions": [
     "sidePanel",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://web.whatsapp.com/*",

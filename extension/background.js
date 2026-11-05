@@ -128,12 +128,38 @@ function isAllowedRequest(endpoint, method) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (!request || typeof request !== "object") return;
 
-  // Recarga en caliente asistida de la extensión
+  // Recarga en caliente asistida de la extensión con recarga sincronizada de pestañas
   if (request.action === "reload_extension") {
     sendResponse({ ok: true });
-    setTimeout(() => {
-      chrome.runtime.reload();
-    }, 150);
+    const shouldReloadTabs = request.reloadWhatsAppTabs !== false;
+
+    if (shouldReloadTabs) {
+      try {
+        chrome.tabs.query({ url: ["https://web.whatsapp.com/*", "http://web.whatsapp.com/*"] }, (tabs) => {
+          if (Array.isArray(tabs) && tabs.length > 0) {
+            tabs.forEach((tab) => {
+              try {
+                if (tab.id) chrome.tabs.reload(tab.id);
+              } catch (e) {
+                console.warn("[WAckup SW] Error al recargar pestaña de WhatsApp Web:", e);
+              }
+            });
+          }
+          setTimeout(() => {
+            chrome.runtime.reload();
+          }, 300);
+        });
+      } catch (err) {
+        console.warn("[WAckup SW] Error en query de pestañas para recarga:", err);
+        setTimeout(() => {
+          chrome.runtime.reload();
+        }, 150);
+      }
+    } else {
+      setTimeout(() => {
+        chrome.runtime.reload();
+      }, 150);
+    }
     return;
   }
 

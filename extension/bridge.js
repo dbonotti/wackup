@@ -103,6 +103,29 @@
     return null;
   }
 
+  // =========================================================================
+  // GESTIÓN SEGURA DE MENSAJES (Cero DOM, 100% Pasivo Anti-Ban)
+  // =========================================================================
+  function isInvalidated(err) {
+    if (!err) return false;
+    const msg = String(err.message || err);
+    return msg.includes("Extension context invalidated") || msg.includes("context invalidated");
+  }
+
+  function safeRuntimeSendMessage(payload, callback) {
+    try {
+      if (!chrome.runtime || !chrome.runtime.id) {
+        return;
+      }
+      chrome.runtime.sendMessage(payload, (resp) => {
+        void chrome.runtime.lastError;
+        if (typeof callback === "function") callback(resp);
+      });
+    } catch (e) {
+      // Ignorar si el contexto fue invalidado por recarga en caliente
+    }
+  }
+
   function notifyActiveChatChanged(force = false) {
     const chatTitle = detectActiveChatTitle();
     const accountInfo = getActiveAccountInfo();
@@ -114,15 +137,13 @@
       if (chatTitle) lastDetectedChatQuery = chatTitle;
       if (accountInfo.id) lastDetectedAccountId = accountInfo.id;
 
-      try {
-        chrome.runtime.sendMessage({
-          action: "active_chat_changed",
-          chatQuery: chatTitle || lastDetectedChatQuery,
-          accountId: accountInfo.id,
-          accountPhone: accountInfo.phone,
-          accountName: accountInfo.name
-        }).catch(() => {});
-      } catch (e) {}
+      safeRuntimeSendMessage({
+        action: "active_chat_changed",
+        chatQuery: chatTitle || lastDetectedChatQuery,
+        accountId: accountInfo.id,
+        accountPhone: accountInfo.phone,
+        accountName: accountInfo.name
+      });
     }
   }
 
@@ -169,37 +190,29 @@
 
     // 1. Notificación de estado de sincronización
     if (event.data.type === "BACKUPWA_STATUS") {
-      try {
-        chrome.runtime.sendMessage({
-          action: "sync_status_changed",
-          state: event.data.state,
-          message: event.data.message,
-          totalSaved: event.data.totalSaved,
-          accountInfo: event.data.accountInfo
-        }).catch(() => {});
-      } catch (e) {}
+      safeRuntimeSendMessage({
+        action: "sync_status_changed",
+        state: event.data.state,
+        message: event.data.message,
+        totalSaved: event.data.totalSaved,
+        accountInfo: event.data.accountInfo
+      });
       return;
     }
 
     // 2. Información de versión de la extensión en disco
     if (event.data.type === "BACKUPWA_VERSION_INFO") {
-      try {
-        chrome.runtime.sendMessage({
-          action: "extension_version_info",
-          diskVer: event.data.diskVer,
-          installedVer: event.data.installedVer
-        }).catch(() => {});
-      } catch (e) {}
+      safeRuntimeSendMessage({
+        action: "extension_version_info",
+        diskVer: event.data.diskVer,
+        installedVer: event.data.installedVer
+      });
       return;
     }
 
     // 3. Solicitud de recarga de extensión
     if (event.data.type === "BACKUPWA_RELOAD_EXT") {
-      try {
-        chrome.runtime.sendMessage({ action: "reload_extension" });
-      } catch (e) {
-        console.warn("[WAckup] Error al solicitar recarga:", e);
-      }
+      safeRuntimeSendMessage({ action: "reload_extension", reloadWhatsAppTabs: true });
       return;
     }
 
@@ -209,31 +222,48 @@
     const { reqId, endpoint, options } = event.data;
     if (typeof reqId !== "string" || typeof endpoint !== "string") return;
 
-    chrome.runtime.sendMessage({
-      action: "backend_fetch",
-      endpoint: endpoint,
-      options: options
-    }, (response) => {
-      if (response && response.data && typeof response.data === "object") {
-        try {
-          response.data.installed_extension_version = chrome.runtime.getManifest().version;
-        } catch (e) {}
+    try {
+      if (!chrome.runtime || !chrome.runtime.id) {
+        window.postMessage({
+          type: "BACKUPWA_RESP",
+          reqId: reqId,
+          error: "Extension context invalidated"
+        }, PAGE_ORIGIN);
+        return;
       }
 
-      if (chrome.runtime.lastError) {
-        window.postMessage({
-          type: "BACKUPWA_RESP",
-          reqId: reqId,
-          error: chrome.runtime.lastError.message
-        }, PAGE_ORIGIN);
-      } else {
-        window.postMessage({
-          type: "BACKUPWA_RESP",
-          reqId: reqId,
-          response: response
-        }, PAGE_ORIGIN);
-      }
-    });
+      chrome.runtime.sendMessage({
+        action: "backend_fetch",
+        endpoint: endpoint,
+        options: options
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          const errMsg = chrome.runtime.lastError.message || "";
+          window.postMessage({
+            type: "BACKUPWA_RESP",
+            reqId: reqId,
+            error: errMsg
+          }, PAGE_ORIGIN);
+        } else {
+          if (response && response.data && typeof response.data === "object") {
+            try {
+              response.data.installed_extension_version = chrome.runtime.getManifest().version;
+            } catch (e) {}
+          }
+          window.postMessage({
+            type: "BACKUPWA_RESP",
+            reqId: reqId,
+            response: response
+          }, PAGE_ORIGIN);
+        }
+      });
+    } catch (e) {
+      window.postMessage({
+        type: "BACKUPWA_RESP",
+        reqId: reqId,
+        error: e ? e.message : "Error al comunicar con la extensión"
+      }, PAGE_ORIGIN);
+    }
   });
 
   // =========================================================================
