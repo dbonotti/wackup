@@ -179,12 +179,47 @@ def init_db(db_path=DB_FILE):
         "quoted_msg_id": "TEXT",
         "quoted_author": "TEXT",
         "quoted_body": "TEXT",
-        "reenviado": "INTEGER"
+        "reenviado": "INTEGER",
+        "eliminado": "INTEGER DEFAULT 0"
     }
 
     for col, col_type in columnas_nuevas.items():
         if col not in columnas_actuales:
             cur.execute(f"ALTER TABLE mensajes ADD COLUMN {col} {col_type}")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_mensajes_eliminado ON mensajes (eliminado)")
+
+    # 2b. Reconciliación y migración de mensajes eliminados / revocados:
+    # Marcar los mensajes originales respaldados cuando existía un registro complementario 'revoked'
+    cur.execute("""
+        UPDATE mensajes
+        SET eliminado = 1
+        WHERE msg_id IN (
+            SELECT m.msg_id
+            FROM mensajes r
+            JOIN mensajes m ON r.chat_id = m.chat_id 
+                           AND r.timestamp = m.timestamp 
+                           AND r.es_mio = m.es_mio 
+                           AND m.tipo != 'revoked'
+            WHERE r.tipo = 'revoked'
+        )
+    """)
+    # Eliminar registros 'revoked' redundantes cuando el mensaje original ya se conservó
+    cur.execute("""
+        DELETE FROM mensajes
+        WHERE tipo = 'revoked'
+          AND msg_id IN (
+            SELECT r.msg_id
+            FROM mensajes r
+            JOIN mensajes m ON r.chat_id = m.chat_id 
+                           AND r.timestamp = m.timestamp 
+                           AND r.es_mio = m.es_mio 
+                           AND m.tipo != 'revoked'
+            WHERE r.tipo = 'revoked'
+          )
+    """)
+    # Marcar cualquier mensaje 'revoked' huérfano (sin original previo) con eliminado = 1
+    cur.execute("UPDATE mensajes SET eliminado = 1 WHERE tipo = 'revoked' AND (eliminado IS NULL OR eliminado = 0)")
 
     # 3. Tabla dedicada para gestión de descargas multimedia
     cur.executescript("""
@@ -1141,6 +1176,45 @@ def _save_incremental_sync_tx(cur, data):
             if q_row and q_row[0]:
                 quoted_body = q_row[0]
 
+        is_eliminado = 1 if (m.get("eliminado") or m_type == "revoked") else 0
+        revoked_target_id = m.get("revokedTargetId") or m.get("revoked_target_id")
+
+        # Manejo de revocación de mensajes (eliminados en WhatsApp)
+        if m_type == "revoked":
+            orig_mid = None
+            if revoked_target_id:
+                cur.execute("SELECT msg_id FROM mensajes WHERE msg_id = ? OR msg_id LIKE ? LIMIT 1", (revoked_target_id, f"%_{revoked_target_id}%"))
+                r_found = cur.fetchone()
+                if r_found:
+                    orig_mid = r_found[0]
+            if not orig_mid and chat_id and ts:
+                cur.execute("""
+                    SELECT msg_id FROM mensajes 
+                    WHERE chat_id = ? AND timestamp = ? AND es_mio = ? AND tipo != 'revoked'
+                    ORDER BY rowid DESC LIMIT 1
+                """, (chat_id, ts, is_mine))
+                r_found = cur.fetchone()
+                if r_found:
+                    orig_mid = r_found[0]
+
+            if orig_mid:
+                # El mensaje original ya existe respaldado: marcarlo como eliminado y no duplicar con burbuja 'revoked'
+                cur.execute("UPDATE mensajes SET eliminado = 1 WHERE msg_id = ?", (orig_mid,))
+                stats["messages_saved"] += 1
+                continue
+
+        if m_type != "revoked" and chat_id and ts:
+            # Comprobar si previamente se había guardado un placeholder 'revoked' huérfano con el mismo timestamp
+            cur.execute("""
+                SELECT msg_id FROM mensajes
+                WHERE chat_id = ? AND timestamp = ? AND es_mio = ? AND tipo = 'revoked'
+                LIMIT 1
+            """, (chat_id, ts, is_mine))
+            rev_row = cur.fetchone()
+            if rev_row:
+                is_eliminado = 1
+                cur.execute("DELETE FROM mensajes WHERE msg_id = ?", (rev_row[0],))
+
         # Asegurar que el chat padre exista en la tabla chats y actualizar campos desnormalizados
         if chat_id:
             cur.execute("""
@@ -1181,9 +1255,9 @@ def _save_incremental_sync_tx(cur, data):
             INSERT INTO mensajes (
                 msg_id, chat_id, remitente, es_mio, fecha_utc, timestamp, 
                 tipo, contenido, mimetype, tamano, duracion, thumbnail, estado_multimedia,
-                quoted_msg_id, quoted_author, quoted_body, reenviado
+                quoted_msg_id, quoted_author, quoted_body, reenviado, eliminado
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(msg_id) DO UPDATE SET
                 es_mio = excluded.es_mio,
                 contenido = CASE 
@@ -1200,6 +1274,7 @@ def _save_incremental_sync_tx(cur, data):
                 quoted_author = COALESCE(excluded.quoted_author, mensajes.quoted_author),
                 quoted_body = COALESCE(NULLIF(excluded.quoted_body, ''), mensajes.quoted_body),
                 reenviado = CASE WHEN excluded.reenviado > 0 THEN excluded.reenviado ELSE COALESCE(mensajes.reenviado, excluded.reenviado) END,
+                eliminado = CASE WHEN excluded.eliminado = 1 THEN 1 ELSE mensajes.eliminado END,
                 estado_multimedia = CASE 
                     WHEN mensajes.archivo_local IS NOT NULL THEN mensajes.estado_multimedia 
                     ELSE excluded.estado_multimedia 
@@ -1207,7 +1282,7 @@ def _save_incremental_sync_tx(cur, data):
         """, (
             mid, chat_id, sender, is_mine, dt_str, ts, 
             m_type, body, mimetype, size, duration, thumbnail, estado_media,
-            quoted_msg_id, quoted_author, quoted_body, reenviado
+            quoted_msg_id, quoted_author, quoted_body, reenviado, is_eliminado
         ))
         stats["messages_saved"] += 1
 
@@ -1618,10 +1693,6 @@ def get_copilot_context(chat_query, db_path=None):
     # Plantillas disponibles
     templates = list_quick_templates(db_path=db_path)
 
-    # Extracción de memoria comercial (precios cotizados y ficha automática de contacto)
-    import entity_extractor
-    commercial = entity_extractor.extract_chat_commercial_entities(cur, id_list)
-
     conn.close()
 
     def _fmt_date(ts):
@@ -1662,8 +1733,8 @@ def get_copilot_context(chat_query, db_path=None):
         "tags": tags,
         "sla": sla_text,
         "templates": templates,
-        "quoted_prices": commercial["quoted_prices"],
-        "extracted_info": commercial["extracted_info"],
+        "quoted_prices": [],
+        "extracted_info": {"emails": [], "tax_ids": [], "bank_details": []},
         "associated_chat_ids": id_list,
         "stats": {
             "total_messages": total_msgs,

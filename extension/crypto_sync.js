@@ -1196,6 +1196,7 @@
           const rawBody = (typeof m.body === "string" && m.body) ? m.body : "";
 
           let bodyText = "";
+          let revokedTargetId = null;
           if (isMedia) {
             if (caption && !isBase64MediaBlob(caption)) {
               bodyText = caption;
@@ -1204,6 +1205,10 @@
             }
           } else if (m.type === "revoked") {
             bodyText = "🚫 Este mensaje fue eliminado";
+            const pKey = m.protocolMessageKey || (m.protocolMessage && m.protocolMessage.key) || m.targetMessageKey || m.revokedMsgKey;
+            if (pKey) {
+              revokedTargetId = extractId(pKey.id || pKey);
+            }
           } else if (m.type === "poll_creation" && m.pollName) {
             const opts = Array.isArray(m.pollOptions)
               ? m.pollOptions.map(o => (o && (o.name || o.optionName)) ? `• ${o.name || o.optionName}` : "").filter(Boolean)
@@ -1304,7 +1309,8 @@
             quotedAuthor: quotedAuthor,
             quotedBody: quotedBody,
             isForwarded: isForwarded,
-            forwardingScore: forwardingScore
+            forwardingScore: forwardingScore,
+            revokedTargetId: revokedTargetId
           };
         }));
 

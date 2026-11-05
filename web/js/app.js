@@ -1615,9 +1615,10 @@
         }
 
         const isMine = Boolean(m.es_mio) || (m.msg_id && m.msg_id.startsWith('true_'));
+        const isDeleted = Boolean(m.eliminado) || m.tipo === 'revoked';
 
         const bubble = document.createElement('div');
-        bubble.className = `msg-bubble ${isMine ? 'msg-outgoing' : 'msg-incoming'}`;
+        bubble.className = `msg-bubble ${isMine ? 'msg-outgoing' : 'msg-incoming'}${isDeleted ? ' msg-deleted' : ''}`;
         if (m.msg_id) bubble.id = safeDomId('msg-', m.msg_id);
 
         let senderHtml = '';
@@ -1635,6 +1636,11 @@
             ? `<svg viewBox="0 0 20 16"><path d="M8.5 3.5L13 8l-4.5 4.5V9.8c-3.2 0-5.4 1.1-6.8 3.7 0.7-3.6 2.6-6.2 6.8-6.9V3.5zm5.5 0L18.5 8 14 12.5v-2l2.5-2.5L14 5.5v-2z"/></svg>`
             : `<svg viewBox="0 0 16 16"><path d="M9.5 3.5L14 8l-4.5 4.5V9.8c-3.5 0-6 1.1-7.5 3.7 0.8-3.6 2.9-6.2 7.5-6.9V3.5z"/></svg>`;
           forwardedHtml = `<div class="msg-forwarded">${fwdIcon}<span>${fwdLabel}</span></div>`;
+        }
+
+        let deletedBadgeHtml = '';
+        if (isDeleted && m.tipo !== 'revoked') {
+          deletedBadgeHtml = `<div class="msg-deleted-badge"><span class="deleted-icon">🚫</span><span>Eliminado en WhatsApp</span></div>`;
         }
 
         let quoteHtml = '';
@@ -1671,15 +1677,23 @@
           mediaHtml = `<div class="media-container"><img class="media-img" src="${m.thumbnail}" onclick="openModal(this.src)"></div>`;
         }
 
+        let textHtml = '';
+        if (cleanBody) {
+          const isStrikethrough = isDeleted && m.tipo !== 'revoked';
+          const textClass = `msg-text${isStrikethrough ? ' msg-text-deleted' : ''}${m.tipo === 'revoked' ? ' msg-revoked-text' : ''}`;
+          textHtml = `<div class="${textClass}">${escapeHtml(cleanBody)}</div>`;
+        }
+
         const timeStr = formatLocalTime(m.timestamp, m.fecha_utc);
         const checkHtml = isMine ? '<span class="msg-check">✓✓</span>' : '';
 
         bubble.innerHTML = `
           ${senderHtml}
           ${forwardedHtml}
+          ${deletedBadgeHtml}
           ${quoteHtml}
           ${mediaHtml}
-          ${cleanBody ? `<div class="msg-text">${escapeHtml(cleanBody)}</div>` : ''}
+          ${textHtml}
           <div class="msg-footer">
             <span>${timeStr}</span>
             ${checkHtml}
@@ -2039,91 +2053,12 @@
         // 5c. Bitácora de notas de equipo
         renderCopilotNotesLog(crm.notes_log || []);
 
-        // 6. Entidades extraídas (CUIT, Email, CBU/Alias)
-        renderCopilotEntities(data.extracted_info);
-
-        // 7. Precios cotizados históricos
-        renderCopilotPrices(data.quoted_prices);
-
-        // 8. Plantillas rápidas
+        // 6. Plantillas rápidas
         renderCopilotTemplates(data.templates);
 
       } catch (e) {
         console.error('Error al cargar contexto del Copiloto:', e);
       }
-    }
-
-    function renderCopilotEntities(info) {
-      const container = document.getElementById('copilotEntitiesContainer');
-      if (!container) return;
-      if (!info) {
-        container.innerHTML = '<div style="font-size: 11.5px; color: var(--text-muted); padding: 4px 0;">Sin datos detectados en este chat.</div>';
-        return;
-      }
-
-      let rowsHtml = '';
-      const emails = info.emails || [];
-      const taxIds = info.tax_ids || [];
-      const bankDetails = info.bank_details || [];
-
-      emails.forEach(email => {
-        rowsHtml += `
-          <div class="copilot-entity-item">
-            <span class="copilot-entity-label">✉️ Email</span>
-            <span class="copilot-entity-val" title="${escapeHtml(email)}">${escapeHtml(email)}</span>
-            <button type="button" class="copilot-copy-btn" onclick="copyCopilotText('${escapeHtml(email)}', 'Email')">📋</button>
-          </div>
-        `;
-      });
-
-      taxIds.forEach(tax => {
-        rowsHtml += `
-          <div class="copilot-entity-item">
-            <span class="copilot-entity-label">🆔 CUIT/DNI</span>
-            <span class="copilot-entity-val">${escapeHtml(tax)}</span>
-            <button type="button" class="copilot-copy-btn" onclick="copyCopilotText('${escapeHtml(tax)}', 'Identificación')">📋</button>
-          </div>
-        `;
-      });
-
-      bankDetails.forEach(bank => {
-        rowsHtml += `
-          <div class="copilot-entity-item">
-            <span class="copilot-entity-label">🏦 CBU/Alias</span>
-            <span class="copilot-entity-val" title="${escapeHtml(bank)}">${escapeHtml(bank)}</span>
-            <button type="button" class="copilot-copy-btn" onclick="copyCopilotText('${escapeHtml(bank)}', 'Dato bancario')">📋</button>
-          </div>
-        `;
-      });
-
-      if (!rowsHtml) {
-        container.innerHTML = '<div style="font-size: 11.5px; color: var(--text-muted); padding: 4px 0;">Sin emails, CUITs ni CBUs detectados.</div>';
-      } else {
-        container.innerHTML = rowsHtml;
-      }
-    }
-
-    function renderCopilotPrices(prices) {
-      const container = document.getElementById('copilotPricesContainer');
-      if (!container) return;
-      if (!prices || prices.length === 0) {
-        container.innerHTML = '<div style="font-size: 11.5px; color: var(--text-muted); padding: 4px 0;">Sin cotizaciones monetarias registradas.</div>';
-        return;
-      }
-
-      container.innerHTML = prices.slice(0, 5).map(p => {
-        const who = p.es_mio ? 'Operador' : 'Cliente';
-        const dateStr = p.date ? p.date.substring(0, 10) : '';
-        return `
-          <div class="copilot-price-item">
-            <div>
-              <span class="copilot-price-val">$ ${Number(p.price || 0).toLocaleString()}</span>
-              <span class="copilot-price-meta"> · ${who}</span>
-            </div>
-            <span class="copilot-price-meta">${dateStr}</span>
-          </div>
-        `;
-      }).join('');
     }
 
     function renderCopilotTemplates(templates) {
@@ -2143,12 +2078,6 @@
           </button>
         `;
       }).join('');
-    }
-
-    function copyCopilotText(text, label) {
-      navigator.clipboard.writeText(text).then(() => {
-        showToast(`✅ ${label} copiado al portapapeles`);
-      });
     }
 
     function copyCopilotTemplate(templateBody) {

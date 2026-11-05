@@ -136,7 +136,7 @@ def generate_chat_html_export(chat_id, embed_media=False, db_path=None):
         SELECT 
             m.msg_id, m.es_mio, m.fecha_utc, m.timestamp, m.tipo, m.contenido,
             m.archivo_local, m.mimetype, m.thumbnail,
-            m.quoted_msg_id, m.quoted_author, m.quoted_body, m.reenviado,
+            m.quoted_msg_id, m.quoted_author, m.quoted_body, m.reenviado, m.eliminado,
             COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
             m.remitente AS remitente_jid
         FROM mensajes m
@@ -237,13 +237,18 @@ def generate_chat_html_export(chat_id, embed_media=False, db_path=None):
         raw_c = m.get("contenido") or ""
         content_clean = "" if db_manager.is_binary_or_base64_content(m.get("tipo"), raw_c) else db_manager.resolve_mentions_in_text(raw_c.replace("\ufffd", "").strip(), contact_map)
 
+        is_del = bool(m.get("eliminado") or m.get("tipo") == "revoked")
+        del_badge = '<div class="deleted-badge" style="font-size: 11px; font-weight: 600; color: #dc2626; margin-bottom: 3px;">🚫 Eliminado</div>' if (is_del and m.get("tipo") != "revoked") else ""
+        text_style = ' style="text-decoration: line-through; text-decoration-color: #dc2626;"' if (is_del and m.get("tipo") != "revoked") else ""
+
         html_parts.append(f"""
         <div class="msg {cls}">
           {sender_html}
           {forwarded_html}
+          {del_badge}
           {quote_html}
           {media_html}
-          {f'<div>{html.escape(content_clean)}</div>' if content_clean else ''}
+          {f'<div{text_style}>{html.escape(content_clean)}</div>' if content_clean else ''}
           <div class="time">{time_str}</div>
         </div>
         """)
@@ -1624,6 +1629,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 m.quoted_author,
                 m.quoted_body,
                 m.reenviado,
+                m.eliminado,
                 COALESCE(ct.nombre, ct_num.nombre, ct.push_name, ct_num.push_name, m.remitente) AS remitente_nombre,
                 m.remitente AS remitente_jid
             FROM mensajes m

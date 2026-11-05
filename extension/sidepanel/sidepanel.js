@@ -455,6 +455,9 @@
       const followVal = crmMeta.follow_up_date || data.followup_date || "";
 
       if (stageSelect) stageSelect.value = stageVal;
+      document.querySelectorAll(".btn-sales-stage").forEach(btn => {
+        btn.classList.toggle("active", btn.getAttribute("data-stage") === stageVal);
+      });
       if (dealInput) dealInput.value = (estVal && Number(estVal) > 0) ? estVal : "";
       if (followupInput) followupInput.value = followVal;
 
@@ -890,7 +893,7 @@
               ticket_status: newStatus
             }
           });
-          showToast(`Ticket marcado como ${newStatus}`);
+          showToast(newStatus === "none" ? "Estado de ticket limpiado" : `Ticket marcado como ${newStatus}`);
         } catch (e) {
           showToast("Error al actualizar ticket");
         }
@@ -913,19 +916,35 @@
             body: {
               account_id: currentAccountId,
               chat_id: currentChatId,
-              sales_stage: stageSelect.value,
-              estimated_value: parseFloat(dealInput.value) || 0,
-              follow_up_date: followupInput.value || ""
+              sales_stage: stageSelect ? stageSelect.value : "none",
+              estimated_value: parseFloat(dealInput ? dealInput.value : 0) || 0,
+              follow_up_date: followupInput ? followupInput.value || "" : ""
             }
           });
-          showToast("Pipeline comercial actualizado");
+          showToast("Embudo comercial actualizado");
         } catch (e) {
-          showToast("Error al guardar pipeline");
+          showToast("Error al guardar embudo");
         }
       }, 500);
     };
 
-    if (stageSelect) stageSelect.addEventListener("change", savePipeline);
+    document.querySelectorAll(".btn-sales-stage").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const stage = btn.getAttribute("data-stage") || "none";
+        if (stageSelect) stageSelect.value = stage;
+        document.querySelectorAll(".btn-sales-stage").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        savePipeline();
+      });
+    });
+
+    if (stageSelect) stageSelect.addEventListener("change", () => {
+      const stage = stageSelect.value;
+      document.querySelectorAll(".btn-sales-stage").forEach(b => {
+        b.classList.toggle("active", b.getAttribute("data-stage") === stage);
+      });
+      savePipeline();
+    });
     if (dealInput) dealInput.addEventListener("input", savePipeline);
     if (followupInput) followupInput.addEventListener("change", savePipeline);
   }
@@ -966,16 +985,18 @@
     container.innerHTML = "";
 
     if (!Array.isArray(list) || list.length === 0) {
-      container.innerHTML = '<span class="empty-subtext">No hay plantillas configuradas.</span>';
+      container.innerHTML = '<span class="empty-subtext">No hay plantillas disponibles.</span>';
       return;
     }
 
     list.forEach(tpl => {
-      const card = document.createElement("div");
-      card.className = "template-card";
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "copilot-template-btn";
       card.innerHTML = `
-        <div class="template-title">${escapeHtml(tpl.title || "Plantilla")}</div>
-        <div class="template-snippet">${escapeHtml(tpl.body || "")}</div>
+        <span class="tpl-btn-shortcut">${escapeHtml(tpl.shortcut || "")}</span>
+        <span class="tpl-btn-title">${escapeHtml(tpl.title || "Plantilla")}</span>
+        <span class="tpl-btn-copy">📋 Copiar</span>
       `;
       card.addEventListener("click", () => {
         const rendered = interpolateTemplateVariables(tpl.body || "");

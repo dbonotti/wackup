@@ -11,11 +11,12 @@
   <header class="app-header">
     <div class="header-main-row">
       <div class="brand">
-        <span class="brand-title">WAckup</span>
+        <span class="brand-icon">🧭</span>
+        <span class="brand-title">WAckup Copiloto</span>
         <span id="header-status-dot" class="status-dot ready" title="Estado: Conectando..."></span>
       </div>
       <div class="header-actions">
-        <span id="profile-badge" class="badge-profile" title="Perfil de Espacio de Trabajo (clic para cambiar)">CRM</span>
+        <span id="profile-badge" class="badge-profile copilot-mini-pill" title="Perfil de Espacio de Trabajo (clic para cambiar)">CRM</span>
         <button id="btn-update-ext" class="btn-icon btn-update" style="display:none;" title="Actualizar extensión">🔄 Actualizar</button>
         <button id="btn-sync-recent" class="btn-icon" title="Sincronizar novedades (Shift+clic: historial completo)">🔄</button>
         <button id="btn-toggle-settings" class="btn-icon" title="Configuración del Servidor">⚙️</button>
@@ -167,7 +168,7 @@
         <div class="section-card">
           <div class="section-title-row">
             <span class="card-title">🏷️ Etiquetas</span>
-            <button id="btn-add-tag" class="btn-link">+ Etiqueta</button>
+            <button id="btn-add-tag" class="btn-card-action" type="button">+ Etiqueta</button>
           </div>
           <div id="tags-list" class="tags-container">
             <span class="empty-subtext">Sin etiquetas</span>
@@ -176,36 +177,41 @@
 
         <!-- Módulo de Soporte / Tickets (condicional) -->
         <div id="sec-support-ticket" class="section-card">
-          <div class="card-title">🎫 Estado del Ticket</div>
-          <div class="ticket-status-group">
-            <button class="btn-ticket" data-status="open">🟢 Abierto</button>
-            <button class="btn-ticket" data-status="pending">🟡 En Espera</button>
-            <button class="btn-ticket" data-status="resolved">⚪ Resuelto</button>
+          <div class="card-title">🎧 Estado de Ticket</div>
+          <div class="copilot-pill-group ticket-status-group">
+            <button class="copilot-pill-btn btn-ticket" data-status="open" type="button">🟢 Abierto</button>
+            <button class="copilot-pill-btn btn-ticket" data-status="pending" type="button">🟡 En Espera</button>
+            <button class="copilot-pill-btn btn-ticket" data-status="resolved" type="button">⚪ Resuelto</button>
+            <button class="copilot-pill-btn btn-ticket" data-status="none" title="Limpiar estado" type="button">✕</button>
           </div>
         </div>
 
-        <!-- Módulo de Ventas / Pipeline (condicional) -->
+        <!-- Módulo de Ventas / Embudo Comercial (condicional) -->
         <div id="sec-sales-pipeline" class="section-card">
-          <div class="card-title">💼 Pipeline Comercial</div>
-          <div class="pipeline-grid">
-            <div class="form-group full-width">
-              <label for="select-sales-stage">Etapa:</label>
-              <select id="select-sales-stage" class="form-control">
-                <option value="none">Sin Etapa Comercial</option>
-                <option value="lead">🌱 Lead / Contacto Nuevo</option>
-                <option value="contactado">💬 En Conversación</option>
-                <option value="quoted">📄 Presupuesto Enviado</option>
-                <option value="negociacion">🤝 En Negociación</option>
-                <option value="won">🎉 Venta Concretada</option>
-                <option value="lost">❌ Descartado</option>
-              </select>
-            </div>
-            <div class="form-group half-width">
-              <label for="input-deal-value">Valor ($):</label>
+          <div class="card-title">💼 Embudo Comercial</div>
+          <div class="copilot-pill-group" id="sales-stage-pill-group">
+            <button type="button" class="copilot-pill-btn btn-sales-stage" data-stage="lead">🎯 Lead</button>
+            <button type="button" class="copilot-pill-btn btn-sales-stage" data-stage="quoted">💬 Cotiz.</button>
+            <button type="button" class="copilot-pill-btn btn-sales-stage" data-stage="won">🟢 Ganada</button>
+            <button type="button" class="copilot-pill-btn btn-sales-stage" data-stage="lost">🔴 Perdida</button>
+            <button type="button" class="copilot-pill-btn btn-sales-stage" data-stage="none" title="Limpiar etapa">✕</button>
+          </div>
+          <select id="select-sales-stage" class="form-control" style="display: none;">
+            <option value="none">Sin Etapa Comercial</option>
+            <option value="lead">Lead</option>
+            <option value="contactado">En Conversación</option>
+            <option value="quoted">Presupuesto Enviado</option>
+            <option value="negociacion">En Negociación</option>
+            <option value="won">Venta Concretada</option>
+            <option value="lost">Descartado</option>
+          </select>
+          <div class="copilot-inputs-row">
+            <div class="copilot-field">
+              <label for="input-deal-value">Valor Est. ($)</label>
               <input type="number" id="input-deal-value" class="form-control" placeholder="0.00" min="0" step="any">
             </div>
-            <div class="form-group half-width">
-              <label for="input-followup-date">Seguimiento:</label>
+            <div class="copilot-field">
+              <label for="input-followup-date">Seguimiento</label>
               <input type="date" id="input-followup-date" class="form-control">
             </div>
           </div>
@@ -217,11 +223,11 @@
             <span class="card-title">🔒 Nota Fijada (Resumen)</span>
             <span id="notes-status" class="status-hint">Guardado ✓</span>
           </div>
-          <textarea id="contact-notes" class="notes-textarea" placeholder="Escribe notas permanentes sobre este cliente..." rows="3"></textarea>
+          <textarea id="contact-notes" class="copilot-textarea" placeholder="Notas permanentes sobre este contacto..." rows="3"></textarea>
 
           <div class="notes-log-section">
             <div class="log-title">📋 Bitácora de Equipo (Hilo Rápido)</div>
-            <input type="text" id="input-new-note-log" class="form-control mb-1" placeholder="Agregar nota de seguimiento... [Enter]">
+            <input type="text" id="input-new-note-log" class="form-control mb-1" placeholder="Agregar nota de seguimiento... Enter">
             <div id="notes-log-list" class="notes-log-container">
               <!-- Hilo de notas -->
             </div>
@@ -231,7 +237,7 @@
         <!-- Plantillas de Respuesta Rápida -->
         <div class="section-card">
           <div class="section-title-row">
-            <span class="card-title">⚡ Respuestas Rápidas</span>
+            <span class="card-title">⚡ Respuestas Rápidas (Portapapeles)</span>
             <span class="hint-pill">Clic copia al portapapeles</span>
           </div>
           <input type="text" id="input-filter-templates" class="form-control mb-2" placeholder="Buscar plantilla (ej. CBU, Saludo, Horarios)...">
