@@ -3284,10 +3284,12 @@
           : (Array.isArray(entry.viewers) ? entry.viewers : [entry]);
         viewers.forEach(o => {
           if (!o) return;
+          const opName = (o.operator || '').trim();
           const isMe = (o.client_id && o.client_id === myClientId) ||
-            (myOperatorName && myOperatorName !== 'Operador' && o.operator === myOperatorName);
-          if (!isMe && o.operator) {
-            otherOperators.push(o.operator);
+            (myOperatorName && myOperatorName.toLowerCase() !== 'operador' && opName.toLowerCase() === myOperatorName.toLowerCase()) ||
+            (!opName || opName.toLowerCase() === 'operador');
+          if (!isMe && opName) {
+            otherOperators.push(opName);
           }
         });
       });
@@ -3336,6 +3338,7 @@
         sseEventSource.onmessage = onEvent;
         sseEventSource.addEventListener('connected', onEvent);
         sseEventSource.addEventListener('presence_update', onEvent);
+        sseEventSource.addEventListener('active_operator_updated', onEvent);
         sseEventSource.addEventListener('crm_update', onEvent);
         sseEventSource.addEventListener('sync_update', onEvent);
         sseEventSource.addEventListener('profile_update', onEvent);
@@ -3430,6 +3433,20 @@
           activePresenceMap = msg.active_presence || msg.presence || {};
           updatePresenceBanners();
           renderTeamOperatorsList();
+          break;
+
+        case 'active_operator_updated':
+          if (msg.active_operator) {
+            const savedOp = localStorage.getItem('wackup_operator_name');
+            if (!savedOp || savedOp === 'Operador' || myOperatorName === 'Operador') {
+              myOperatorName = msg.active_operator;
+              localStorage.setItem('wackup_operator_name', myOperatorName);
+              const opEl = document.getElementById('myOperatorNameDisplay');
+              if (opEl) opEl.textContent = myOperatorName;
+              renderTeamOperatorsList();
+              updateCopilotOperatorOptions();
+            }
+          }
           break;
 
         case 'tags_updated': {
@@ -3546,8 +3563,9 @@
 
         knownOperatorsList = data.known_operators || [];
         const savedOp = localStorage.getItem('wackup_operator_name');
-        if ((!savedOp || savedOp === 'Operador' || myOperatorName === 'Operador') && knownOperatorsList.length > 0) {
-          myOperatorName = knownOperatorsList[0];
+        const defaultOp = data.active_operator || (knownOperatorsList.length > 0 ? knownOperatorsList[0] : 'Operador');
+        if ((!savedOp || savedOp === 'Operador' || myOperatorName === 'Operador') && defaultOp !== 'Operador') {
+          myOperatorName = defaultOp;
           localStorage.setItem('wackup_operator_name', myOperatorName);
           const opEl = document.getElementById('myOperatorNameDisplay');
           if (opEl) opEl.textContent = myOperatorName;
@@ -3760,6 +3778,11 @@
       updateCopilotOperatorOptions();
       if (notify) showToast(`✓ Operador activo en esta PC: ${myOperatorName}`);
       if (selectedChatId) sendPresenceHeartbeat(selectedChatId);
+      authFetch('/api/system/operator/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operator: opName })
+      }).catch(() => {});
     }
 
     function updateCopilotOperatorOptions() {

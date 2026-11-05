@@ -105,6 +105,10 @@ def get_system_settings():
                             data["lan_pin"] = generate_lan_pin()
                         if "known_operators" not in data or not isinstance(data["known_operators"], list):
                             data["known_operators"] = []
+                        if "active_operator" not in data or not isinstance(data.get("active_operator"), str):
+                            data["active_operator"] = data["known_operators"][0] if data["known_operators"] else ""
+                        elif not data.get("active_operator") and data.get("known_operators"):
+                            data["active_operator"] = data["known_operators"][0]
                         if "onboarding_completed" not in data:
                             data["onboarding_completed"] = False
                         if "workspace_profile" not in data or data["workspace_profile"] not in VALID_WORKSPACE_PROFILES:
@@ -118,6 +122,7 @@ def get_system_settings():
             "network_mode": "local",
             "lan_pin": generate_lan_pin(),
             "known_operators": [],
+            "active_operator": "",
             "onboarding_completed": False,
             "workspace_profile": DEFAULT_WORKSPACE_PROFILE
         }
@@ -143,7 +148,7 @@ def save_system_settings(settings):
             return False
 
 
-def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, rename_operator=None, onboarding_completed=None, workspace_profile=None):
+def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, rename_operator=None, onboarding_completed=None, workspace_profile=None, active_operator=None):
     """Actualiza campos específicos de la configuración global de forma thread-safe."""
     settings = get_system_settings()
     changed = False
@@ -168,6 +173,9 @@ def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, r
         if op and not any(existing.lower() == op.lower() for existing in known):
             known.append(op)
             changed = True
+        if not settings.get("active_operator"):
+            settings["active_operator"] = op
+            changed = True
 
     if remove_operator:
         op = str(remove_operator).strip()
@@ -175,6 +183,9 @@ def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, r
         to_remove = [existing for existing in known if existing.lower() == op.lower()]
         for item in to_remove:
             known.remove(item)
+            changed = True
+        if settings.get("active_operator", "").lower() == op.lower():
+            settings["active_operator"] = known[0] if known else ""
             changed = True
 
     if rename_operator and isinstance(rename_operator, dict):
@@ -187,6 +198,24 @@ def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, r
                     known[idx] = new_op
                     changed = True
                     break
+            if settings.get("active_operator", "").lower() == old_op.lower():
+                settings["active_operator"] = new_op
+                changed = True
+
+    if active_operator is not None:
+        op_str = str(active_operator).strip()
+        if op_str:
+            known = settings.setdefault("known_operators", [])
+            matched = next((existing for existing in known if existing.lower() == op_str.lower()), op_str)
+            if matched not in known:
+                known.append(matched)
+            if settings.get("active_operator") != matched:
+                settings["active_operator"] = matched
+                changed = True
+        else:
+            if settings.get("active_operator"):
+                settings["active_operator"] = ""
+                changed = True
 
     if onboarding_completed is not None:
         val = bool(onboarding_completed)

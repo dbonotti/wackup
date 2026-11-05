@@ -786,10 +786,27 @@
           if (!msg || !msg.event) return;
           if (msg.event === "connected" || msg.event === "presence_update") {
             activePresenceMap = msg.active_presence || msg.presence || {};
+            if (msg.active_operator && (!operatorName || operatorName === "Operador")) {
+              operatorName = msg.active_operator;
+              chrome.runtime.sendMessage({
+                action: "save_config",
+                config: { operatorName: msg.active_operator }
+              });
+            }
             updatePresenceBanner(activePresenceMap);
             if (msg.event === "connected" && msg.profile && msg.profile !== currentProfile) {
               currentProfile = msg.profile;
               applyProfileUI();
+            }
+          } else if (msg.event === "active_operator_updated" && msg.active_operator) {
+            const newOp = msg.active_operator;
+            if (!operatorName || operatorName === "Operador") {
+              operatorName = newOp;
+              chrome.runtime.sendMessage({
+                action: "save_config",
+                config: { operatorName: newOp }
+              });
+              updatePresenceBanner(activePresenceMap);
             }
           } else if (msg.event === "crm_update") {
             const matchesCurrent = currentChatId && (
@@ -823,6 +840,7 @@
       sseSource.onmessage = handleEvt;
       sseSource.addEventListener("connected", handleEvt);
       sseSource.addEventListener("presence_update", handleEvt);
+      sseSource.addEventListener("active_operator_updated", handleEvt);
       sseSource.addEventListener("crm_update", handleEvt);
       sseSource.addEventListener("sync_update", handleEvt);
       sseSource.addEventListener("profile_update", handleEvt);
@@ -850,10 +868,12 @@
       const viewers = Array.isArray(chatEntry) ? chatEntry : (chatEntry.viewers || [chatEntry]);
       viewers.forEach(v => {
         if (!v) return;
+        const op = (v.operator || "").trim();
         const isMe = (v.client_id && v.client_id === clientId) ||
-          (operatorName && v.operator && v.operator === operatorName);
-        if (!isMe && v.operator) {
-          otherNames.push(v.operator);
+          (operatorName && op && op.toLowerCase() === operatorName.toLowerCase()) ||
+          (!op || op.toLowerCase() === "operador");
+        if (!isMe && op) {
+          otherNames.push(op);
         }
       });
     });
@@ -1934,10 +1954,20 @@
 
     // Cargar operadores conocidos desde la red si es posible
     apiFetch("/api/system/network").then(netData => {
-      if (netData && Array.isArray(netData.known_operators)) {
-        knownOperators = netData.known_operators;
-        const sel = document.getElementById("select-assigned-to");
-        if (sel) populateAssigneeOptions(sel, sel.value);
+      if (netData) {
+        if (Array.isArray(netData.known_operators)) {
+          knownOperators = netData.known_operators;
+          const sel = document.getElementById("select-assigned-to");
+          if (sel) populateAssigneeOptions(sel, sel.value);
+        }
+        const activeOp = netData.active_operator || (netData.known_operators && netData.known_operators[0]) || "";
+        if ((!operatorName || operatorName === "Operador") && activeOp) {
+          operatorName = activeOp;
+          chrome.runtime.sendMessage({
+            action: "save_config",
+            config: { operatorName: activeOp }
+          });
+        }
       }
     }).catch(() => {});
 

@@ -1222,6 +1222,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             ips = config.get_local_ip_addresses()
             auth_ok, _, _ = self.is_authorized_request()
             can_see_pin = is_local or auth_ok
+            known_ops = settings.get("known_operators", [])
+            active_op = settings.get("active_operator", "") or (known_ops[0] if known_ops else "")
 
             resp_data = {
                 "ok": True,
@@ -1229,7 +1231,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 "host_ips": ips,
                 "local_ips": ips,
                 "port": PORT,
-                "known_operators": settings.get("known_operators", []),
+                "known_operators": known_ops,
+                "active_operator": active_op,
                 "online_operators": sse_hub.get_sse_hub().get_online_operators(),
                 "is_local": is_local,
                 "needs_pin": not can_see_pin
@@ -1269,10 +1272,14 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
             try:
                 active_prof = config.get_account_profile()
+                sys_settings = config.get_system_settings()
+                known_ops_sse = sys_settings.get("known_operators", [])
+                active_op_sse = sys_settings.get("active_operator", "") or (known_ops_sse[0] if known_ops_sse else "")
                 init_payload = {
                     "connected": True,
                     "timestamp": int(time.time()),
                     "active_presence": hub.get_active_presence(),
+                    "active_operator": active_op_sse,
                     "profile": active_prof,
                     "profile_label": config.WORKSPACE_PROFILE_NAMES.get(active_prof, active_prof)
                 }
@@ -1880,6 +1887,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     return
 
                 known_ops = settings.get("known_operators", [])
+                active_op = settings.get("active_operator", "") or (known_ops[0] if known_ops else "")
                 online_ops = sse_hub.get_sse_hub().get_online_operators()
 
                 # Si NO se especifica operator_name, responder verificación exitosa con lista de operadores y estado
@@ -1888,6 +1896,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "network_mode": network_mode,
                         "known_operators": known_ops,
+                        "active_operator": active_op,
                         "online_operators": online_ops,
                         "message": "PIN verificado correctamente"
                     })
@@ -1901,19 +1910,22 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                             "error": "El operador seleccionado no está dado de alta. Debe registrarse previamente desde Configuración en la PC principal.",
                             "needs_pin": True,
                             "known_operators": known_ops,
+                            "active_operator": active_op,
                             "online_operators": online_ops
                         })
                         return
                     operator_name = matched_op
                 else:
                     # Si no hay operadores en el sistema, darlo de alta automáticamente
-                    config.update_system_settings(add_operator=operator_name)
+                    config.update_system_settings(add_operator=operator_name, active_operator=operator_name)
                     known_ops = [operator_name]
+                    active_op = operator_name
 
                 self.send_json(200, {
                     "ok": True,
                     "operator_name": operator_name,
                     "known_operators": known_ops,
+                    "active_operator": active_op,
                     "online_operators": online_ops,
                     "message": "PIN verificado correctamente"
                 })
@@ -1972,6 +1984,30 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            elif url.path == "/api/system/operator/active":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    payload = {}
+                target_op = str(payload.get("operator") or payload.get("operator_name") or "").strip()
+                if not target_op:
+                    self.send_json(400, {"ok": False, "error": "operator requerido"})
+                    return
+                updated = config.update_system_settings(active_operator=target_op)
+                sse_hub.get_sse_hub().kick_operator("Operador")
+                sse_hub.get_sse_hub().broadcast("active_operator_updated", {
+                    "event": "active_operator_updated",
+                    "active_operator": updated.get("active_operator", target_op)
+                })
+                self.send_json(200, {
+                    "ok": True,
+                    "active_operator": updated.get("active_operator", target_op),
+                    "settings": updated
+                })
+                return
+
             elif url.path == "/api/presence/heartbeat":
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
@@ -1981,7 +2017,14 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     payload = {}
 
                 chat_id = payload.get("chat_id")
-                operator = payload.get("operator") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or "Operador"
+                raw_op = payload.get("operator") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or ""
+                raw_op = str(raw_op).strip()
+                settings = config.get_system_settings()
+                active_op = settings.get("active_operator") or (settings.get("known_operators", [""])[0] if settings.get("known_operators") else "")
+                if not raw_op or raw_op.lower() == "operador":
+                    operator = active_op or "Operador"
+                else:
+                    operator = raw_op
                 client_id = payload.get("client_id")
                 source = payload.get("source", "visor")
 

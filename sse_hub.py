@@ -121,6 +121,16 @@ class SSEHub:
             if clean_chat not in self._presence:
                 self._presence[clean_chat] = {}
 
+            # Si este client_id o la misma fuente ya tenia 'Operador' y ahora se registra un operador real, limpiarlo
+            if op_name.lower() != "operador":
+                to_remove = [
+                    cid for cid, v in self._presence[clean_chat].items()
+                    if (cid != c_id and v.get("source") == src and (v.get("operator") or "").lower() == "operador")
+                ]
+                for cid in to_remove:
+                    del self._presence[clean_chat][cid]
+                    presence_changed = True
+
             old_entry = self._presence[clean_chat].get(c_id)
             if not old_entry or old_entry.get("operator") != op_name:
                 presence_changed = True

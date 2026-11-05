@@ -314,6 +314,43 @@ def test_sse_and_presence_tracking():
                 viewers_after = occ_after.get("viewers", [])
                 assert not any(v.get("client_id") == "operator_ana_pc" for v in viewers_after)
 
+        # Probar que un heartbeat con 'Operador' o vacio se resuelve al active_operator ("Dario")
+        config.update_system_settings(active_operator="Dario")
+        hb_generic = json.dumps({
+            "chat_id": "54911998877@c.us",
+            "client_id": "ext_dario_test",
+            "operator": "Operador",
+            "source": "whatsapp_web"
+        }).encode("utf-8")
+        req_hb_gen = Request(f"{base_url}/api/presence/heartbeat", data=hb_generic, headers={"Content-Type": "application/json"})
+        with urlopen(req_hb_gen) as resp:
+            assert resp.status == 200
+
+        with urlopen(req_pres) as resp:
+            pres_data_gen = json.loads(resp.read().decode("utf-8"))
+            pres_map_gen = pres_data_gen.get("presence") or pres_data_gen.get("active_presence", {})
+            assert "54911998877@c.us" in pres_map_gen
+            occ_gen = pres_map_gen["54911998877@c.us"]
+            assert occ_gen.get("operator") == "Dario", f"Operador generico debio resolverse a 'Dario', pero fue: {occ_gen.get('operator')}"
+
+        # Probar endpoint /api/system/operator/active
+        req_act_op = Request(
+            f"{base_url}/api/system/operator/active",
+            data=json.dumps({"operator": "Carlos"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urlopen(req_act_op) as resp:
+            assert resp.status == 200
+            res_act = json.loads(resp.read().decode("utf-8"))
+            assert res_act.get("active_operator") == "Carlos"
+
+        # Verificar en /api/system/network
+        req_net = Request(f"{base_url}/api/system/network")
+        with urlopen(req_net) as resp:
+            assert resp.status == 200
+            net_res = json.loads(resp.read().decode("utf-8"))
+            assert net_res.get("active_operator") == "Carlos"
+
     finally:
         config.save_system_settings(orig_settings)
         sse_stop_event.set()
