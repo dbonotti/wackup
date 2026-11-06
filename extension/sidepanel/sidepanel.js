@@ -1731,6 +1731,7 @@
     const backdrop = document.getElementById("settings-backdrop");
     const saveBtn = document.getElementById("btn-save-cfg");
     const feedback = document.getElementById("cfg-feedback");
+    const extraTools = document.getElementById("cfg-extra-tools");
 
     const checkBtn = document.getElementById("btn-check-server");
     const opSec = document.getElementById("cfg-operator-section");
@@ -1738,12 +1739,52 @@
     const statusBox = document.getElementById("cfg-operator-status-box");
     const statusMsg = document.getElementById("cfg-operator-status-msg");
     const kickBtn = document.getElementById("btn-kick-operator");
+    const urlInput = document.getElementById("cfg-server-url");
+    const pinInput = document.getElementById("cfg-office-pin");
     let lastOnlineOps = [];
 
-    async function checkServerAndLoadOperators(showFeedback = true) {
-      const urlInput = document.getElementById("cfg-server-url");
-      const pinInput = document.getElementById("cfg-office-pin");
+    function updateSaveButtonState() {
+      if (!saveBtn) return;
+      const selectedOp = opSelect ? opSelect.value.trim() : "";
+      saveBtn.disabled = !selectedOp;
+    }
 
+    function resetUnverifiedState() {
+      if (opSec) opSec.style.display = "none";
+      if (saveBtn) {
+        saveBtn.style.display = "none";
+        saveBtn.disabled = true;
+      }
+      if (extraTools) extraTools.style.display = "none";
+    }
+
+    if (urlInput) {
+      urlInput.addEventListener("input", () => {
+        resetUnverifiedState();
+        if (feedback) feedback.style.display = "none";
+      });
+      urlInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          checkServerAndLoadOperators(true);
+        }
+      });
+    }
+
+    if (pinInput) {
+      pinInput.addEventListener("input", () => {
+        resetUnverifiedState();
+        if (feedback) feedback.style.display = "none";
+      });
+      pinInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          checkServerAndLoadOperators(true);
+        }
+      });
+    }
+
+    async function checkServerAndLoadOperators(showFeedback = true) {
       const sUrl = (urlInput ? urlInput.value.trim() : "http://127.0.0.1:8080").replace(/\/+$/, "");
       const sPin = pinInput ? pinInput.value.trim() : "";
 
@@ -1759,7 +1800,7 @@
         }, { serverUrl: sUrl, pin: sPin });
 
         if (!data || !data.ok) {
-          if (opSec) opSec.style.display = "none";
+          resetUnverifiedState();
           if (feedback) {
             feedback.style.display = "block";
             feedback.style.color = "#ef4444";
@@ -1792,11 +1833,20 @@
             });
           }
 
-          opSelect.onchange = () => updateOperatorInUseWarning();
+          opSelect.onchange = () => {
+            updateOperatorInUseWarning();
+            updateSaveButtonState();
+          };
         }
 
         if (opSec) opSec.style.display = "block";
+        if (saveBtn) saveBtn.style.display = "block";
         updateOperatorInUseWarning();
+        updateSaveButtonState();
+
+        if (extraTools && operatorName) {
+          extraTools.style.display = "block";
+        }
 
         if (feedback && showFeedback) {
           feedback.style.display = "block";
@@ -1807,7 +1857,7 @@
 
         return true;
       } catch (err) {
-        if (opSec) opSec.style.display = "none";
+        resetUnverifiedState();
         if (feedback) {
           feedback.style.display = "block";
           feedback.style.color = "#ef4444";
@@ -1850,8 +1900,6 @@
 
     async function kickStuckOperator(opName) {
       if (!opName) return;
-      const urlInput = document.getElementById("cfg-server-url");
-      const pinInput = document.getElementById("cfg-office-pin");
       const sUrl = (urlInput ? urlInput.value.trim() : "http://127.0.0.1:8080").replace(/\/+$/, "");
       const sPin = pinInput ? pinInput.value.trim() : "";
 
@@ -1887,14 +1935,19 @@
           operatorName = res.config.operatorName || "";
           currentServerUrl = res.config.serverUrl || "http://127.0.0.1:8080";
           currentOfficePin = res.config.officePin || "";
-          const urlInput = document.getElementById("cfg-server-url");
-          const pinInput = document.getElementById("cfg-office-pin");
 
           if (urlInput) urlInput.value = currentServerUrl;
           if (pinInput) pinInput.value = currentOfficePin;
 
-          // Autocomprobar y cargar lista de operadores
-          checkServerAndLoadOperators(false);
+          // Si ya hay un operador guardado previamente en este equipo, verificar automáticamente
+          if (operatorName && (currentOfficePin || currentServerUrl.includes("127.0.0.1") || currentServerUrl.includes("localhost"))) {
+            checkServerAndLoadOperators(false);
+          } else {
+            // Cliente nuevo o sin operador seleccionado: mostrar sólo opciones básicas
+            resetUnverifiedState();
+          }
+        } else {
+          resetUnverifiedState();
         }
       });
     }
@@ -1938,8 +1991,6 @@
         operatorName = res.config.operatorName || "";
         currentServerUrl = res.config.serverUrl || "http://127.0.0.1:8080";
         currentOfficePin = res.config.officePin || "";
-        const urlInput = document.getElementById("cfg-server-url");
-        const pinInput = document.getElementById("cfg-office-pin");
 
         if (urlInput) urlInput.value = currentServerUrl;
         if (pinInput) pinInput.value = currentOfficePin;
@@ -1959,7 +2010,8 @@
           if (sel) populateAssigneeOptions(sel, sel.value);
         }
         const activeOp = netData.active_operator || (netData.known_operators && netData.known_operators[0]) || "";
-        if ((!operatorName || operatorName === "Operador") && activeOp) {
+        const isLocalHost = !netData.needs_pin && (currentServerUrl.includes("127.0.0.1") || currentServerUrl.includes("localhost"));
+        if (isLocalHost && (!operatorName || operatorName === "Operador") && activeOp) {
           operatorName = activeOp;
           chrome.runtime.sendMessage({
             action: "save_config",
@@ -1971,10 +2023,6 @@
 
     if (saveBtn) {
       saveBtn.addEventListener("click", () => {
-        const urlInput = document.getElementById("cfg-server-url");
-        const pinInput = document.getElementById("cfg-office-pin");
-        const opSelect = document.getElementById("cfg-operator-select");
-
         const selectedOp = opSelect ? opSelect.value.trim() : "";
         if (!selectedOp) {
           showToast("⚠️ Por favor selecciona tu nombre de operador");
@@ -1998,6 +2046,9 @@
             feedback.style.color = "#10b981";
             feedback.textContent = `Conectado como ${operatorName} ✓`;
             setTimeout(() => { feedback.style.display = "none"; }, 3500);
+          }
+          if (extraTools) {
+            extraTools.style.display = "block";
           }
           showToast(`✓ Conectado como ${operatorName}`);
           closeSettings();

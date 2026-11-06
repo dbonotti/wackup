@@ -33,6 +33,7 @@
       <button id="btn-close-settings" class="btn-close-settings" title="Cerrar">✕</button>
     </div>
     <div class="settings-drawer-body">
+      <!-- PASO 1: CONEXIÓN AL SERVIDOR Y PIN -->
       <div class="form-group mb-2">
         <label for="cfg-server-url">URL del Servidor (Local o IP LAN):</label>
         <input type="text" id="cfg-server-url" class="form-control" placeholder="http://127.0.0.1:8080">
@@ -46,6 +47,9 @@
           🔌 Conectar y Cargar Operadores
         </button>
       </div>
+      <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
+
+      <!-- PASO 2: ASIGNACIÓN DE OPERADOR (visible sólo tras conectar con éxito) -->
       <div id="cfg-operator-section" class="form-group mb-2" style="display: none;">
         <label for="cfg-operator-select">Operador de esta PC:</label>
         <select id="cfg-operator-select" class="form-control">
@@ -57,13 +61,16 @@
             ⚠️ Liberar sesión anterior de este operador
           </button>
         </div>
+        <button id="btn-save-cfg" class="btn-primary full-width" disabled style="display: none; margin-top: 8px;">
+          💾 Guardar y Conectar
+        </button>
       </div>
-      <div class="settings-actions">
-        <button id="btn-save-cfg" class="btn-primary full-width">Guardar y Conectar</button>
-        <button type="button" id="btn-open-viewer-cfg" class="btn-secondary full-width" style="margin-top: 6px;">🖥️ Abrir Visor Web</button>
+
+      <!-- HERRAMIENTAS ADICIONALES (visible sólo si la conexión ya está guardada y activa) -->
+      <div id="cfg-extra-tools" class="settings-actions mt-2" style="display: none; border-top: 1px solid var(--border); padding-top: 10px;">
+        <button type="button" id="btn-open-viewer-cfg" class="btn-secondary full-width">🖥️ Abrir Visor Web</button>
         <button id="btn-sync-all-full" class="btn-secondary full-width" style="margin-top: 6px;">📥 Sincronizar Historial Completo</button>
       </div>
-      <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
     </div>
   </div>
 

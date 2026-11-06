@@ -1429,7 +1429,17 @@ label {
 .full-width { width: 100%; }
 .mb-2 { margin-bottom: 8px; }
 .mt-1 { margin-top: 4px; }
+.mt-2 { margin-top: 8px; }
 .text-center { text-align: center; }
+
+button:disabled,
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed !important;
+  pointer-events: auto;
+  filter: grayscale(0.5);
+}
 
 /* Aviso Vacío */
 .empty-notice {
