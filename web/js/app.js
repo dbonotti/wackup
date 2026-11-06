@@ -1,3 +1,28 @@
+    // Si se abre desde la extensión o enlace directo con PIN y Operador, recordarlos de inmediato
+    try {
+      const _initUrlParams = new URLSearchParams(window.location.search);
+      const _urlPin = _initUrlParams.get('pin');
+      const _urlOp = _initUrlParams.get('operator');
+      let _urlParamsCleaned = false;
+      if (_urlPin) {
+        localStorage.setItem('wackup_office_pin', _urlPin.trim());
+        _initUrlParams.delete('pin');
+        _urlParamsCleaned = true;
+      }
+      if (_urlOp) {
+        localStorage.setItem('wackup_operator_name', _urlOp.trim());
+        _initUrlParams.delete('operator');
+        _urlParamsCleaned = true;
+      }
+      if (_urlParamsCleaned) {
+        const cleanQs = _initUrlParams.toString();
+        const cleanUrl = window.location.pathname + (cleanQs ? '?' + cleanQs : '') + window.location.hash;
+        window.history.replaceState(null, '', cleanUrl);
+      }
+    } catch (e) {
+      console.warn('Error procesando parámetros iniciales de URL en el visor:', e);
+    }
+
     let currentAccountId = localStorage.getItem('wackup_selected_account') || null;
     let availableAccounts = [];
     let allChats = [];
@@ -26,6 +51,7 @@
     let expectedNotesUpdatedAt = null;
     let currentKanbanAssignedFilter = 'all';
     let knownOperatorsList = [];
+    let isLanPinModalVisible = false;
 
     const _origFetch = window.fetch.bind(window);
     async function authFetch(resource, init = {}) {
@@ -872,6 +898,30 @@
 
     async function init() {
       initTheme();
+
+      // En modo red LAN / cliente remoto, verificar primero si se requiere PIN
+      // para evitar disparar ráfagas de 401s antes de que el usuario ingrese sus credenciales.
+      try {
+        const netRes = await _origFetch('/api/system/network', {
+          headers: {
+            ...(myOfficePin ? { 'X-WAckup-Pin': myOfficePin } : {}),
+            ...(myOperatorName ? { 'X-WAckup-Operator': myOperatorName } : {})
+          }
+        });
+        const netData = await netRes.json();
+        if (netData) {
+          if (Array.isArray(netData.known_operators)) {
+            knownOperatorsList = netData.known_operators;
+          }
+          if (netData.needs_pin) {
+            showLanPinModal();
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Error verificando estado de red LAN:', e);
+      }
+
       await loadAccountsList();
       await updateSyncStatus();
       await loadChats();
@@ -1120,15 +1170,22 @@
     }
 
     function startOfflineReconnectWorker() {
-      if (offlineReconnectWorker) return;
+      if (offlineReconnectWorker || isLanPinModalVisible) return;
       const probeOnce = async () => {
         if (offlineProbeInFlight) return;
+        if (isLanPinModalVisible) {
+          stopOfflineReconnectWorker();
+          return;
+        }
         offlineProbeInFlight = true;
         try {
           const res = await fetch(withAccount(`/api/sync/status?viewer=1&client_id=${encodeURIComponent(myClientId)}`), { cache: 'no-store' });
           if (res && res.ok) {
             stopOfflineReconnectWorker();
             updateSyncStatus();
+          } else if (res && res.status === 401) {
+            stopOfflineReconnectWorker();
+            showLanPinModal();
           }
         } catch (e) {
           // El servidor sigue apagado; reintentará en el próximo pulso
@@ -1154,8 +1211,12 @@
     }
 
     async function updateSyncStatus() {
+      if (isLanPinModalVisible) return;
       try {
         const res = await fetch(withAccount(`/api/sync/status?viewer=1&client_id=${encodeURIComponent(myClientId)}`));
+        if (res.status === 401) {
+          return;
+        }
         const data = await res.json();
         stopOfflineReconnectWorker();
 
@@ -3724,6 +3785,7 @@
 
     // SSE EventSource en tiempo real
     function connectSSE() {
+      if (isLanPinModalVisible) return;
       if (sseEventSource) {
         try { sseEventSource.close(); } catch (e) {}
         sseEventSource = null;
@@ -3764,6 +3826,13 @@
         });
 
         sseEventSource.onerror = () => {
+          if (isLanPinModalVisible) {
+            if (sseEventSource) {
+              try { sseEventSource.close(); } catch (e) {}
+              sseEventSource = null;
+            }
+            return;
+          }
           // EventSource reintenta automáticamente; activar sondeo rápido en Worker para que el servidor detecte la pestaña al volver
           wasServerOffline = true;
           startOfflineReconnectWorker();
@@ -4348,24 +4417,54 @@
       const opSelect = document.getElementById('modalOperatorSelect');
       const errEl = document.getElementById('lanPinErrorMsg');
 
+      // Si el modal ya está desplegado, no reiniciar los inputs ni regenerar las opciones del selector
+      if (isLanPinModalVisible && modal && modal.style.display === 'flex') {
+        if (errEl) {
+          if (errMsg) {
+            errEl.textContent = errMsg;
+            errEl.style.display = 'block';
+          } else {
+            errEl.style.display = 'none';
+          }
+        }
+        return;
+      }
+
+      isLanPinModalVisible = true;
+      if (syncIntervalId) {
+        clearInterval(syncIntervalId);
+        syncIntervalId = null;
+      }
+      stopOfflineReconnectWorker();
+      if (sseEventSource) {
+        try { sseEventSource.close(); } catch (e) {}
+        sseEventSource = null;
+      }
+
       if (modal) modal.style.display = 'flex';
       if (pinInput && !pinInput.value) pinInput.value = myOfficePin;
 
-      try {
-        const res = await _origFetch('/api/system/network');
-        const netData = await res.json();
-        if (netData && Array.isArray(netData.known_operators)) {
-          knownOperatorsList = netData.known_operators;
-        }
-      } catch (e) {}
+      if (!knownOperatorsList || knownOperatorsList.length === 0) {
+        try {
+          const res = await _origFetch('/api/system/network');
+          const netData = await res.json();
+          if (netData && Array.isArray(netData.known_operators)) {
+            knownOperatorsList = netData.known_operators;
+          }
+        } catch (e) {}
+      }
 
       if (opSelect) {
+        const currentSelectedVal = opSelect.value;
         if (!knownOperatorsList || knownOperatorsList.length === 0) {
           opSelect.innerHTML = '<option value="">(Sin operadores dados de alta en PC principal)</option>';
         } else {
           opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>' +
             knownOperatorsList.map(op => `<option value="${escapeHtml(op)}">${escapeHtml(op)}</option>`).join('');
-          if (myOperatorName && knownOperatorsList.some(o => o.toLowerCase() === myOperatorName.toLowerCase())) {
+
+          if (currentSelectedVal && knownOperatorsList.includes(currentSelectedVal)) {
+            opSelect.value = currentSelectedVal;
+          } else if (myOperatorName && knownOperatorsList.some(o => o.toLowerCase() === myOperatorName.toLowerCase())) {
             opSelect.value = myOperatorName;
           }
         }
@@ -4379,17 +4478,30 @@
           errEl.style.display = 'none';
         }
       }
+
+      setTimeout(() => {
+        if (opSelect && (!opSelect.value || opSelect.value === 'Operador')) {
+          opSelect.focus();
+        } else if (pinInput) {
+          pinInput.focus();
+          pinInput.select();
+        }
+      }, 50);
     }
 
     function hideLanPinModal() {
+      isLanPinModalVisible = false;
       const modal = document.getElementById('lanPinModal');
       if (modal) modal.style.display = 'none';
+      const errEl = document.getElementById('lanPinErrorMsg');
+      if (errEl) errEl.style.display = 'none';
     }
 
     async function submitLanPinAuth() {
       const pinInput = document.getElementById('modalLanPinInput');
       const opSelect = document.getElementById('modalOperatorSelect');
       const errEl = document.getElementById('lanPinErrorMsg');
+      const submitBtn = document.querySelector('#lanPinModal .btn-primary');
 
       const pin = pinInput ? pinInput.value.trim() : '';
       const op = opSelect ? opSelect.value.trim() : '';
@@ -4399,6 +4511,7 @@
           errEl.textContent = 'Por favor selecciona tu nombre de operador de la lista.';
           errEl.style.display = 'block';
         }
+        if (opSelect) opSelect.focus();
         return;
       }
 
@@ -4407,7 +4520,13 @@
           errEl.textContent = 'Por favor ingresa el PIN de oficina.';
           errEl.style.display = 'block';
         }
+        if (pinInput) pinInput.focus();
         return;
+      }
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Conectando...';
       }
 
       try {
@@ -4431,11 +4550,20 @@
             errEl.textContent = data.error || 'PIN incorrecto. Consulta el PIN en la PC principal.';
             errEl.style.display = 'block';
           }
+          if (pinInput) {
+            pinInput.focus();
+            pinInput.select();
+          }
         }
       } catch (err) {
         if (errEl) {
           errEl.textContent = 'Error de conexión con el servidor.';
           errEl.style.display = 'block';
+        }
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Conectar';
         }
       }
     }

@@ -17,6 +17,7 @@
       </div>
       <div class="header-actions">
         <span id="profile-badge" class="badge-profile copilot-mini-pill" title="Perfil de Espacio de Trabajo (clic para cambiar)">CRM</span>
+        <button id="btn-open-viewer" class="btn-icon" title="Abrir Visor Web WAckup en el navegador">🖥️</button>
         <button id="btn-update-ext" class="btn-icon btn-update" style="display:none;" title="Actualizar extensión">🔄 Actualizar</button>
         <button id="btn-sync-recent" class="btn-icon" title="Sincronizar novedades (Shift+clic: historial completo)">🔄</button>
         <button id="btn-toggle-settings" class="btn-icon" title="Configuración del Servidor">⚙️</button>
@@ -59,7 +60,8 @@
       </div>
       <div class="settings-actions">
         <button id="btn-save-cfg" class="btn-primary full-width">Guardar y Conectar</button>
-        <button id="btn-sync-all-full" class="btn-secondary full-width">📥 Sincronizar Historial Completo</button>
+        <button type="button" id="btn-open-viewer-cfg" class="btn-secondary full-width" style="margin-top: 6px;">🖥️ Abrir Visor Web</button>
+        <button id="btn-sync-all-full" class="btn-secondary full-width" style="margin-top: 6px;">📥 Sincronizar Historial Completo</button>
       </div>
       <div id="cfg-feedback" class="status-hint mt-1 text-center" style="display:none;"></div>
     </div>
@@ -94,6 +96,11 @@
       <div class="notice-icon">💬</div>
       <div class="notice-title">Ningún chat seleccionado</div>
       <div class="notice-desc">Haz clic en cualquier conversación en WhatsApp Web para cargar su ficha y herramientas.</div>
+      <div style="margin-top: 12px;">
+        <button type="button" id="btn-open-viewer-empty" class="btn-secondary" style="font-size: 12px; padding: 6px 14px;">
+          🖥️ Abrir Visor Web
+        </button>
+      </div>
     </div>
 
     <!-- CONTENEDOR DE PESTAÑAS -->
@@ -117,6 +124,7 @@
           <div class="contact-row-top">
             <span id="contact-type-icon" class="contact-type-icon" title="Contacto">👤</span>
             <div id="contact-name" class="contact-title" title="Nombre del contacto">Cargando contacto...</div>
+            <button id="btn-open-viewer-chat" class="btn-res-action" type="button" title="Ver esta conversación completa en el Visor Web" style="margin-left: auto; padding: 2px 7px; font-size: 11px;">↗ Visor</button>
             <span id="contact-sla" class="sla-badge" style="display:none;" title="Tiempo promedio de respuesta (SLA)">-</span>
           </div>
           <div class="contact-row-bottom">

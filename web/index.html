@@ -784,13 +784,13 @@
         </p>
         <div class="form-group mb-2">
           <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">Operador / Responsable</label>
-          <select id="modalOperatorSelect" class="search-box" style="width:100%;">
+          <select id="modalOperatorSelect" class="search-box" style="width:100%;" onkeydown="if(event.key==='Enter') document.getElementById('modalLanPinInput').focus()">
             <option value="">Cargando operadores...</option>
           </select>
         </div>
         <div class="form-group mb-2" style="margin-top: 12px;">
           <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">PIN de Oficina</label>
-          <input type="password" id="modalLanPinInput" class="search-box" placeholder="Ej. 123456" maxlength="8" style="width:100%;">
+          <input type="password" id="modalLanPinInput" class="search-box" placeholder="Ej. 123456" maxlength="8" style="width:100%;" onkeydown="if(event.key==='Enter') submitLanPinAuth()">
         </div>
         <div id="lanPinErrorMsg" style="display: none; color: #ef4444; font-size: 12px; margin-top: 8px;"></div>
         <div style="margin-top: 18px; display: flex; justify-content: flex-end;">

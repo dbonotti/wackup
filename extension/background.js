@@ -26,12 +26,76 @@ let lastSyncStatus = {
 let lastUnansweredCount = 0;
 
 // =========================================================================
-// 1. CONFIGURACIÓN DEL SIDEPANEL NATIVO
+// 1. CONFIGURACIÓN DEL SIDEPANEL NATIVO (ESPECÍFICO PARA WHATSAPP WEB)
 // =========================================================================
 if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === "function") {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
     .catch((err) => console.warn("[WAckup SW] Error al configurar sidePanel behavior:", err));
 }
+
+// Deshabilitar el panel lateral global por defecto para que no se muestre en pestañas ajenas
+if (chrome.sidePanel && typeof chrome.sidePanel.setOptions === "function") {
+  chrome.sidePanel.setOptions({ enabled: false })
+    .catch((err) => console.warn("[WAckup SW] Error al deshabilitar sidePanel global:", err));
+}
+
+function isWhatsAppUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.hostname === "web.whatsapp.com";
+  } catch (e) {
+    return false;
+  }
+}
+
+async function configureSidePanelForTab(tabId, url) {
+  if (!tabId || !chrome.sidePanel || typeof chrome.sidePanel.setOptions !== "function") return;
+  try {
+    if (isWhatsAppUrl(url)) {
+      await chrome.sidePanel.setOptions({
+        tabId: tabId,
+        path: "sidepanel/sidepanel.html",
+        enabled: true
+      });
+    } else {
+      await chrome.sidePanel.setOptions({
+        tabId: tabId,
+        enabled: false
+      });
+    }
+  } catch (err) {
+    // Pestañas del sistema (chrome://), descargas o pestañas cerradas antes de procesar
+  }
+}
+
+// Escuchar cambios de URL o navegación en pestañas
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === "loading" || changeInfo.status === "complete") {
+    configureSidePanelForTab(tabId, tab?.url || changeInfo.url);
+  }
+});
+
+// Escuchar cambio/activación de pestaña
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    if (tab && tab.url) {
+      await configureSidePanelForTab(activeInfo.tabId, tab.url);
+    }
+  } catch (err) {}
+});
+
+// Inicializar todas las pestañas existentes al iniciar el Service Worker
+chrome.tabs.query({}, (tabs) => {
+  if (Array.isArray(tabs)) {
+    tabs.forEach((tab) => {
+      if (tab.id) {
+        configureSidePanelForTab(tab.id, tab.url);
+      }
+    });
+  }
+});
 
 // Cargar configuración inicial desde chrome.storage.local
 chrome.storage.local.get(["serverUrl", "officePin", "operatorName"], (res) => {
@@ -249,22 +313,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
-  // Enfocar pestaña existente del Visor Web sin abrir duplicados
-  if (request.action === "focus_viewer_tab") {
-    const base = (config.serverUrl || "http://127.0.0.1:8080").replace(/\/+$/, "");
-    chrome.tabs.query({ url: ["http://127.0.0.1/*", "http://localhost/*"] }, (tabs) => {
+  // Enfocar pestaña existente del Visor Web o abrirla si no existe
+  if (request.action === "focus_viewer_tab" || request.action === "open_viewer") {
+    const base = (request.baseUrl || config.serverUrl || "http://127.0.0.1:8080").replace(/\/+$/, "");
+    const targetUrl = request.url || `${base}/index.html`;
+
+    chrome.tabs.query({}, (tabs) => {
       const list = Array.isArray(tabs) ? tabs : [];
-      const match = list.find(t => t.url && t.url.startsWith(base)) || list[0];
+      const match = list.find(t => t.url && t.url.startsWith(base));
       if (match && match.id) {
-        chrome.tabs.update(match.id, { active: true }, () => {
+        const updateInfo = { active: true };
+        if (request.url && match.url !== request.url) {
+          updateInfo.url = request.url;
+        }
+        chrome.tabs.update(match.id, updateInfo, () => {
           if (match.windowId) {
             chrome.windows.update(match.windowId, { focused: true }).catch(() => {});
           }
+          sendResponse({ ok: true, reopened: true });
+        });
+      } else {
+        chrome.tabs.create({ url: targetUrl }, () => {
+          sendResponse({ ok: true, created: true });
         });
       }
     });
-    sendResponse({ ok: true });
-    return;
+    return true;
   }
 
   // Obtener / guardar configuración

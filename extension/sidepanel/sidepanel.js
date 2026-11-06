@@ -1249,9 +1249,7 @@
       if (openBtn) {
         openBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          const serverUrl = currentServerUrl || "http://127.0.0.1:8080";
-          const viewerUrl = `${serverUrl}/index.html?chat_id=${encodeURIComponent(rawChatId)}&msg_id=${encodeURIComponent(m.msg_id)}&account_id=${encodeURIComponent(currentAccountId)}`;
-          window.open(viewerUrl, "_blank");
+          openViewer(rawChatId, m.msg_id);
         });
       }
 
@@ -2014,6 +2012,32 @@
   }
 
   // =========================================================================
+  // ACCESO DIRECTO AL VISOR WEB
+  // =========================================================================
+  function openViewer(targetChatId = null, targetMsgId = null) {
+    const base = (currentServerUrl || "http://127.0.0.1:8080").replace(/\/+$/, "");
+    const params = new URLSearchParams();
+    if (targetChatId) params.set("chat_id", targetChatId);
+    if (targetMsgId) params.set("msg_id", targetMsgId);
+    if (currentAccountId && currentAccountId !== "default") params.set("account_id", currentAccountId);
+    if (currentOfficePin) params.set("pin", currentOfficePin);
+    if (operatorName && operatorName !== "Operador") params.set("operator", operatorName);
+
+    const qs = params.toString();
+    const finalUrl = `${base}/index.html${qs ? "?" + qs : ""}`;
+
+    chrome.runtime.sendMessage({
+      action: "open_viewer",
+      url: finalUrl,
+      baseUrl: base
+    }, (res) => {
+      if (chrome.runtime.lastError || !res || !res.ok) {
+        window.open(finalUrl, "_blank");
+      }
+    });
+  }
+
+  // =========================================================================
   // BOTONES RÁPIDOS DE CABECERA Y ACTUALIZACIÓN
   // =========================================================================
   function setupHeaderButtons() {
@@ -2025,6 +2049,40 @@
     const btnUpdateExt = document.getElementById("btn-update-ext");
     const btnAddTag = document.getElementById("btn-add-tag");
     const badgeProfile = document.getElementById("profile-badge");
+    const btnOpenViewer = document.getElementById("btn-open-viewer");
+    const btnOpenViewerCfg = document.getElementById("btn-open-viewer-cfg");
+    const btnOpenViewerEmpty = document.getElementById("btn-open-viewer-empty");
+    const btnOpenViewerChat = document.getElementById("btn-open-viewer-chat");
+
+    if (btnOpenViewer) {
+      btnOpenViewer.addEventListener("click", () => {
+        openViewer(currentChatId);
+      });
+    }
+
+    if (btnOpenViewerCfg) {
+      btnOpenViewerCfg.addEventListener("click", () => {
+        openViewer(currentChatId);
+        const panel = document.getElementById("settings-panel");
+        const backdrop = document.getElementById("settings-backdrop");
+        const toggleBtn = document.getElementById("btn-toggle-settings");
+        if (panel) panel.style.display = "none";
+        if (backdrop) backdrop.style.display = "none";
+        if (toggleBtn) toggleBtn.classList.remove("active");
+      });
+    }
+
+    if (btnOpenViewerEmpty) {
+      btnOpenViewerEmpty.addEventListener("click", () => {
+        openViewer();
+      });
+    }
+
+    if (btnOpenViewerChat) {
+      btnOpenViewerChat.addEventListener("click", () => {
+        openViewer(currentChatId);
+      });
+    }
 
     if (dot) {
       dot.addEventListener("click", () => {
