@@ -1055,12 +1055,20 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
     def send_json(self, status_code, data):
         response_bytes = json.dumps(data).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(response_bytes)))
-        self.send_cors_headers()
-        self.end_headers()
-        self.wfile.write(response_bytes)
+        try:
+            self.send_response(status_code)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(response_bytes)))
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(response_bytes)
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
+        except OSError as e:
+            if getattr(e, "winerror", None) in (10053, 10054):
+                pass
+            else:
+                raise
 
     def _serve_file_with_range(self, filepath, mime_type):
         """Sirve un archivo soportando peticiones HTTP Range (206 Partial Content) y streaming por bloques."""
@@ -2809,8 +2817,19 @@ def run():
     if "WACKUP_RESTARTED" in os.environ:
         os.environ.pop("WACKUP_RESTARTED", None)
 
-    ThreadingHTTPServer.allow_reuse_address = True
-    ThreadingHTTPServer.daemon_threads = True
+    class WAckupHTTPServer(ThreadingHTTPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            exc_type, exc_val, _ = sys.exc_info()
+            # Silenciar desconexiones abruptas normales de clientes web (recargas de pestaña, cierres, etc.)
+            if exc_type in (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                return
+            if isinstance(exc_val, OSError) and getattr(exc_val, "winerror", None) in (10053, 10054):
+                return
+            super().handle_error(request, client_address)
+
     settings = config.get_system_settings()
     is_lan = settings.get("network_mode") == "lan"
     bind_host = "0.0.0.0" if is_lan else "127.0.0.1"
@@ -2821,7 +2840,7 @@ def run():
     bind_attempts = 15 if is_restart else 1
     for attempt in range(bind_attempts):
         try:
-            server = ThreadingHTTPServer((bind_host, PORT), BackupServerHandler)
+            server = WAckupHTTPServer((bind_host, PORT), BackupServerHandler)
             server.daemon_threads = True
             global _server_instance
             _server_instance = server
