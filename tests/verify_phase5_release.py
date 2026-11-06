@@ -82,7 +82,6 @@ class TestPhase5Release(unittest.TestCase):
         self.assertTrue(updater.is_path_safe_to_update("extension/manifest.json"))
         self.assertTrue(updater.is_path_safe_to_update("extension/background.js"))
         self.assertTrue(updater.is_path_safe_to_update("iniciar_visor.bat"))
-        self.assertTrue(updater.is_path_safe_to_update("Iniciar_WAckup.vbs"))
 
     def test_apply_update_data_preservation_and_backup(self):
         """

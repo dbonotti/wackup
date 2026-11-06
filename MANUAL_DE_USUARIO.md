@@ -88,7 +88,7 @@ flowchart TD
 
 | Equipo | ¿Qué ejecuta? | ¿Necesita Python o Base de Datos? | ¿Qué hace? |
 | :--- | :--- | :---: | :--- |
-| **PC Servidor** | `whatsapp_viewer.py` (o `Iniciar_WAckup.vbs`) | **SÍ** (incluido en portable) | Aloja la base SQLite central, recibe los datos y orquesta los eventos en vivo. |
+| **PC Servidor** | `whatsapp_viewer.py` (o `iniciar_visor.bat`) | **SÍ** (incluido en portable) | Aloja la base SQLite central, recibe los datos y orquesta los eventos en vivo. |
 | **Puestos de Operadores** | **Únicamente la extensión** en Chrome/Edge | **NO** | Extrae pasivamente los mensajes de WhatsApp Web y los envía por red al servidor. |
 | **Puestos de Supervisión** | **Únicamente el navegador web** | **NO** | Abre la URL del Visor (`http://ip-servidor:5000`) para auditar, ver métricas o etiquetar. |
 
@@ -123,7 +123,7 @@ Es el equipo que actuará como centro de datos de la oficina.
 
 #### Opción Recomendada: Paquete Portable (Sin instalación de software)
 1. Descargue `WAckup_Portable_v3.0.1.zip` y descomprímalo en una carpeta fija (por ejemplo, `C:\WAckup`).
-2. Haga doble clic en **`Iniciar_WAckup.vbs`**.
+2. Haga doble clic en **`iniciar_visor.bat`**.
 3. El sistema se iniciará en silencio, se alojará en la **Bandeja del Sistema (System Tray)** junto al reloj de Windows y abrirá automáticamente el Visor Web en su navegador predeterminado (`http://127.0.0.1:5000`).
 
 #### Opción Técnica / Desarrollador:
@@ -387,7 +387,7 @@ sequenceDiagram
 1. Cierre el servidor WAckup (desde el icono en la bandeja del sistema: Clic derecho ➔ *Salir*).
 2. Diríjase a la carpeta `data/` del proyecto.
 3. Reemplace el archivo `whatsapp_chats.db` por la copia de respaldo que desea restaurar.
-4. Vuelva a iniciar WAckup con `Iniciar_WAckup.vbs`.
+4. Vuelva a iniciar WAckup con `iniciar_visor.bat`.
 
 ---
 

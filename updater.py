@@ -245,7 +245,6 @@ def is_path_safe_to_update(rel_path: str) -> bool:
             "version",
             "requirements.txt",
             "iniciar_visor.bat",
-            "iniciar_wackup.vbs",
             "ver_logs.bat",
             "readme.md",
             "prompts_wackup_v3.md"

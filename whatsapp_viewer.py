@@ -572,11 +572,10 @@ def manage_windows_shortcut(action: str, enable: bool = True) -> dict:
         return {"ok": False, "error": "Acción disponible únicamente en sistemas Windows."}
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    vbs_path = os.path.join(base_dir, "Iniciar_WAckup.vbs")
     bat_path = os.path.join(base_dir, "iniciar_visor.bat")
     icon_path = os.path.join(base_dir, "assets", "favicon.jpg")
 
-    target = vbs_path if os.path.isfile(vbs_path) else bat_path
+    target = bat_path
 
     if action == "desktop":
         ps_script = f'''
@@ -585,6 +584,7 @@ $desk = $ws.SpecialFolders("Desktop")
 $sc = $ws.CreateShortcut("$desk\\WAckup.lnk")
 $sc.TargetPath = "{target}"
 $sc.WorkingDirectory = "{base_dir}"
+$sc.WindowStyle = 7
 $sc.Description = "WAckup 3.0 - Copiloto CRM y Respaldo Local"
 if (Test-Path "{icon_path}") {{ $sc.IconLocation = "{icon_path},0" }}
 $sc.Save()
@@ -607,6 +607,7 @@ $startup = $ws.SpecialFolders("Startup")
 $sc = $ws.CreateShortcut("$startup\\WAckup.lnk")
 $sc.TargetPath = "{target}"
 $sc.WorkingDirectory = "{base_dir}"
+$sc.WindowStyle = 7
 $sc.Description = "WAckup 3.0 Autoarranque"
 if (Test-Path "{icon_path}") {{ $sc.IconLocation = "{icon_path},0" }}
 $sc.Save()
@@ -2937,7 +2938,7 @@ def run():
         if os.environ.get("WACKUP_SUPERVISED") == "1":
             os._exit(42)
 
-        # Si corre autónomamente vía Iniciar_WAckup.vbs (pythonw) o terminal directa sin supervisor .bat
+        # Si corre autónomamente vía pythonw o terminal directa sin supervisor .bat
         try:
             script_path = os.path.abspath(__file__)
             env = os.environ.copy()

@@ -49,7 +49,7 @@ flowchart LR
 ## 🚀 Inicio Rápido en 3 Pasos
 
 ### 1. Iniciar el Servidor (PC Principal)
-* Descarga el paquete portable y haz doble clic en **`Iniciar_WAckup.vbs`** (se ejecuta en silencio en la bandeja del sistema).
+* Descarga el paquete portable y haz doble clic en **`iniciar_visor.bat`** (sitúa el control en la bandeja del sistema junto al reloj).
 * Se abrirá automáticamente el Visor Web en `http://localhost:5000`.
 
 ### 2. Instalar la Extensión (Puestos de Trabajo)

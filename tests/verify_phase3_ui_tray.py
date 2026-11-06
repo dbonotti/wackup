@@ -291,19 +291,10 @@ def test_http_api_endpoints():
 
 
 def test_console_mode_and_launchers():
-    print("[5/5] Verificando lanzador silencioso Iniciar_WAckup.vbs y flag --console...")
+    print("[5/5] Verificando lanzador iniciar_visor.bat y flag --console...")
 
-    vbs_path = os.path.join(ROOT_DIR, "Iniciar_WAckup.vbs")
     bat_path = os.path.join(ROOT_DIR, "iniciar_visor.bat")
-
-    assert os.path.isfile(vbs_path), "Falta Iniciar_WAckup.vbs"
     assert os.path.isfile(bat_path), "Falta iniciar_visor.bat"
-
-    with open(vbs_path, "r", encoding="utf-8", errors="ignore") as f:
-        vbs_content = f.read()
-
-    assert "pythonw" in vbs_content.lower(), "Iniciar_WAckup.vbs debe ejecutar pythonw sin ventana negra CMD"
-    assert "whatsapp_viewer.py" in vbs_content, "Iniciar_WAckup.vbs debe apuntar a whatsapp_viewer.py"
 
     with open(bat_path, "r", encoding="utf-8", errors="ignore") as f:
         bat_content = f.read()
@@ -318,7 +309,7 @@ def test_console_mode_and_launchers():
     assert "--console" in viewer_code, "whatsapp_viewer.py debe soportar el flag --console"
     assert "tray_manager" in viewer_code, "whatsapp_viewer.py debe integrar tray_manager en ejecucion estandar"
 
-    print("  [OK] Lanzador Iniciar_WAckup.vbs y flag --console verificados con exito.")
+    print("  [OK] Lanzador iniciar_visor.bat y flag --console verificados con exito.")
 
 
 class TestPhase3UiAndTray(unittest.TestCase):
