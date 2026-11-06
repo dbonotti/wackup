@@ -2529,12 +2529,22 @@ def remove_chat_tag(chat_id, tag, db_path=None):
         """, (canonical_id, canonical_id, tag))
     return True
 
+def delete_tag_everywhere(tag, db_path=None):
+    """Elimina una etiqueta de todos los chats y del catálogo de etiquetas."""
+    tag = (tag or "").strip()
+    if not tag:
+        return False
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM crm_chat_tags WHERE tag = ?", (tag,))
+    return True
+
 def list_all_tags(db_path=None):
     """Devuelve la lista de etiquetas únicas y su conteo de uso en contactos."""
     with db_connection(db_path, write=False) as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT tag, category, COUNT(DISTINCT chat_id) as count
+            SELECT tag, category, COUNT(DISTINCT CASE WHEN substr(chat_id, 1, 2) != '__' THEN chat_id END) as count
             FROM crm_chat_tags
             GROUP BY tag
             ORDER BY count DESC, tag ASC
@@ -2553,7 +2563,7 @@ def get_all_chats_tags_map(cur=None, db_path=None):
                 alias_to_canon[a_id] = can_id
                 canon_to_aliases.setdefault(can_id, []).append(a_id)
 
-            c.execute("SELECT chat_id, tag FROM crm_chat_tags")
+            c.execute("SELECT chat_id, tag FROM crm_chat_tags WHERE substr(chat_id, 1, 2) != '__'")
             tag_map = {}
             for c_id, tag in c.fetchall():
                 if not tag:

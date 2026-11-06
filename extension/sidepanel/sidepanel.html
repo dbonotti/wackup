@@ -279,6 +279,27 @@
   <!-- TOAST DE NOTIFICACIÓN RÁPIDA -->
   <div id="toast-notification" class="toast-popup" style="display:none;"></div>
 
+  <!-- MODAL DIÁLOGO ELEGANTE (PROMPT / CONFIRM / ALERT) -->
+  <div id="sp-modal-overlay" class="sp-modal-overlay" style="display:none;">
+    <div class="sp-modal-card">
+      <div class="sp-modal-header">
+        <span id="sp-modal-title" class="sp-modal-title">Título</span>
+        <button id="sp-modal-close" class="btn-close-settings" title="Cerrar">✕</button>
+      </div>
+      <div class="sp-modal-body">
+        <p id="sp-modal-message" class="sp-modal-msg"></p>
+        <div id="sp-modal-input-group" class="form-group mb-2" style="display:none;">
+          <input type="text" id="sp-modal-input" class="form-control" autocomplete="off">
+        </div>
+        <div id="sp-modal-error" class="sp-modal-error" style="display:none;"></div>
+      </div>
+      <div class="sp-modal-actions">
+        <button type="button" id="sp-modal-cancel" class="btn-secondary">Cancelar</button>
+        <button type="button" id="sp-modal-confirm" class="btn-primary">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="sidepanel.js"></script>
 </body>
 </html>

@@ -2083,6 +2083,176 @@
       });
     }
 
+  // =========================================================================
+  // MODALES Y DIÁLOGOS ELEGANTES DE SIDEPANEL
+  // =========================================================================
+  let spModalResolver = null;
+  let spModalValidator = null;
+
+  function closeSidePanelModal(result = null) {
+    const overlay = document.getElementById("sp-modal-overlay");
+    if (overlay) overlay.style.display = "none";
+    if (spModalResolver) {
+      const resolve = spModalResolver;
+      spModalResolver = null;
+      spModalValidator = null;
+      resolve(result);
+    }
+  }
+
+  function confirmSidePanelModal() {
+    const overlay = document.getElementById("sp-modal-overlay");
+    if (!overlay || overlay.style.display === "none") return;
+
+    const inputGroup = document.getElementById("sp-modal-input-group");
+    const inputEl = document.getElementById("sp-modal-input");
+    const errorEl = document.getElementById("sp-modal-error");
+
+    let val = true;
+    if (inputGroup && inputGroup.style.display !== "none") {
+      val = inputEl ? inputEl.value.trim() : "";
+      if (spModalValidator) {
+        const err = spModalValidator(val);
+        if (err) {
+          if (errorEl) {
+            errorEl.textContent = err;
+            errorEl.style.display = "block";
+          }
+          if (inputEl) inputEl.focus();
+          return;
+        }
+      }
+    }
+
+    closeSidePanelModal(val);
+  }
+
+  let spModalListenersAttached = false;
+  function setupSidePanelModalListeners() {
+    if (spModalListenersAttached) return;
+    spModalListenersAttached = true;
+
+    const overlay = document.getElementById("sp-modal-overlay");
+    const btnClose = document.getElementById("sp-modal-close");
+    const btnCancel = document.getElementById("sp-modal-cancel");
+    const btnConfirm = document.getElementById("sp-modal-confirm");
+    const inputEl = document.getElementById("sp-modal-input");
+
+    if (btnClose) btnClose.addEventListener("click", () => closeSidePanelModal(null));
+    if (btnCancel) btnCancel.addEventListener("click", () => closeSidePanelModal(null));
+    if (btnConfirm) btnConfirm.addEventListener("click", confirmSidePanelModal);
+
+    if (overlay) {
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) closeSidePanelModal(null);
+      });
+    }
+
+    if (inputEl) {
+      inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          confirmSidePanelModal();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          closeSidePanelModal(null);
+        }
+      });
+      inputEl.addEventListener("input", () => {
+        const err = document.getElementById("sp-modal-error");
+        if (err) err.style.display = "none";
+      });
+    }
+
+    window.addEventListener("keydown", (e) => {
+      const ov = document.getElementById("sp-modal-overlay");
+      if (ov && ov.style.display === "flex" && e.key === "Escape") {
+        e.preventDefault();
+        closeSidePanelModal(null);
+      }
+    });
+  }
+
+  function showSidePanelConfirm({ title = "Confirmar", message = "", confirmText = "Aceptar", cancelText = "Cancelar", isDanger = false }) {
+    setupSidePanelModalListeners();
+    return new Promise((resolve) => {
+      spModalResolver = resolve;
+      spModalValidator = null;
+
+      const overlay = document.getElementById("sp-modal-overlay");
+      const titleEl = document.getElementById("sp-modal-title");
+      const msgEl = document.getElementById("sp-modal-message");
+      const inputGroup = document.getElementById("sp-modal-input-group");
+      const errorEl = document.getElementById("sp-modal-error");
+      const btnCancel = document.getElementById("sp-modal-cancel");
+      const btnConfirm = document.getElementById("sp-modal-confirm");
+
+      if (titleEl) titleEl.textContent = title;
+      if (msgEl) msgEl.innerHTML = message;
+      if (inputGroup) inputGroup.style.display = "none";
+      if (errorEl) { errorEl.textContent = ""; errorEl.style.display = "none"; }
+
+      if (btnCancel) {
+        btnCancel.style.display = "inline-flex";
+        btnCancel.textContent = cancelText;
+      }
+      if (btnConfirm) {
+        btnConfirm.textContent = confirmText;
+        btnConfirm.className = isDanger ? "btn-primary btn-modal-danger-sp" : "btn-primary";
+      }
+
+      if (overlay) {
+        overlay.style.display = "flex";
+        setTimeout(() => btnConfirm && btnConfirm.focus(), 50);
+      }
+    });
+  }
+
+  function showSidePanelPrompt({ title = "Ingresar dato", message = "", placeholder = "", defaultValue = "", confirmText = "Aceptar", cancelText = "Cancelar", validator = null }) {
+    setupSidePanelModalListeners();
+    return new Promise((resolve) => {
+      spModalResolver = resolve;
+      spModalValidator = validator;
+
+      const overlay = document.getElementById("sp-modal-overlay");
+      const titleEl = document.getElementById("sp-modal-title");
+      const msgEl = document.getElementById("sp-modal-message");
+      const inputGroup = document.getElementById("sp-modal-input-group");
+      const inputEl = document.getElementById("sp-modal-input");
+      const errorEl = document.getElementById("sp-modal-error");
+      const btnCancel = document.getElementById("sp-modal-cancel");
+      const btnConfirm = document.getElementById("sp-modal-confirm");
+
+      if (titleEl) titleEl.textContent = title;
+      if (msgEl) msgEl.innerHTML = message;
+      if (inputGroup) inputGroup.style.display = "block";
+      if (inputEl) {
+        inputEl.placeholder = placeholder;
+        inputEl.value = defaultValue || "";
+      }
+      if (errorEl) { errorEl.textContent = ""; errorEl.style.display = "none"; }
+
+      if (btnCancel) {
+        btnCancel.style.display = "inline-flex";
+        btnCancel.textContent = cancelText;
+      }
+      if (btnConfirm) {
+        btnConfirm.textContent = confirmText;
+        btnConfirm.className = "btn-primary";
+      }
+
+      if (overlay) {
+        overlay.style.display = "flex";
+        setTimeout(() => {
+          if (inputEl) {
+            inputEl.focus();
+            inputEl.select();
+          }
+        }, 50);
+      }
+    });
+  }
+
     if (btnBackupManual) {
       btnBackupManual.addEventListener("click", () => {
         chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: false });
@@ -2091,13 +2261,15 @@
     }
 
     if (btnUpdateExt) {
-      btnUpdateExt.addEventListener("click", () => {
-        const verText = latestDiskVersion ? ` a la versión v${latestDiskVersion}` : "";
-        const confirmed = window.confirm(
-          `Nueva versión disponible de WAckup${verText}.\n\n` +
-          `Para aplicar la actualización y reactivar la sincronización, se recargará la extensión y la pestaña de WhatsApp Web automáticamente.\n\n` +
-          `¿Deseas continuar?`
-        );
+      btnUpdateExt.addEventListener("click", async () => {
+        const verText = latestDiskVersion ? ` a la versión <b>v${escapeHtml(latestDiskVersion)}</b>` : "";
+        const confirmed = await showSidePanelConfirm({
+          title: "Actualizar WAckup",
+          message: `Nueva versión disponible de WAckup${verText}.<br><br>` +
+            `Para aplicar la actualización y reactivar la sincronización, se recargará la extensión y la pestaña de WhatsApp Web automáticamente.<br><br>` +
+            `¿Deseas continuar?`,
+          confirmText: "Actualizar Ahora"
+        });
         if (!confirmed) return;
 
         showToast("Actualizando y recargando WhatsApp Web...");
@@ -2106,9 +2278,18 @@
     }
 
     if (btnAddTag) {
-      btnAddTag.addEventListener("click", () => {
-        const tag = prompt("Ingresa el nombre de la nueva etiqueta:");
-        if (tag) addTag(tag);
+      btnAddTag.addEventListener("click", async () => {
+        const tag = await showSidePanelPrompt({
+          title: "Nueva Etiqueta",
+          message: "Ingresa el nombre de la etiqueta para este contacto:",
+          placeholder: "ej: cliente, vip, proveedor...",
+          confirmText: "Agregar",
+          validator: (val) => {
+            if (!val || !val.trim()) return "El nombre de la etiqueta no puede estar vacío.";
+            return null;
+          }
+        });
+        if (tag && tag.trim()) addTag(tag.trim());
       });
     }
   }

@@ -343,8 +343,276 @@
       if (secSales) secSales.style.display = (currentProfile === 'full' || currentProfile === 'sales') ? 'flex' : 'none';
     }
 
+    // =========================================================================
+    // DIÁLOGOS Y MODALES UNIVERSALES ELEGANTES (CONFIRM, PROMPT, SELECT, ALERT)
+    // =========================================================================
+    let activeDialogResolver = null;
+    let activeDialogValidator = null;
+
+    function closeUniversalDialog(result = null) {
+      const modal = document.getElementById('universal-modal');
+      if (modal) modal.style.display = 'none';
+      if (activeDialogResolver) {
+        const resolve = activeDialogResolver;
+        activeDialogResolver = null;
+        activeDialogValidator = null;
+        resolve(result);
+      }
+    }
+    window.closeUniversalDialog = closeUniversalDialog;
+
+    function confirmUniversalDialog() {
+      const modal = document.getElementById('universal-modal');
+      if (!modal || modal.style.display === 'none') return;
+
+      const inputGroup = document.getElementById('univModalInputGroup');
+      const selectGroup = document.getElementById('univModalSelectGroup');
+      const errorEl = document.getElementById('univModalError');
+
+      let val = true;
+      if (inputGroup && inputGroup.style.display !== 'none') {
+        const inputEl = document.getElementById('univModalInput');
+        val = inputEl ? inputEl.value.trim() : '';
+        if (activeDialogValidator) {
+          const errMsg = activeDialogValidator(val);
+          if (errMsg) {
+            if (errorEl) {
+              errorEl.textContent = errMsg;
+              errorEl.style.display = 'block';
+            }
+            if (inputEl) inputEl.focus();
+            return;
+          }
+        }
+      } else if (selectGroup && selectGroup.style.display !== 'none') {
+        const selectEl = document.getElementById('univModalSelect');
+        val = selectEl ? selectEl.value : '';
+        if (activeDialogValidator) {
+          const errMsg = activeDialogValidator(val);
+          if (errMsg) {
+            if (errorEl) {
+              errorEl.textContent = errMsg;
+              errorEl.style.display = 'block';
+            }
+            if (selectEl) selectEl.focus();
+            return;
+          }
+        }
+      }
+
+      closeUniversalDialog(val);
+    }
+    window.confirmUniversalDialog = confirmUniversalDialog;
+
+    let universalDialogListenersAttached = false;
+    function setupUniversalDialogListeners() {
+      if (universalDialogListenersAttached) return;
+      universalDialogListenersAttached = true;
+
+      const input = document.getElementById('univModalInput');
+      if (input) {
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            confirmUniversalDialog();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeUniversalDialog(null);
+          }
+        });
+        input.addEventListener('input', () => {
+          const errorEl = document.getElementById('univModalError');
+          if (errorEl) errorEl.style.display = 'none';
+        });
+      }
+
+      window.addEventListener('keydown', (e) => {
+        const modal = document.getElementById('universal-modal');
+        if (modal && modal.style.display === 'flex' && e.key === 'Escape') {
+          e.preventDefault();
+          closeUniversalDialog(null);
+        }
+      });
+    }
+
+    function showConfirmDialog({ title = 'Confirmar', message = '', confirmText = 'Aceptar', cancelText = 'Cancelar', isDanger = false }) {
+      setupUniversalDialogListeners();
+      return new Promise((resolve) => {
+        activeDialogResolver = resolve;
+        activeDialogValidator = null;
+
+        const modal = document.getElementById('universal-modal');
+        const titleEl = document.getElementById('univModalTitle');
+        const msgEl = document.getElementById('univModalMessage');
+        const inputGroup = document.getElementById('univModalInputGroup');
+        const selectGroup = document.getElementById('univModalSelectGroup');
+        const errorEl = document.getElementById('univModalError');
+        const btnCancel = document.getElementById('univModalBtnCancel');
+        const btnConfirm = document.getElementById('univModalBtnConfirm');
+
+        if (titleEl) titleEl.textContent = title;
+        if (msgEl) msgEl.innerHTML = message;
+        if (inputGroup) inputGroup.style.display = 'none';
+        if (selectGroup) selectGroup.style.display = 'none';
+        if (errorEl) { errorEl.textContent = ''; errorEl.style.display = 'none'; }
+
+        if (btnCancel) {
+          btnCancel.style.display = 'inline-block';
+          btnCancel.textContent = cancelText;
+        }
+        if (btnConfirm) {
+          btnConfirm.textContent = confirmText;
+          btnConfirm.className = isDanger ? 'btn-modal-danger' : 'btn-modal-confirm';
+        }
+
+        if (modal) {
+          modal.style.display = 'flex';
+          setTimeout(() => btnConfirm && btnConfirm.focus(), 50);
+        }
+      });
+    }
+
+    function showPromptDialog({ title = 'Ingresar datos', message = '', placeholder = '', defaultValue = '', confirmText = 'Aceptar', cancelText = 'Cancelar', validator = null }) {
+      setupUniversalDialogListeners();
+      return new Promise((resolve) => {
+        activeDialogResolver = resolve;
+        activeDialogValidator = validator;
+
+        const modal = document.getElementById('universal-modal');
+        const titleEl = document.getElementById('univModalTitle');
+        const msgEl = document.getElementById('univModalMessage');
+        const inputGroup = document.getElementById('univModalInputGroup');
+        const inputEl = document.getElementById('univModalInput');
+        const selectGroup = document.getElementById('univModalSelectGroup');
+        const errorEl = document.getElementById('univModalError');
+        const btnCancel = document.getElementById('univModalBtnCancel');
+        const btnConfirm = document.getElementById('univModalBtnConfirm');
+
+        if (titleEl) titleEl.textContent = title;
+        if (msgEl) msgEl.innerHTML = message;
+        if (inputGroup) inputGroup.style.display = 'flex';
+        if (inputEl) {
+          inputEl.placeholder = placeholder;
+          inputEl.value = defaultValue || '';
+        }
+        if (selectGroup) selectGroup.style.display = 'none';
+        if (errorEl) { errorEl.textContent = ''; errorEl.style.display = 'none'; }
+
+        if (btnCancel) {
+          btnCancel.style.display = 'inline-block';
+          btnCancel.textContent = cancelText;
+        }
+        if (btnConfirm) {
+          btnConfirm.textContent = confirmText;
+          btnConfirm.className = 'btn-modal-confirm';
+        }
+
+        if (modal) {
+          modal.style.display = 'flex';
+          setTimeout(() => {
+            if (inputEl) {
+              inputEl.focus();
+              inputEl.select();
+            }
+          }, 50);
+        }
+      });
+    }
+
+    function showSelectDialog({ title = 'Seleccionar', message = '', options = [], defaultValue = '', confirmText = 'Aceptar', cancelText = 'Cancelar', validator = null }) {
+      setupUniversalDialogListeners();
+      return new Promise((resolve) => {
+        activeDialogResolver = resolve;
+        activeDialogValidator = validator;
+
+        const modal = document.getElementById('universal-modal');
+        const titleEl = document.getElementById('univModalTitle');
+        const msgEl = document.getElementById('univModalMessage');
+        const inputGroup = document.getElementById('univModalInputGroup');
+        const selectGroup = document.getElementById('univModalSelectGroup');
+        const selectEl = document.getElementById('univModalSelect');
+        const errorEl = document.getElementById('univModalError');
+        const btnCancel = document.getElementById('univModalBtnCancel');
+        const btnConfirm = document.getElementById('univModalBtnConfirm');
+
+        if (titleEl) titleEl.textContent = title;
+        if (msgEl) msgEl.innerHTML = message;
+        if (inputGroup) inputGroup.style.display = 'none';
+        if (selectGroup) selectGroup.style.display = 'flex';
+
+        if (selectEl) {
+          selectEl.innerHTML = '';
+          options.forEach(opt => {
+            const val = typeof opt === 'object' ? opt.value : opt;
+            const label = typeof opt === 'object' ? opt.label : opt;
+            const optEl = document.createElement('option');
+            optEl.value = val;
+            optEl.textContent = label;
+            if (val === defaultValue) optEl.selected = true;
+            selectEl.appendChild(optEl);
+          });
+        }
+
+        if (errorEl) { errorEl.textContent = ''; errorEl.style.display = 'none'; }
+
+        if (btnCancel) {
+          btnCancel.style.display = 'inline-block';
+          btnCancel.textContent = cancelText;
+        }
+        if (btnConfirm) {
+          btnConfirm.textContent = confirmText;
+          btnConfirm.className = 'btn-modal-confirm';
+        }
+
+        if (modal) {
+          modal.style.display = 'flex';
+          setTimeout(() => selectEl && selectEl.focus(), 50);
+        }
+      });
+    }
+
+    function showAlertDialog({ title = 'Aviso', message = '', confirmText = 'Entendido' }) {
+      setupUniversalDialogListeners();
+      return new Promise((resolve) => {
+        activeDialogResolver = resolve;
+        activeDialogValidator = null;
+
+        const modal = document.getElementById('universal-modal');
+        const titleEl = document.getElementById('univModalTitle');
+        const msgEl = document.getElementById('univModalMessage');
+        const inputGroup = document.getElementById('univModalInputGroup');
+        const selectGroup = document.getElementById('univModalSelectGroup');
+        const errorEl = document.getElementById('univModalError');
+        const btnCancel = document.getElementById('univModalBtnCancel');
+        const btnConfirm = document.getElementById('univModalBtnConfirm');
+
+        if (titleEl) titleEl.textContent = title;
+        if (msgEl) msgEl.innerHTML = message;
+        if (inputGroup) inputGroup.style.display = 'none';
+        if (selectGroup) selectGroup.style.display = 'none';
+        if (errorEl) { errorEl.textContent = ''; errorEl.style.display = 'none'; }
+
+        if (btnCancel) btnCancel.style.display = 'none';
+        if (btnConfirm) {
+          btnConfirm.textContent = confirmText;
+          btnConfirm.className = 'btn-modal-confirm';
+        }
+
+        if (modal) {
+          modal.style.display = 'flex';
+          setTimeout(() => btnConfirm && btnConfirm.focus(), 50);
+        }
+      });
+    }
+
     async function promptRestartSystem() {
-      if (!confirm("¿Deseas reiniciar el visor de WAckup?")) return;
+      const ok = await showConfirmDialog({
+        title: 'Reiniciar Visor WAckup',
+        message: '⚠️ ¿Estás seguro de que deseas reiniciar el visor de WAckup?<br><br><span style="font-size:12px; color:var(--text-secondary);">La conexión pasiva y las pestañas se reconectarán automáticamente en unos segundos.</span>',
+        confirmText: 'Reiniciar',
+        isDanger: true
+      });
+      if (!ok) return;
       showToast("⚡ Reiniciando visor...");
       try {
         await fetch('/api/system/restart', { method: 'POST' });
@@ -2708,38 +2976,111 @@
       }).join('');
     }
 
-    async function addCopilotTagPrompt() {
-      if (!selectedChatId) return;
-      const tag = prompt("Ingresa el nombre de la nueva etiqueta:");
+    async function openCreateTagDialog() {
+      const isChatContext = Boolean(selectedChatId);
+      const promptTitle = isChatContext ? 'Nueva Etiqueta de Contacto' : 'Nueva Etiqueta';
+      const promptMsg = isChatContext 
+        ? 'Ingresa el nombre de la etiqueta para categorizar a este contacto:'
+        : 'Ingresa el nombre de la nueva etiqueta para clasificar conversaciones:';
+
+      const tag = await showPromptDialog({
+        title: promptTitle,
+        message: promptMsg,
+        placeholder: 'ej: cliente, vip, proveedor...',
+        confirmText: 'Crear Etiqueta',
+        validator: (val) => {
+          if (!val || !val.trim()) return 'El nombre de la etiqueta no puede estar vacío.';
+          return null;
+        }
+      });
       if (!tag || !tag.trim()) return;
+      const cleanTag = tag.trim().toLowerCase();
+
+      try {
+        const payload = {
+          tag: cleanTag,
+          chat_id: selectedChatId || '__catalog__',
+          action: 'add'
+        };
+
+        const res = await fetch(withAccount('/api/copilot/tags'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          if (selectedChatId && data.tags) {
+            renderCopilotTags(data.tags);
+            const newTags = (data.tags || []).map(t => (t && typeof t === 'object') ? t.tag : t);
+            if (allChats) {
+              const chat = allChats.find(c => c.chat_id === selectedChatId || (c.canonical_id && c.canonical_id === selectedChatId));
+              if (chat) {
+                chat.tags = newTags;
+                renderChats(allChats);
+              }
+            }
+          }
+          await loadAllWorkspaceTags();
+          showToast(`✓ Etiqueta "${cleanTag}" guardada exitosamente`);
+        } else {
+          showToast(data.error || 'Error al guardar la etiqueta');
+        }
+      } catch (e) {
+        console.error("Error al añadir etiqueta:", e);
+        showToast('Error de conexión al guardar la etiqueta');
+      }
+    }
+    window.openCreateTagDialog = openCreateTagDialog;
+
+    async function addCopilotTagPrompt() {
+      return openCreateTagDialog();
+    }
+    window.addCopilotTagPrompt = addCopilotTagPrompt;
+
+    async function deleteWorkspaceTag(tag) {
+      if (!tag) return;
+      const ok = await showConfirmDialog({
+        title: 'Eliminar Etiqueta',
+        message: `¿Estás seguro de que deseas eliminar permanentemente la etiqueta <b>"${escapeHtml(tag)}"</b>?<br><br><span style="font-size:12px; color:var(--text-secondary);">Se desvinculará de todos los contactos que la tengan asignada.</span>`,
+        confirmText: 'Eliminar',
+        isDanger: true
+      });
+      if (!ok) return;
 
       try {
         const res = await fetch(withAccount('/api/copilot/tags'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            chat_id: selectedChatId,
-            tag: tag.trim(),
-            action: 'add'
+            tag: tag,
+            action: 'remove',
+            delete_everywhere: true
           })
         });
         const data = await res.json();
         if (data && data.ok) {
-          renderCopilotTags(data.tags);
-          const newTags = (data.tags || []).map(t => (t && typeof t === 'object') ? t.tag : t);
+          showToast(`✓ Etiqueta "${tag}" eliminada`);
+          await loadAllWorkspaceTags();
           if (allChats) {
-            const chat = allChats.find(c => c.chat_id === selectedChatId || (c.canonical_id && c.canonical_id === selectedChatId));
-            if (chat) {
-              chat.tags = newTags;
-              renderChats(allChats);
-            }
+            allChats.forEach(c => {
+              if (c.tags && c.tags.includes(tag)) {
+                c.tags = c.tags.filter(t => t !== tag);
+              }
+            });
+            renderChats(allChats);
           }
-          showToast(`✅ Etiqueta "${tag.trim()}" agregada`);
+          if (selectedChatId) {
+            loadChatCopilotContext(selectedChatId);
+          }
+        } else {
+          showToast(data.error || 'Error al eliminar etiqueta');
         }
       } catch (e) {
-        console.error("Error al añadir etiqueta:", e);
+        showToast('Error de conexión al eliminar etiqueta');
       }
     }
+    window.deleteWorkspaceTag = deleteWorkspaceTag;
 
     async function removeCopilotTag(tag) {
       if (!selectedChatId || !tag) return;
@@ -2910,6 +3251,7 @@
             <div class="tag-badge-pill" onclick="filterByTag('${escapeHtml(t.tag)}')" title="Filtrar conversaciones con la etiqueta '${escapeHtml(t.tag)}'">
               <span>🏷️ ${escapeHtml(t.tag)}</span>
               <span class="tag-badge-count" title="${t.count} chat(s)">${t.count}</span>
+              <span class="tag-badge-delete" onclick="event.stopPropagation(); deleteWorkspaceTag('${escapeHtml(t.tag)}')" title="Eliminar etiqueta definitivamente" style="margin-left: 4px; opacity: 0.6; cursor: pointer; font-weight: bold; font-size: 13px;">✕</span>
             </div>
           `).join('');
         }
@@ -2996,7 +3338,7 @@
       const body = document.getElementById('tplEditBody').value.trim();
 
       if (!shortcut || !title || !body) {
-        alert('Por favor completa todos los campos.');
+        showToast('⚠️ Por favor completa todos los campos requeridos.');
         return;
       }
 
@@ -3020,15 +3362,22 @@
           showToast('✓ Plantilla guardada exitosamente');
           await loadTemplatesWorkspace();
         } else {
-          alert('Error al guardar plantilla: ' + (data.error || 'Respuesta inválida'));
+          showAlertDialog({ title: 'Error al Guardar', message: data.error || 'Respuesta inválida del servidor.' });
         }
       } catch (e) {
-        alert('Error al guardar plantilla: ' + e);
+        showAlertDialog({ title: 'Error de Red', message: 'No se pudo guardar la plantilla: ' + e });
       }
     }
 
     async function deleteTemplate(id) {
-      if (!confirm('¿Estás seguro de que deseas eliminar esta plantilla rápida?')) return;
+      const ok = await showConfirmDialog({
+        title: 'Eliminar Respuesta Rápida',
+        message: '¿Estás seguro de que deseas eliminar permanentemente esta plantilla rápida?',
+        confirmText: 'Eliminar',
+        isDanger: true
+      });
+      if (!ok) return;
+
       try {
         const res = await fetch(withAccount('/api/support/templates/delete'), {
           method: 'POST',
@@ -3040,10 +3389,10 @@
           showToast('✓ Plantilla eliminada');
           await loadTemplatesWorkspace();
         } else {
-          alert('Error al eliminar plantilla: ' + (data.error || ''));
+          showAlertDialog({ title: 'Error', message: 'Error al eliminar plantilla: ' + (data.error || '') });
         }
       } catch (e) {
-        alert('Error al eliminar plantilla: ' + e);
+        showAlertDialog({ title: 'Error', message: 'Error al eliminar plantilla: ' + e });
       }
     }
 
@@ -3215,7 +3564,13 @@
     }
 
     async function deleteCopilotNoteLog(noteId) {
-      if (!confirm('¿Eliminar esta nota de la bitácora?')) return;
+      const ok = await showConfirmDialog({
+        title: 'Eliminar Nota',
+        message: '¿Estás seguro de que deseas eliminar este registro de la bitácora del equipo?',
+        confirmText: 'Eliminar',
+        isDanger: true
+      });
+      if (!ok) return;
       try {
         const res = await fetch('/api/copilot/notes/log/delete', {
           method: 'POST',
@@ -3701,14 +4056,22 @@
     }
 
     async function openAddOperatorDialog() {
-      const name = prompt('Nombre o alias del nuevo operador (ej. Carolina):');
+      const name = await showPromptDialog({
+        title: 'Nuevo Operador',
+        message: 'Ingresa el nombre o alias del nuevo miembro del equipo:',
+        placeholder: 'ej. Carolina',
+        confirmText: 'Agregar Operador',
+        validator: (val) => {
+          if (!val || !val.trim()) return 'El nombre del operador no puede estar vacío.';
+          const clean = val.trim();
+          if (knownOperatorsList.some(o => o.toLowerCase() === clean.toLowerCase())) {
+            return `Ya existe un operador registrado con el nombre "${clean}".`;
+          }
+          return null;
+        }
+      });
       if (!name || !name.trim()) return;
       const cleanName = name.trim();
-
-      if (knownOperatorsList.some(o => o.toLowerCase() === cleanName.toLowerCase())) {
-        alert('Ya existe un operador registrado con el nombre "' + cleanName + '".');
-        return;
-      }
 
       try {
         const res = await authFetch('/api/system/network', {
@@ -3734,14 +4097,22 @@
     }
 
     async function openEditOperatorDialog(oldName) {
-      const newName = prompt(`Modificar nombre de "${oldName}" a:`, oldName);
+      const newName = await showPromptDialog({
+        title: 'Modificar Operador',
+        message: `Modificar nombre de <b>"${escapeHtml(oldName)}"</b>:`,
+        defaultValue: oldName,
+        confirmText: 'Guardar Cambios',
+        validator: (val) => {
+          if (!val || !val.trim()) return 'El nombre del operador no puede estar vacío.';
+          const clean = val.trim();
+          if (clean.toLowerCase() !== oldName.toLowerCase() && knownOperatorsList.some(o => o.toLowerCase() === clean.toLowerCase())) {
+            return `Ya existe otro operador registrado con el nombre "${clean}".`;
+          }
+          return null;
+        }
+      });
       if (!newName || !newName.trim() || newName.trim() === oldName) return;
       const cleanNewName = newName.trim();
-
-      if (knownOperatorsList.some(o => o.toLowerCase() === cleanNewName.toLowerCase() && o.toLowerCase() !== oldName.toLowerCase())) {
-        alert('Ya existe otro operador registrado con el nombre "' + cleanNewName + '".');
-        return;
-      }
 
       try {
         const res = await authFetch('/api/system/network', {
@@ -3773,9 +4144,13 @@
     }
 
     async function deleteOperator(opName) {
-      if (!confirm(`¿Estás seguro de que deseas eliminar al operador "${opName}" del equipo?\nYa no aparecerá en el Copiloto ni se podrá seleccionar al ingresar por red.`)) {
-        return;
-      }
+      const ok = await showConfirmDialog({
+        title: 'Eliminar Operador',
+        message: `¿Estás seguro de que deseas eliminar al operador <b>"${escapeHtml(opName)}"</b> del equipo?<br><br><span style="font-size:12px; color:var(--text-secondary);">Ya no aparecerá en el Copiloto ni se podrá seleccionar al ingresar por red.</span>`,
+        confirmText: 'Eliminar Operador',
+        isDanger: true
+      });
+      if (!ok) return;
 
       try {
         const res = await authFetch('/api/system/network', {
@@ -3805,9 +4180,14 @@
 
     async function kickOperatorAdmin(opName) {
       if (!opName) return;
-      if (!confirm(`¿Estás seguro de que deseas forzar la desconexión y liberar la sesión activa de "${opName}"?`)) {
-        return;
-      }
+      const ok = await showConfirmDialog({
+        title: 'Liberar Sesión',
+        message: `¿Estás seguro de que deseas forzar la desconexión y liberar la sesión activa de <b>"${escapeHtml(opName)}"</b>?`,
+        confirmText: 'Liberar Sesión',
+        isDanger: true
+      });
+      if (!ok) return;
+
       try {
         const res = await authFetch('/api/presence/kick', {
           method: 'POST',
@@ -3867,10 +4247,15 @@
       const nextMode = isCurrentlyLan ? 'local' : 'lan';
 
       const confirmMsg = nextMode === 'lan'
-        ? '¿Deseas activar el Modo Red Local (0.0.0.0)?\nCualquier compañero en la oficina podrá acceder al visor y al copiloto ingresando el PIN.'
-        : '¿Deseas volver a Modo Solo PC (127.0.0.1)?\nEl visor solo responderá a peticiones locales de esta computadora.';
+        ? '¿Deseas activar el <b>Modo Red Local (0.0.0.0)</b>?<br><br><span style="font-size:12px; color:var(--text-secondary);">Cualquier compañero en la oficina conectada a la misma red podrá acceder al visor y al copiloto ingresando el PIN.</span>'
+        : '¿Deseas volver al <b>Modo Solo PC (127.0.0.1)</b>?<br><br><span style="font-size:12px; color:var(--text-secondary);">El visor solo responderá a peticiones locales de esta computadora.</span>';
 
-      if (!confirm(confirmMsg)) return;
+      const ok = await showConfirmDialog({
+        title: nextMode === 'lan' ? 'Activar Modo Red Local' : 'Volver a Modo Solo PC',
+        message: confirmMsg,
+        confirmText: nextMode === 'lan' ? 'Activar Modo LAN' : 'Volver a Solo PC'
+      });
+      if (!ok) return;
 
       try {
         const res = await fetch('/api/system/network', {
@@ -3882,7 +4267,12 @@
         if (data && data.ok) {
           showToast('✓ Modo de red actualizado a ' + (nextMode === 'lan' ? 'Red Local' : 'Solo PC'));
           await loadNetworkSettings();
-          if (confirm('El modo de red fue actualizado.\n¿Deseas reiniciar el servicio ahora para aplicar la escucha en ' + (nextMode === 'lan' ? '0.0.0.0 (Red Local)' : '127.0.0.1 (Solo esta PC)') + '?')) {
+          const restartOk = await showConfirmDialog({
+            title: 'Reiniciar Servicio',
+            message: `El modo de red fue actualizado.<br><br>¿Deseas reiniciar el servicio ahora para aplicar la escucha en <b>${nextMode === 'lan' ? '0.0.0.0 (Red Local)' : '127.0.0.1 (Solo esta PC)'}</b>?`,
+            confirmText: 'Reiniciar Servicio'
+          });
+          if (restartOk) {
             try { await fetch('/api/system/restart', { method: 'POST' }); } catch (e) {}
             showToast('⚡ Reiniciando servicio...');
           }
@@ -3895,13 +4285,21 @@
     async function promptEditPin() {
       const pinEl = document.getElementById('netPinDisplay');
       const currentPin = pinEl ? pinEl.textContent.trim() : '';
-      const newPin = prompt('Nuevo PIN de Oficina (4 a 8 dígitos numéricos):', currentPin !== '------' ? currentPin : '123456');
-      if (!newPin) return;
+      const initialVal = (currentPin && currentPin !== '------') ? currentPin : '123456';
 
-      if (!/^\d{4,8}$/.test(newPin.trim())) {
-        alert('El PIN debe contener únicamente entre 4 y 8 dígitos numéricos.');
-        return;
-      }
+      const newPin = await showPromptDialog({
+        title: 'PIN de Oficina',
+        message: 'Ingresa el nuevo PIN de Oficina (entre 4 y 8 dígitos numéricos):',
+        defaultValue: initialVal,
+        confirmText: 'Guardar PIN',
+        validator: (val) => {
+          if (!val || !/^\d{4,8}$/.test(val.trim())) {
+            return 'El PIN debe contener únicamente entre 4 y 8 dígitos numéricos.';
+          }
+          return null;
+        }
+      });
+      if (!newPin) return;
 
       try {
         const res = await fetch('/api/system/network', {
@@ -3919,30 +4317,28 @@
       }
     }
 
-    function promptSetMyOperator() {
+    async function promptSetMyOperator() {
       if (!knownOperatorsList || knownOperatorsList.length === 0) {
-        alert('No hay operadores dados de alta aún.\nPor favor agrega primero operadores en la sección "Operadores y Equipo de Trabajo".');
+        await showAlertDialog({
+          title: 'Operadores no configurados',
+          message: 'No hay operadores dados de alta aún.<br><br>Por favor agrega primero operadores en la sección <b>Operadores y Equipo de Trabajo</b>.'
+        });
         const card = document.getElementById('cardTeamOperators');
         if (card) card.scrollIntoView({ behavior: 'smooth' });
         return;
       }
 
-      const listStr = knownOperatorsList.map((op, idx) => `${idx + 1}. ${op}`).join('\n');
-      const ans = prompt(`Selecciona el operador de esta PC:\n\n${listStr}\n\nIngresa el número o nombre:`, myOperatorName);
-      if (!ans || !ans.trim()) return;
-
-      const num = parseInt(ans.trim(), 10);
-      let selected = null;
-      if (!isNaN(num) && num >= 1 && num <= knownOperatorsList.length) {
-        selected = knownOperatorsList[num - 1];
-      } else {
-        selected = knownOperatorsList.find(o => o.toLowerCase() === ans.trim().toLowerCase());
-      }
+      const options = knownOperatorsList.map(op => ({ value: op, label: op }));
+      const selected = await showSelectDialog({
+        title: 'Operador Activo en esta PC',
+        message: 'Selecciona qué operador está utilizando esta estación de trabajo:',
+        options: options,
+        defaultValue: myOperatorName,
+        confirmText: 'Establecer Operador'
+      });
 
       if (selected) {
         setThisPcOperator(selected);
-      } else {
-        alert('Operador no encontrado en la lista de operadores registrados.');
       }
     }
 

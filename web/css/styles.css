@@ -769,7 +769,10 @@
     .stat-box .stat-lbl { font-size: 12px; color: var(--text-secondary); }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
     .btn-modal-cancel { border: 1px solid var(--border-strong); background: var(--bg-sidebar); color: var(--text-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
-    .btn-modal-confirm { border: none; background: var(--accent); color: #fff; padding: 6px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; }
+    .btn-modal-confirm { border: none; background: var(--accent); color: #fff; padding: 6px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; transition: opacity 0.15s; }
+    .btn-modal-confirm:hover { opacity: 0.9; }
+    .btn-modal-danger { border: none; background: #ef4444; color: #fff; padding: 6px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; transition: background 0.15s; }
+    .btn-modal-danger:hover { background: #dc2626; }
 
     /* Estado vacío */
     #empty-state { 

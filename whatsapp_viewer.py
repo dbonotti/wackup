@@ -2612,21 +2612,24 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
-                chat_id = payload.get("chat_id")
+                chat_id = payload.get("chat_id") or "__catalog__"
                 tag = (payload.get("tag") or "").strip()
                 category = payload.get("category", "general")
                 action = payload.get("action", "add")
 
-                if not chat_id or not tag:
-                    self.send_json(400, {"ok": False, "error": "Faltan parámetros chat_id o tag"})
+                if not tag:
+                    self.send_json(400, {"ok": False, "error": "Falta parámetro tag"})
                     return
 
                 if action == "remove":
-                    ok = db_manager.remove_chat_tag(chat_id, tag, db_path=db_path)
+                    if payload.get("delete_everywhere") or chat_id == "__catalog__":
+                        ok = db_manager.delete_tag_everywhere(tag, db_path=db_path)
+                    else:
+                        ok = db_manager.remove_chat_tag(chat_id, tag, db_path=db_path)
                 else:
                     ok = db_manager.add_chat_tag(chat_id, tag, category=category, db_path=db_path)
 
-                tags = db_manager.get_chat_tags(chat_id, db_path=db_path)
+                tags = db_manager.get_chat_tags(chat_id, db_path=db_path) if chat_id != "__catalog__" else []
                 sse_hub.get_sse_hub().broadcast("crm_update", {
                     "type": "tags_updated",
                     "chat_id": chat_id,

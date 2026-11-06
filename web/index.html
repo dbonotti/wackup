@@ -485,7 +485,7 @@
                 <h3 class="card-title">🏷️ Etiquetas de Contacto en Uso</h3>
                 <p class="card-subtitle">Etiquetas asociadas a clientes en el Copiloto. Úsalas para segmentación y filtros rápidos.</p>
               </div>
-              <button class="btn-card-action" onclick="addCopilotTagPrompt()">+ Crear Etiqueta</button>
+              <button class="btn-card-action" onclick="openCreateTagDialog()">+ Crear Etiqueta</button>
             </div>
             <div id="allTagsContainer" class="tags-directory-container">
               <span style="color: var(--text-muted); font-size: 13px;">Cargando directorio de etiquetas...</span>
@@ -742,6 +742,33 @@
           <button type="submit" class="btn-modal-confirm">Guardar Plantilla</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Modal Diálogo Universal Elegante (Alert, Confirm, Prompt, Select) -->
+  <div id="universal-modal" class="modal-overlay" onclick="if(event.target===this) window.closeUniversalDialog(false)" style="display: none; z-index: 10050;">
+    <div class="modal-card" style="max-width: 440px; box-shadow: 0 12px 36px rgba(0,0,0,0.35);">
+      <div class="modal-header">
+        <h3 id="univModalTitle">Confirmación</h3>
+        <button type="button" class="modal-close-btn" onclick="window.closeUniversalDialog(false)">✕</button>
+      </div>
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+        <p id="univModalMessage" style="font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; margin: 0;"></p>
+        
+        <div id="univModalInputGroup" style="display: none; flex-direction: column; gap: 4px;">
+          <input type="text" id="univModalInput" class="search-box" style="width: 100%; box-sizing: border-box; padding: 8px 12px;" autocomplete="off">
+        </div>
+
+        <div id="univModalSelectGroup" style="display: none; flex-direction: column; gap: 4px;">
+          <select id="univModalSelect" class="search-box" style="width: 100%; box-sizing: border-box; padding: 8px 12px;"></select>
+        </div>
+
+        <div id="univModalError" style="display: none; color: #ef4444; font-size: 12px; font-weight: 500;"></div>
+      </div>
+      <div class="modal-actions" style="margin-top: 14px;">
+        <button type="button" id="univModalBtnCancel" class="btn-modal-cancel" onclick="window.closeUniversalDialog(false)">Cancelar</button>
+        <button type="button" id="univModalBtnConfirm" class="btn-modal-confirm" onclick="window.confirmUniversalDialog()">Aceptar</button>
+      </div>
     </div>
   </div>
 
