@@ -39,20 +39,13 @@ if (chrome.sidePanel && typeof chrome.sidePanel.setOptions === "function") {
     .catch((err) => console.warn("[WAckup SW] Error al deshabilitar sidePanel global:", err));
 }
 
-function isWhatsAppUrl(rawUrl) {
-  if (!rawUrl || typeof rawUrl !== "string") return false;
+// Configurar el panel lateral exclusivamente cuando la pestaña navega a WhatsApp Web
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  const currentUrl = tab?.url || changeInfo.url;
+  if (!currentUrl || !chrome.sidePanel || typeof chrome.sidePanel.setOptions !== "function") return;
   try {
-    const parsed = new URL(rawUrl);
-    return parsed.hostname === "web.whatsapp.com";
-  } catch (e) {
-    return false;
-  }
-}
-
-async function configureSidePanelForTab(tabId, url) {
-  if (!tabId || !chrome.sidePanel || typeof chrome.sidePanel.setOptions !== "function") return;
-  try {
-    if (isWhatsAppUrl(url)) {
+    const parsed = new URL(currentUrl);
+    if (parsed.hostname === "web.whatsapp.com") {
       await chrome.sidePanel.setOptions({
         tabId: tabId,
         path: "sidepanel/sidepanel.html",
@@ -64,34 +57,21 @@ async function configureSidePanelForTab(tabId, url) {
         enabled: false
       });
     }
-  } catch (err) {
-    // Pestañas del sistema (chrome://), descargas o pestañas cerradas antes de procesar
-  }
-}
-
-// Escuchar cambios de URL o navegación en pestañas
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url || changeInfo.status === "loading" || changeInfo.status === "complete") {
-    configureSidePanelForTab(tabId, tab?.url || changeInfo.url);
-  }
+  } catch (e) {}
 });
 
-// Escuchar cambio/activación de pestaña
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab && tab.url) {
-      await configureSidePanelForTab(activeInfo.tabId, tab.url);
-    }
-  } catch (err) {}
-});
-
-// Inicializar todas las pestañas existentes al iniciar el Service Worker
-chrome.tabs.query({}, (tabs) => {
-  if (Array.isArray(tabs)) {
-    tabs.forEach((tab) => {
+// Inicializar exclusivamente las pestañas abiertas de WhatsApp Web al arrancar el Service Worker
+chrome.tabs.query({ url: ["https://web.whatsapp.com/*", "http://web.whatsapp.com/*"] }, (tabs) => {
+  if (Array.isArray(tabs) && chrome.sidePanel && typeof chrome.sidePanel.setOptions === "function") {
+    tabs.forEach(async (tab) => {
       if (tab.id) {
-        configureSidePanelForTab(tab.id, tab.url);
+        try {
+          await chrome.sidePanel.setOptions({
+            tabId: tab.id,
+            path: "sidepanel/sidepanel.html",
+            enabled: true
+          });
+        } catch (e) {}
       }
     });
   }
@@ -317,10 +297,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "focus_viewer_tab" || request.action === "open_viewer") {
     const base = (request.baseUrl || config.serverUrl || "http://127.0.0.1:8080").replace(/\/+$/, "");
     const targetUrl = request.url || `${base}/index.html`;
+    const searchPatterns = [`${base}/*`];
+    if (base.includes("127.0.0.1") || base.includes("localhost")) {
+      searchPatterns.push("http://127.0.0.1/*", "http://localhost/*");
+    }
 
-    chrome.tabs.query({}, (tabs) => {
+    chrome.tabs.query({ url: searchPatterns }, (tabs) => {
       const list = Array.isArray(tabs) ? tabs : [];
-      const match = list.find(t => t.url && t.url.startsWith(base));
+      const match = list.find(t => t.url && t.url.startsWith(base)) || list[0];
       if (match && match.id) {
         const updateInfo = { active: true };
         if (request.url && match.url !== request.url) {
