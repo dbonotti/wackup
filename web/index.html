@@ -83,6 +83,13 @@
             </div>
           </div>
 
+          <!-- Filtros Rápidos de Conversaciones -->
+          <div id="chatQuickFilterBar" class="chat-quick-filter-bar">
+            <button type="button" class="chat-filter-pill active" id="pillFilter-all" onclick="setChatQuickFilter('all')">Todos</button>
+            <button type="button" class="chat-filter-pill" id="pillFilter-unanswered" onclick="setChatQuickFilter('unanswered')">🔴 Sin responder <span id="countUnanswered" class="filter-count">0</span></button>
+            <button type="button" class="chat-filter-pill" id="pillFilter-pending" onclick="setChatQuickFilter('pending')">🟡 En espera <span id="countPending" class="filter-count">0</span></button>
+          </div>
+
           <!-- Lista de Chats (cuando no hay búsqueda) -->
           <ul id="chat-list"></ul>
 
@@ -370,6 +377,12 @@
               <div class="kanban-stats-bar" id="kanbanStatsBar">
                 <span>Cargando tablero...</span>
               </div>
+              <div class="kanban-historical-toggle" id="kanbanHistoricalToggle" style="display: none; align-items: center; margin-left: 12px;">
+                <label style="font-size: 11.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;">
+                  <input type="checkbox" id="toggleHistoricalKanban" onchange="toggleHistoricalResolved(this.checked)">
+                  Ver históricos (>7d)
+                </label>
+              </div>
             </div>
             <div class="kanban-columns" id="kanbanColumnsContainer">
               <div style="padding: 30px; text-align: center; color: var(--text-muted);">Cargando columnas...</div>
@@ -392,6 +405,16 @@
 
           <!-- 3. Pestaña Métricas SLA & Heatmap -->
           <div id="crmSection-sla" class="crm-section" style="display: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
+              <div style="font-size: 15px; font-weight: 700; color: var(--text-primary);">⏱️ Rendimiento de Soporte y SLA</div>
+              <div class="metrics-period-selector" id="metricsPeriodSelector">
+                <button type="button" class="btn-period" id="btnPeriod-1" onclick="changeSupportMetricsPeriod('1')">Hoy (24h)</button>
+                <button type="button" class="btn-period" id="btnPeriod-7" onclick="changeSupportMetricsPeriod('7')">7 días</button>
+                <button type="button" class="btn-period active" id="btnPeriod-30" onclick="changeSupportMetricsPeriod('30')">30 días</button>
+                <button type="button" class="btn-period" id="btnPeriod-all" onclick="changeSupportMetricsPeriod('all')">Histórico</button>
+              </div>
+            </div>
+
             <div class="metrics-grid-kpi">
               <div class="kpi-card">
                 <div class="kpi-num" id="kpiSlaText">--</div>
@@ -404,6 +427,16 @@
               <div class="kpi-card">
                 <div class="kpi-num" id="kpiTicketsResolved" style="color: #10b981;">0</div>
                 <div class="kpi-lbl">Tickets Resueltos</div>
+              </div>
+            </div>
+
+            <!-- Tabla de Rendimiento por Operador -->
+            <div class="heatmap-card" id="metricsOperatorCard" style="margin-bottom: 18px;">
+              <div class="heatmap-header">
+                <div class="heatmap-title">👥 Rendimiento por Operador (Período Seleccionado)</div>
+              </div>
+              <div id="supportOperatorsTableContainer" style="padding: 12px 16px; overflow-x: auto;">
+                <div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 10px;">Cargando rendimiento de operadores...</div>
               </div>
             </div>
 

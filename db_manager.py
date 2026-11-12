@@ -2947,14 +2947,30 @@ def get_demand_thermometer(days=60, limit=25, db_path=None):
         "top_terms": top_items
     }
 
-def get_support_metrics(db_path=None):
+def get_support_metrics(days="all", db_path=None):
     """
     Panel de Métricas SLA & Horarios Pico:
     Calcula distribución de mensajes entrantes por día de la semana y hora,
-    así como estado consolidado de tickets de atención.
+    rendimiento por operador (tickets abiertos, en espera, resueltos) y SLA global
+    sin descartar silenciosamente tiempos de respuesta > 12h.
+    Soporta filtro days=1|7|30|'all'.
     """
     conn = get_connection(db_path)
     cur = conn.cursor()
+    now_ts = int(time.time())
+
+    # Normalizar días
+    if str(days).lower() == "all" or not days:
+        min_ts = 0
+        days_label = "all"
+    else:
+        try:
+            d_int = int(days)
+            min_ts = max(0, now_ts - (d_int * 86400))
+            days_label = str(d_int)
+        except Exception:
+            min_ts = 0
+            days_label = "all"
 
     # 1. Conteo de tickets
     cur.execute("""
@@ -2965,8 +2981,8 @@ def get_support_metrics(db_path=None):
     """)
     ticket_counts = {r["ticket_status"]: r["cnt"] for r in cur.fetchall()}
 
-    # 2. SLA global promedio
-    cur.execute("""
+    # 2. SLA global promedio (sin descartar tiempos de respuesta > 12h)
+    sla_query = """
         WITH ordered AS (
             SELECT 
                 chat_id,
@@ -2977,12 +2993,14 @@ def get_support_metrics(db_path=None):
             FROM mensajes
             WHERE chat_id NOT LIKE '%@g.us'
               AND chat_id NOT LIKE '%@newsletter'
+              AND (? = 0 OR timestamp >= ?)
             ORDER BY timestamp ASC
         )
         SELECT AVG(timestamp - prev_ts) as avg_response_sec
         FROM ordered
-        WHERE es_mio = 1 AND prev_mio = 0 AND (timestamp - prev_ts) BETWEEN 5 AND 86400
-    """)
+        WHERE es_mio = 1 AND prev_mio = 0 AND (timestamp - prev_ts) >= 5
+    """
+    cur.execute(sla_query, (min_ts, min_ts))
     sla_row = cur.fetchone()
     avg_sec = float(sla_row[0]) if (sla_row and sla_row[0]) else 0
     if avg_sec < 60:
@@ -2992,7 +3010,30 @@ def get_support_metrics(db_path=None):
     else:
         sla_formatted = f"~{round(avg_sec / 3600, 1)} h"
 
-    # 3. Mapa de calor 7 días x 24 horas (mensajes de clientes)
+    # 3. Rendimiento por operador (tickets abiertos, en espera, resueltos)
+    cur.execute("""
+        SELECT 
+            coalesce(nullif(trim(assigned_to), ''), 'Sin Asignar') as op,
+            SUM(CASE WHEN ticket_status = 'open' THEN 1 ELSE 0 END) as open_cnt,
+            SUM(CASE WHEN ticket_status = 'pending' THEN 1 ELSE 0 END) as pending_cnt,
+            SUM(CASE WHEN ticket_status = 'resolved' THEN 1 ELSE 0 END) as resolved_cnt,
+            COUNT(*) as total_cnt
+        FROM crm_contact_meta
+        WHERE ticket_status IN ('open', 'pending', 'resolved')
+        GROUP BY coalesce(nullif(trim(assigned_to), ''), 'Sin Asignar')
+        ORDER BY total_cnt DESC, op ASC
+    """)
+    operators = []
+    for r in cur.fetchall():
+        operators.append({
+            "operator": r["op"],
+            "open": r["open_cnt"] or 0,
+            "pending": r["pending_cnt"] or 0,
+            "resolved": r["resolved_cnt"] or 0,
+            "total": r["total_cnt"] or 0
+        })
+
+    # 4. Mapa de calor 7 días x 24 horas (mensajes de clientes)
     cur.execute("""
         SELECT 
             cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as dow,
@@ -3003,8 +3044,9 @@ def get_support_metrics(db_path=None):
           AND chat_id NOT LIKE '%@g.us'
           AND chat_id NOT LIKE '%@newsletter'
           AND chat_id != 'status@broadcast'
+          AND (? = 0 OR timestamp >= ?)
         GROUP BY dow, hod
-    """)
+    """, (min_ts, min_ts))
     grid = [[0]*24 for _ in range(7)]
     max_val = 0
     peak_dow = 1
@@ -3028,6 +3070,7 @@ def get_support_metrics(db_path=None):
     peak_desc = f"{days_names[peak_dow]} {peak_hod:02d}:00 - {peak_hod+1:02d}:00 hs ({max_val} msgs)"
 
     return {
+        "period_days": days_label,
         "tickets": {
             "open": ticket_counts.get("open", 0),
             "pending": ticket_counts.get("pending", 0),
@@ -3035,6 +3078,7 @@ def get_support_metrics(db_path=None):
             "total": sum(ticket_counts.values())
         },
         "global_sla": sla_formatted,
+        "operators": operators,
         "heatmap": {
             "grid": grid,
             "days": days_names,

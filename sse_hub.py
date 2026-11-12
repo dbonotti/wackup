@@ -15,6 +15,8 @@ from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("wackup.sse")
 
+MAX_CONCURRENT_SUBSCRIBERS = 32
+
 class SSEHub:
     """Administrador centralizado thread-safe para Server-Sent Events y Presencia de Operadores."""
 
@@ -41,12 +43,15 @@ class SSEHub:
         )
         self._worker_thread.start()
 
-    def subscribe(self, client_info: Optional[Dict[str, Any]] = None) -> queue.Queue:
-        """Registra un nuevo suscriptor SSE y devuelve su cola de mensajes thread-safe."""
-        q = queue.Queue(maxsize=100)
+    def subscribe(self, client_info: Optional[Dict[str, Any]] = None) -> Optional[queue.Queue]:
+        """Registra un nuevo suscriptor SSE y devuelve su cola de mensajes thread-safe.
+        Aplica un tope estricto de hasta 32 suscriptores concurrentes (SEC-10)."""
         with self._subscribers_lock:
+            if len(self._subscribers) >= MAX_CONCURRENT_SUBSCRIBERS:
+                return None
+            q = queue.Queue(maxsize=100)
             self._subscribers.append(q)
-        return q
+            return q
 
     def unsubscribe(self, q: queue.Queue):
         """Elimina un suscriptor desconectado."""

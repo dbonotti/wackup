@@ -2673,3 +2673,178 @@ body.dark .badge-presence-active.visor-source {
   font-weight: 600;
   color: var(--text-secondary);
 }
+
+/* =========================================================================
+   FASE 4: Filtros Rápidos de Conversación, Kanban Drag & Drop y Métricas
+   ========================================================================= */
+
+/* Filtros rápidos en la lista de chats */
+.chat-quick-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 6px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+}
+.chat-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.chat-filter-pill:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.chat-filter-pill.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.chat-filter-pill.active .filter-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+.filter-count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+/* Badges en filas de conversaciones */
+.chat-status-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+.chat-badge-unanswered {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+.chat-badge-pending {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+.chat-badge-priority-urgent {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+.chat-badge-priority-high {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #d97706;
+}
+
+/* Kanban Drag & Drop y SLA en Soporte */
+.kanban-card[draggable="true"] {
+  cursor: grab;
+}
+.kanban-card.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+.kanban-col.drag-over {
+  background: rgba(0, 168, 132, 0.08);
+  border: 2px dashed var(--accent);
+}
+.sla-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.sla-badge.sla-green {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+.sla-badge.sla-amber {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+.sla-badge.sla-red {
+  background: rgba(239, 68, 68, 0.18);
+  color: #ef4444;
+}
+
+/* Métricas de soporte y selectores */
+.metrics-period-selector {
+  display: inline-flex;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+.btn-period {
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-period:hover {
+  color: var(--text-primary);
+}
+.btn-period.active {
+  background: var(--bg-card);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.metrics-op-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.metrics-op-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 2px solid var(--border-color);
+}
+.metrics-op-table td {
+  padding: 8px 10px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+.metrics-op-table tr:hover td {
+  background: var(--bg-hover);
+}

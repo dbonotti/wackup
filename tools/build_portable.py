@@ -30,6 +30,8 @@ VERSION_FILE = os.path.join(ROOT_DIR, "VERSION")
 
 PYTHON_EMBED_URL = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-embed-amd64.zip"
 PYTHON_EMBED_ZIP_NAME = "python-3.12.7-embed-amd64.zip"
+# Hash SHA-256 oficial de Python 3.12.7 Embeddable (amd64) publicado por python.org (SEC-16)
+PYTHON_EMBED_SHA256 = "0d57bb6cb078b74d23dbfe91f77d6780d45bed328911609f1f7ee2ba1606bf44"
 
 
 def get_version() -> str:
@@ -55,8 +57,16 @@ def calculate_sha256(filepath: str) -> str:
 def download_python_embed(target_path: str):
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
     if os.path.isfile(target_path):
-        print(f"[CACHE] Usando Python embeddable en caché: {target_path}")
-        return
+        cached_hash = calculate_sha256(target_path)
+        if cached_hash.lower() == PYTHON_EMBED_SHA256.lower():
+            print(f"[CACHE] Usando Python embeddable verificado en caché: {target_path}")
+            return
+        else:
+            print(f"[AVISO] Hash SHA-256 de archivo en caché inválido ({cached_hash}), redescargando...")
+            try:
+                os.remove(target_path)
+            except OSError:
+                pass
 
     print(f"[DESCARGA] Descargando Python 3.12 Embeddable desde python.org...")
     print(f"           URL: {PYTHON_EMBED_URL}")
@@ -64,6 +74,18 @@ def download_python_embed(target_path: str):
     with urllib.request.urlopen(req, timeout=60) as resp, open(target_path, "wb") as out_f:
         shutil.copyfileobj(resp, out_f)
     print(f"[OK] Descarga completada ({os.path.getsize(target_path) / 1024 / 1024:.2f} MB)")
+
+    downloaded_hash = calculate_sha256(target_path)
+    if downloaded_hash.lower() != PYTHON_EMBED_SHA256.lower():
+        try:
+            os.remove(target_path)
+        except OSError:
+            pass
+        raise ValueError(
+            f"Fallo de integridad criptográfica: el hash SHA-256 ({downloaded_hash}) "
+            f"no coincide con el esperado ({PYTHON_EMBED_SHA256})."
+        )
+    print(f"[OK] Integridad criptográfica SHA-256 de Python 3.12.7 verificada con éxito.")
 
 
 def setup_embeddable_python(target_python_dir: str):

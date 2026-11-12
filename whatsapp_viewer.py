@@ -21,6 +21,8 @@ from datetime import datetime
 import secrets
 import hmac
 import hashlib
+import logging
+from logging.handlers import RotatingFileHandler
 
 # En Windows con pythonw.exe, sys.stdout y sys.stderr se inicializan como None.
 # Redirigir a os.devnull para prevenir caídas ('NoneType' object has no attribute 'write')
@@ -52,11 +54,33 @@ _server_instance = None
 _server_stopping = False
 _is_restarting = False
 
+_sync_logger = None
+_sync_logger_lock = threading.Lock()
+
+def get_sync_logger():
+    global _sync_logger
+    with _sync_logger_lock:
+        if _sync_logger is None:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            logger = logging.getLogger("wackup.sync_file")
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+            if not logger.handlers:
+                handler = RotatingFileHandler(
+                    SYNC_LOG_PATH,
+                    maxBytes=5 * 1024 * 1024,
+                    backupCount=3,
+                    encoding="utf-8"
+                )
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                logger.addHandler(handler)
+            _sync_logger = logger
+        return _sync_logger
+
 def append_sync_log(entry_text):
     try:
-        os.makedirs(LOG_DIR, exist_ok=True)
-        with open(SYNC_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(entry_text + "\n")
+        logger = get_sync_logger()
+        logger.info(str(entry_text).rstrip("\r\n"))
     except Exception:
         pass
 
@@ -581,22 +605,26 @@ def manage_windows_shortcut(action: str, enable: bool = True) -> dict:
     icon_path = os.path.join(base_dir, "assets", "favicon.jpg")
 
     target = bat_path
+    ps_env = os.environ.copy()
+    ps_env["WACKUP_TARGET"] = str(target)
+    ps_env["WACKUP_BASE_DIR"] = str(base_dir)
+    ps_env["WACKUP_ICON"] = str(icon_path)
 
     if action == "desktop":
-        ps_script = f'''
+        ps_script = '''
 $ws = New-Object -ComObject WScript.Shell
 $desk = $ws.SpecialFolders("Desktop")
 $sc = $ws.CreateShortcut("$desk\\WAckup.lnk")
-$sc.TargetPath = "{target}"
-$sc.WorkingDirectory = "{base_dir}"
+$sc.TargetPath = $env:WACKUP_TARGET
+$sc.WorkingDirectory = $env:WACKUP_BASE_DIR
 $sc.WindowStyle = 7
 $sc.Description = "WAckup 3.0 - Copiloto CRM y Respaldo Local"
-if (Test-Path "{icon_path}") {{ $sc.IconLocation = "{icon_path},0" }}
+if (Test-Path $env:WACKUP_ICON) { $sc.IconLocation = "$env:WACKUP_ICON,0" }
 $sc.Save()
 '''
         try:
             res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                                 capture_output=True, text=True, timeout=8)
+                                 env=ps_env, capture_output=True, text=True, timeout=8)
             if res.returncode == 0:
                 return {"ok": True, "message": "Acceso directo en el Escritorio creado exitosamente."}
             else:
@@ -606,20 +634,20 @@ $sc.Save()
 
     elif action == "startup":
         if enable:
-            ps_script = f'''
+            ps_script = '''
 $ws = New-Object -ComObject WScript.Shell
 $startup = $ws.SpecialFolders("Startup")
 $sc = $ws.CreateShortcut("$startup\\WAckup.lnk")
-$sc.TargetPath = "{target}"
-$sc.WorkingDirectory = "{base_dir}"
+$sc.TargetPath = $env:WACKUP_TARGET
+$sc.WorkingDirectory = $env:WACKUP_BASE_DIR
 $sc.WindowStyle = 7
 $sc.Description = "WAckup 3.0 Autoarranque"
-if (Test-Path "{icon_path}") {{ $sc.IconLocation = "{icon_path},0" }}
+if (Test-Path $env:WACKUP_ICON) { $sc.IconLocation = "$env:WACKUP_ICON,0" }
 $sc.Save()
 '''
             try:
                 res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                                     capture_output=True, text=True, timeout=8)
+                                     env=ps_env, capture_output=True, text=True, timeout=8)
                 if res.returncode == 0:
                     return {"ok": True, "message": "Inicio automático con Windows activado correctamente."}
                 else:
@@ -635,7 +663,7 @@ if (Test-Path $path) { Remove-Item $path -Force }
 '''
             try:
                 res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                                     capture_output=True, text=True, timeout=8)
+                                     env=ps_env, capture_output=True, text=True, timeout=8)
                 return {"ok": True, "message": "Inicio automático desactivado."}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
@@ -1399,6 +1427,17 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         return account_id, db_path, backup_dir
 
     def do_GET(self):
+        try:
+            self._do_GET_impl()
+        except Exception as e:
+            traceback.print_exc()
+            append_sync_log(f"[Error 500 GET {getattr(self, 'path', '')}] {e}")
+            if self.is_local_client():
+                self.send_json(500, {"ok": False, "error": f"Error interno: {e}"})
+            else:
+                self.send_json(500, {"ok": False, "error": "Error interno del servidor"})
+
+    def _do_GET_impl(self):
         global _last_client_ping, _last_sync_epoch
         if not self.is_valid_host_header():
             self.send_response(403)
@@ -1544,6 +1583,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             ev_client_id = (ev_params.get("client_id", [""])[0] or "").strip()
             is_web_tab = ev_client_id.startswith("web_")
 
+            hub = sse_hub.get_sse_hub()
+            client_q = hub.subscribe()
+            if client_q is None:
+                self.send_json(503, {"ok": False, "error": "Límite de suscriptores concurrentes SSE alcanzado (máx. 32)"})
+                return
+
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache, no-transform")
@@ -1555,9 +1600,6 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except Exception:
                 pass
-
-            hub = sse_hub.get_sse_hub()
-            client_q = hub.subscribe()
 
             if is_web_tab:
                 with _viewer_lock:
@@ -1784,10 +1826,11 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             self.send_json(200, data)
             return
 
-        elif url.path == "/api/crm/support/metrics":
+        elif url.path in ["/api/crm/support/metrics", "/api/crm/metrics/support"]:
             params = parse_qs(url.query)
             account_id, db_path, _ = self._resolve_account_params(params)
-            data = db_manager.get_support_metrics(db_path=db_path)
+            days = params.get("days", ["all"])[0]
+            data = db_manager.get_support_metrics(days=days, db_path=db_path)
             data["account_id"] = account_id
             self.send_json(200, data)
             return
@@ -1846,7 +1889,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             SELECT 
                 c.chat_id,
                 c.nombre AS chat_nombre,
+                c.ultimo_es_mio AS ultimo_es_mio,
                 meta.custom_name AS custom_name,
+                meta.ticket_status AS ticket_status,
+                meta.support_priority AS support_priority,
+                meta.assigned_to AS assigned_to,
+                meta.follow_up_date AS follow_up_date,
                 ct.nombre AS ct_nombre,
                 ct.push_name AS ct_push,
                 ct.numero AS ct_numero,
@@ -1906,6 +1954,11 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     "saved_name": saved_name if is_saved else None,
                     "is_saved": is_saved,
                     "tags": chat_tags,
+                    "ultimo_es_mio": row_d.get("ultimo_es_mio", 0),
+                    "ticket_status": row_d.get("ticket_status") or "open",
+                    "support_priority": row_d.get("support_priority") if row_d.get("support_priority") is not None else 0,
+                    "assigned_to": row_d.get("assigned_to"),
+                    "follow_up_date": row_d.get("follow_up_date"),
                     "last_msg": db_manager.resolve_mentions_in_text(row_d["last_msg"], contact_map) if row_d.get("last_msg") else row_d.get("last_msg"),
                     "last_tipo": row_d.get("last_tipo"),
                     "last_ts": row_d.get("last_ts")
@@ -2016,8 +2069,18 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             output = io.StringIO()
             writer = csv.writer(output, lineterminator="\r\n")
             writer.writerow(["Nombre", "Número de teléfono"])
+
+            def _clean_csv_cell(val):
+                if val is None:
+                    return ""
+                s = str(val)
+                # SEC-17: Sanitización contra CSV Formula Injection (=, +, -, @, \t, \r)
+                if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+                    return "'" + s
+                return s
+
             for c in contacts:
-                writer.writerow([c["nombre"], c["telefono"]])
+                writer.writerow([_clean_csv_cell(c.get("nombre")), _clean_csv_cell(c.get("telefono"))])
             csv_bytes = ("\ufeff" + output.getvalue()).encode("utf-8")
             ts_str = datetime.now().strftime("%Y-%m-%d")
             acc_str = f"_{account_id}" if account_id else ""
@@ -2118,8 +2181,11 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             lines = []
             if os.path.isfile(SYNC_LOG_PATH):
                 try:
+                    params = parse_qs(url.query)
+                    limit = min(2000, max(1, int(params.get("limit", ["500"])[0])))
                     with open(SYNC_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-                        lines = [l.rstrip("\r\n") for l in f.readlines()]
+                        all_lines = f.readlines()
+                        lines = [l.rstrip("\r\n") for l in all_lines[-limit:]]
                 except Exception as e:
                     lines = [f"[Error al leer logs: {e}]"]
             self.send_json(200, {
@@ -2153,8 +2219,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 self.wfile.write("Aún no hay registros en logs de sincronización".encode("utf-8"))
             return
 
-        self.send_response(404)
-        self.end_headers()
+            self.send_response(404)
+            self.end_headers()
 
     def do_POST(self):
         try:
@@ -3225,7 +3291,11 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             self.end_headers()
         except Exception as e:
             traceback.print_exc()
-            self.send_json(500, {"error": str(e)})
+            append_sync_log(f"[Error 500 POST {self.path}] {e}")
+            if self.is_local_client():
+                self.send_json(500, {"ok": False, "error": f"Error interno: {e}"})
+            else:
+                self.send_json(500, {"ok": False, "error": "Error interno del servidor"})
 
     def do_DELETE(self):
         try:
@@ -3302,7 +3372,11 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             self.end_headers()
         except Exception as e:
             traceback.print_exc()
-            self.send_json(500, {"error": str(e)})
+            append_sync_log(f"[Error 500 DELETE {self.path}] {e}")
+            if self.is_local_client():
+                self.send_json(500, {"ok": False, "error": f"Error interno: {e}"})
+            else:
+                self.send_json(500, {"ok": False, "error": "Error interno del servidor"})
 
     def log_message(self, format, *args):
         return

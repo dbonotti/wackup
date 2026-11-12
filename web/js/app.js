@@ -50,6 +50,11 @@
     let activePresenceMap = {};
     let expectedNotesUpdatedAt = null;
     let currentKanbanAssignedFilter = 'all';
+    let currentChatQuickFilter = 'all';
+    let showHistoricalResolved = false;
+    let currentSupportMetricsPeriod = '30';
+    let draggedKanbanCardChatId = null;
+    let draggedKanbanCardSourceColId = null;
     let knownOperatorsList = [];
     let isLanPinModalVisible = false;
     let currentNetworkMode = 'local';
@@ -1533,14 +1538,48 @@
       }
     }
 
+    function setChatQuickFilter(filter) {
+      currentChatQuickFilter = filter;
+      ['all', 'unanswered', 'pending'].forEach(f => {
+        const pill = document.getElementById('pillFilter-' + f);
+        if (pill) pill.classList.toggle('active', f === filter);
+      });
+      renderChats(allChats);
+    }
+    window.setChatQuickFilter = setChatQuickFilter;
+
     function renderChats(chats) {
       const list = document.getElementById('chat-list');
+      if (!list) return;
       list.innerHTML = '';
-      if (!chats || chats.length === 0) {
-        list.innerHTML = '<li style="padding: 24px 14px; color: var(--text-time); text-align: center; font-size: 13px; line-height: 1.5;">Sin conversaciones respaldadas aún.<br>Sigue la guía en pantalla.</li>';
+
+      // Actualizar contadores de filtros rápidos
+      if (Array.isArray(allChats)) {
+        const unCount = allChats.filter(c => c && c.ultimo_es_mio === 0 && !String(c.chat_id).endsWith('@g.us') && c.chat_id !== 'status@broadcast').length;
+        const pendCount = allChats.filter(c => c && c.ticket_status === 'pending').length;
+        const unEl = document.getElementById('countUnanswered');
+        const pendEl = document.getElementById('countPending');
+        if (unEl) unEl.textContent = unCount;
+        if (pendEl) pendEl.textContent = pendCount;
+      }
+
+      let displayedChats = Array.isArray(chats) ? chats : [];
+      if (currentChatQuickFilter === 'unanswered') {
+        displayedChats = displayedChats.filter(c => c && c.ultimo_es_mio === 0 && !String(c.chat_id).endsWith('@g.us') && c.chat_id !== 'status@broadcast');
+      } else if (currentChatQuickFilter === 'pending') {
+        displayedChats = displayedChats.filter(c => c && c.ticket_status === 'pending');
+      }
+
+      if (!displayedChats || displayedChats.length === 0) {
+        const emptyMsg = (currentChatQuickFilter === 'unanswered')
+          ? '¡Excelente! No hay chats pendientes de respuesta en este momento.'
+          : (currentChatQuickFilter === 'pending')
+          ? 'No hay conversaciones marcadas en espera.'
+          : 'Sin conversaciones respaldadas aún.<br>Sigue la guía en pantalla.';
+        list.innerHTML = `<li style="padding: 24px 14px; color: var(--text-time); text-align: center; font-size: 13px; line-height: 1.5;">${emptyMsg}</li>`;
         return;
       }
-      chats.forEach(chat => {
+      displayedChats.forEach(chat => {
         const li = document.createElement('li');
         li.className = 'chat-item' + (chat.chat_id === selectedChatId ? ' active' : '');
         li.id = safeDomId('chat-', chat.chat_id);
@@ -1596,11 +1635,26 @@
           }
         }
 
+        let statusBadgesHtml = '';
+        if (chat.ultimo_es_mio === 0 && !String(chat.chat_id).endsWith('@g.us') && chat.chat_id !== 'status@broadcast') {
+          statusBadgesHtml += `<span class="chat-badge-unanswered" title="Esperando respuesta del operador">🔴 Sin responder</span>`;
+        } else if (chat.ticket_status === 'pending') {
+          statusBadgesHtml += `<span class="chat-badge-pending" title="En espera del cliente">🟡 En espera</span>`;
+        }
+        if (chat.support_priority == 2) {
+          statusBadgesHtml += `<span class="chat-badge-priority-urgent" title="Prioridad Urgente">🔥</span>`;
+        } else if (chat.support_priority == 1) {
+          statusBadgesHtml += `<span class="chat-badge-priority-high" title="Prioridad Alta">🟠</span>`;
+        }
+        if (isTeamMode() && chat.assigned_to) {
+          statusBadgesHtml += `<span class="badge-operator" style="font-size:10px; padding:1px 5px;" title="Asignado a: ${escapeHtml(chat.assigned_to)}">👤 ${escapeHtml(chat.assigned_to)}</span>`;
+        }
+
         li.innerHTML = `
           <div class="chat-avatar" style="background-color: ${avatarBg};">${initial}</div>
           <div class="chat-info">
             <div class="chat-header-row">
-              <span class="chat-name">${escapeHtml(friendlyTitle)}${pushNameHint} ${presenceBadgeHtml}</span>
+              <span class="chat-name">${escapeHtml(friendlyTitle)}${pushNameHint} ${presenceBadgeHtml} ${statusBadgesHtml}</span>
               <span class="chat-time">${timeStr}</span>
             </div>
             <div class="chat-preview">${escapeHtml(previewText)}</div>
@@ -2906,16 +2960,122 @@
       loadKanbanBoard(type);
     }
 
+    function toggleHistoricalResolved(checked) {
+      showHistoricalResolved = Boolean(checked);
+      loadKanbanBoard(activeKanbanType);
+    }
+    window.toggleHistoricalResolved = toggleHistoricalResolved;
+
+    function handleKanbanDragStart(e, chatId, colId) {
+      draggedKanbanCardChatId = chatId;
+      draggedKanbanCardSourceColId = colId;
+      if (e.dataTransfer) {
+        e.dataTransfer.setData('text/plain', chatId);
+        e.dataTransfer.setData('text/source-col', colId);
+        e.dataTransfer.effectAllowed = 'move';
+      }
+      if (e.currentTarget) e.currentTarget.classList.add('dragging');
+    }
+    window.handleKanbanDragStart = handleKanbanDragStart;
+
+    function handleKanbanDragEnd(e) {
+      if (e.currentTarget) e.currentTarget.classList.remove('dragging');
+      document.querySelectorAll('.kanban-col').forEach(c => c.classList.remove('drag-over'));
+    }
+    window.handleKanbanDragEnd = handleKanbanDragEnd;
+
+    function handleKanbanDragOver(e) {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const col = e.currentTarget;
+      if (col && !col.classList.contains('drag-over')) {
+        col.classList.add('drag-over');
+      }
+    }
+    window.handleKanbanDragOver = handleKanbanDragOver;
+
+    function handleKanbanDragLeave(e) {
+      if (e.currentTarget) e.currentTarget.classList.remove('drag-over');
+    }
+    window.handleKanbanDragLeave = handleKanbanDragLeave;
+
+    function handleKanbanDrop(e, targetColId) {
+      e.preventDefault();
+      if (e.currentTarget) e.currentTarget.classList.remove('drag-over');
+      const chatId = (e.dataTransfer && e.dataTransfer.getData('text/plain')) || draggedKanbanCardChatId;
+      const sourceCol = (e.dataTransfer && e.dataTransfer.getData('text/source-col')) || draggedKanbanCardSourceColId;
+      if (!chatId || sourceCol === targetColId) return;
+
+      if (activeKanbanType === 'support') {
+        if (targetColId === 'open') {
+          moveKanbanCard(chatId, null, 'open');
+        } else if (targetColId === 'pending') {
+          moveKanbanCard(chatId, null, 'pending');
+        } else if (targetColId === 'resolved') {
+          moveKanbanCard(chatId, null, 'resolved');
+        }
+      } else if (activeKanbanType === 'sales') {
+        if (['lead', 'quoted', 'won', 'lost'].includes(targetColId)) {
+          moveKanbanCard(chatId, targetColId, null);
+        }
+      }
+    }
+    window.handleKanbanDrop = handleKanbanDrop;
+
     async function loadKanbanBoard(type = 'sales') {
       const container = document.getElementById("kanbanColumnsContainer");
       const statsBar = document.getElementById("kanbanStatsBar");
+      const histToggle = document.getElementById("kanbanHistoricalToggle");
       if (!container) return;
       container.innerHTML = '<div style="padding: 30px; text-align: center; color: var(--text-muted);">Cargando columnas del tablero...</div>';
+
+      if (histToggle) {
+        histToggle.style.display = (type === 'support') ? 'flex' : 'none';
+      }
 
       try {
         const res = await fetch(withAccount(`/api/crm/kanban?type=${encodeURIComponent(type)}`));
         const data = await res.json();
         const columns = data.columns || [];
+
+        // En Soporte: integrar columna en vivo 'Sin Responder (Radar)'
+        if (type === 'support') {
+          try {
+            const radarRes = await fetch(withAccount('/api/support/unanswered?limit=80&days=7'));
+            const radarData = await radarRes.json();
+            const radarChats = (radarData && radarData.chats) ? radarData.chats : [];
+            const radarChatIdSet = new Set(radarChats.map(rc => rc.chat_id));
+
+            // Excluir de la columna 'open' los chats que están pendientes de respuesta en el Radar
+            const openCol = columns.find(c => c.id === 'open');
+            if (openCol && Array.isArray(openCol.cards)) {
+              openCol.cards = openCol.cards.filter(c => !radarChatIdSet.has(c.chat_id));
+              openCol.count = openCol.cards.length;
+            }
+
+            const radarCards = radarChats.map(rc => ({
+              chat_id: rc.chat_id,
+              display_name: rc.display_name,
+              last_message: rc.contenido || rc.last_message || '',
+              last_ts: rc.timestamp || rc.last_ts || 0,
+              last_activity_str: rc.time_str || '',
+              support_priority: rc.support_priority || 0,
+              assigned_to: rc.assigned_to || '',
+              ticket_status: rc.ticket_status || 'open',
+              is_radar: true
+            }));
+
+            columns.unshift({
+              id: 'radar',
+              title: 'Sin Responder (Radar) 📥',
+              badge_color: '#ef4444',
+              cards: radarCards,
+              count: radarCards.length
+            });
+          } catch (err) {
+            console.warn('Error cargando columna radar:', err);
+          }
+        }
 
         let totalCards = 0;
         let totalMoney = 0;
@@ -2946,6 +3106,16 @@
             cards = cards.filter(c => !c.assigned_to);
           }
 
+          // En Soporte: ocultar resueltos antiguos (> 7 días) a menos que se active el toggle
+          if (type === 'support' && col.id === 'resolved' && !showHistoricalResolved) {
+            const nowSec = Math.floor(Date.now() / 1000);
+            const sevenDaysSec = 7 * 86400;
+            cards = cards.filter(c => {
+              const ts = c.last_ts || 0;
+              return (nowSec - ts) <= sevenDaysSec;
+            });
+          }
+
           const sumStr = (type === 'sales' && col.total_value > 0) ? `<span class="kanban-col-sum">$ ${col.total_value.toLocaleString()}</span>` : '';
           const cardsHtml = (cards && cards.length > 0) ? cards.map(card => {
             const valStr = (card.estimated_value && card.estimated_value > 0) ? `<span class="kanban-card-val">$ ${card.estimated_value.toLocaleString()}</span>` : '';
@@ -2953,6 +3123,22 @@
             const assignBadge = (isTeamMode() && card.assigned_to) ? `<span class="badge-operator" title="Responsable: ${escapeHtml(card.assigned_to)}" style="font-size:11px; background:var(--bg-tag); color:var(--text-tag); padding:2px 6px; border-radius:4px;">👤 ${escapeHtml(card.assigned_to)}</span>` : '';
             const priorityBadge = (type === 'support' && card.support_priority == 2) ? '<span class="status-badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; font-weight:700; font-size:10.5px;">🔥 Urgente</span>' :
                                   (type === 'support' && card.support_priority == 1) ? '<span class="status-badge" style="background: rgba(245, 158, 11, 0.15); color: #d97706; font-weight:700; font-size:10.5px;">🟠 Alta</span>' : '';
+
+            // Semáforo de SLA por tiempo de espera en la columna Radar
+            let slaBadgeHtml = '';
+            if (col.id === 'radar' || card.is_radar) {
+              const nowSec = Math.floor(Date.now() / 1000);
+              const waitMin = Math.max(0, Math.floor((nowSec - (card.last_ts || nowSec)) / 60));
+              if (waitMin < 15) {
+                slaBadgeHtml = `<span class="sla-badge sla-green" title="Espera: ${waitMin}m (<15m)">🟢 ${waitMin}m</span>`;
+              } else if (waitMin < 60) {
+                slaBadgeHtml = `<span class="sla-badge sla-amber" title="Espera: ${waitMin}m (15-60m)">🟡 ${waitMin}m</span>`;
+              } else {
+                const waitHrs = Math.floor(waitMin / 60);
+                const remMin = waitMin % 60;
+                slaBadgeHtml = `<span class="sla-badge sla-red" title="Espera: ${waitHrs}h ${remMin}m (>60m)">🔴 ${waitHrs}h ${remMin}m</span>`;
+              }
+            }
 
             let presenceBadge = '';
             if (isTeamMode() && activePresenceMap && card.chat_id) {
@@ -2998,10 +3184,11 @@
             `;
 
             return `
-              <div class="kanban-card">
+              <div class="kanban-card" draggable="true" ondragstart="handleKanbanDragStart(event, '${escapeHtml(card.chat_id)}', '${escapeHtml(col.id)}')" ondragend="handleKanbanDragEnd(event)">
                 <div class="kanban-card-top">
                   <span class="kanban-card-name" title="${escapeHtml(card.display_name)}">${escapeHtml(card.display_name)}</span>
                   ${valStr}
+                  ${slaBadgeHtml}
                   ${presenceBadge}
                   ${priorityBadge}
                 </div>
@@ -3021,7 +3208,7 @@
           }).join('') : `<div style="font-size: 11.5px; color: var(--text-muted); text-align: center; padding: 24px 0;">Sin contactos en esta etapa.</div>`;
 
           return `
-            <div class="kanban-col">
+            <div class="kanban-col" ondragover="handleKanbanDragOver(event)" ondragleave="handleKanbanDragLeave(event)" ondrop="handleKanbanDrop(event, '${escapeHtml(col.id)}')">
               <div class="kanban-col-header">
                 <div class="kanban-col-title">
                   <span>${escapeHtml(col.title)}</span>
@@ -3116,21 +3303,65 @@
       }
     }
 
+    function changeSupportMetricsPeriod(period) {
+      currentSupportMetricsPeriod = String(period);
+      ['1', '7', '30', 'all'].forEach(p => {
+        const btn = document.getElementById('btnPeriod-' + p);
+        if (btn) btn.classList.toggle('active', p === currentSupportMetricsPeriod);
+      });
+      loadSupportMetrics();
+    }
+    window.changeSupportMetricsPeriod = changeSupportMetricsPeriod;
+
     async function loadSupportMetrics() {
       const kpiSla = document.getElementById("kpiSlaText");
       const kpiOpen = document.getElementById("kpiTicketsOpen");
       const kpiRes = document.getElementById("kpiTicketsResolved");
       const peakBadge = document.getElementById("heatmapPeakBadge");
       const container = document.getElementById("heatmapContainer");
+      const opContainer = document.getElementById("supportOperatorsTableContainer");
 
       try {
-        const res = await fetch(withAccount('/api/crm/support/metrics'));
+        const res = await fetch(withAccount(`/api/crm/support/metrics?days=${encodeURIComponent(currentSupportMetricsPeriod)}`));
         const data = await res.json();
 
         if (kpiSla) kpiSla.textContent = data.global_sla || '--';
         const t = data.tickets || {};
         if (kpiOpen) kpiOpen.textContent = (t.open || 0) + (t.pending || 0);
         if (kpiRes) kpiRes.textContent = t.resolved || 0;
+
+        // Desglose de rendimiento por operador
+        if (opContainer) {
+          const ops = data.operators || [];
+          if (ops.length === 0) {
+            opContainer.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px;">Sin registros de operadores en este período.</div>';
+          } else {
+            opContainer.innerHTML = `
+              <table class="metrics-op-table">
+                <thead>
+                  <tr>
+                    <th>Operador</th>
+                    <th>🟢 Abiertos</th>
+                    <th>🟡 En Espera</th>
+                    <th>⚪ Resueltos</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${ops.map(o => `
+                    <tr>
+                      <td><strong>👤 ${escapeHtml(o.operator)}</strong></td>
+                      <td><span style="color: #10b981; font-weight: 600;">${o.open}</span></td>
+                      <td><span style="color: #f59e0b; font-weight: 600;">${o.pending}</span></td>
+                      <td><span style="color: #94a3b8; font-weight: 600;">${o.resolved}</span></td>
+                      <td><strong>${o.total}</strong></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            `;
+          }
+        }
 
         const hm = data.heatmap || {};
         if (peakBadge) peakBadge.textContent = 'Horario pico: ' + (hm.peak_hour || 'Sin datos');
