@@ -228,50 +228,55 @@ def download_and_decrypt(msg_id, media_key_b64, direct_path, media_type, mimetyp
         _update_status(msg_id, "error", f"Error guardando archivo: {e}", db_path)
         return False
 
-    # Actualizar base de datos con éxito
+    # Actualizar base de datos con éxito y purgar media_key descifrado
     conn = get_connection(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE multimedia SET
-            archivo_local = ?,
-            tamano = ?,
-            estado = 'descargado',
-            error_msg = NULL
-        WHERE msg_id = ?
-    """, (rel_path, len(decrypted_data), msg_id))
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE multimedia SET
+                archivo_local = ?,
+                tamano = ?,
+                estado = 'descargado',
+                media_key = NULL,
+                error_msg = NULL
+            WHERE msg_id = ?
+        """, (rel_path, len(decrypted_data), msg_id))
 
-    cur.execute("""
-        UPDATE mensajes SET
-            archivo_local = ?,
-            estado_multimedia = 'descargado',
-            tamano = ?
-        WHERE msg_id = ?
-    """, (rel_path, len(decrypted_data), msg_id))
+        cur.execute("""
+            UPDATE mensajes SET
+                archivo_local = ?,
+                estado_multimedia = 'descargado',
+                tamano = ?
+            WHERE msg_id = ?
+        """, (rel_path, len(decrypted_data), msg_id))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
     return True
 
 def _update_status(msg_id, estado, error_msg=None, db_path=DB_FILE):
     """Actualiza el estado de error o expiración en la base de datos."""
     try:
         conn = get_connection(db_path)
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE multimedia SET
-                estado = ?,
-                intentos = intentos + 1,
-                error_msg = ?
-            WHERE msg_id = ?
-        """, (estado, error_msg, msg_id))
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE multimedia SET
+                    estado = ?,
+                    intentos = intentos + 1,
+                    error_msg = ?
+                WHERE msg_id = ?
+            """, (estado, error_msg, msg_id))
 
-        cur.execute("""
-            UPDATE mensajes SET
-                estado_multimedia = ?
-            WHERE msg_id = ?
-        """, (estado, msg_id))
-        conn.commit()
-        conn.close()
+            cur.execute("""
+                UPDATE mensajes SET
+                    estado_multimedia = ?
+                WHERE msg_id = ?
+            """, (estado, msg_id))
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -341,16 +346,18 @@ class MediaDownloadWorker:
         while True:
             try:
                 conn = get_connection(db_path)
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT msg_id, media_key, direct_path, tipo, mimetype, nombre_archivo
-                    FROM multimedia
-                    WHERE estado = 'pendiente' AND intentos < 3 AND media_key IS NOT NULL AND direct_path IS NOT NULL
-                    ORDER BY rowid DESC
-                    LIMIT ?
-                """, (limit,))
-                rows = [dict(r) for r in cur.fetchall()]
-                conn.close()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        SELECT msg_id, media_key, direct_path, tipo, mimetype, nombre_archivo
+                        FROM multimedia
+                        WHERE estado = 'pendiente' AND intentos < 3 AND media_key IS NOT NULL AND direct_path IS NOT NULL
+                        ORDER BY rowid DESC
+                        LIMIT ?
+                    """, (limit,))
+                    rows = [dict(r) for r in cur.fetchall()]
+                finally:
+                    conn.close()
             except Exception as e:
                 log_media_msg(f"[MediaWorker] Error al consultar BD {acc_name}: {e}")
                 break

@@ -120,61 +120,60 @@ def _file_to_data_uri(rel_path, default_mime="application/octet-stream", max_siz
 
 def generate_chat_html_export(chat_id, embed_media=False, db_path=None):
     """Genera un archivo HTML autocontenido para imprimir o archivar."""
-    conn = db_manager.get_connection(db_path or config.get_default_db())
-    cur = conn.cursor()
+    with db_manager.db_connection(db_path or config.get_default_db(), write=False) as conn:
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT 
-            c.nombre AS chat_nombre,
-            meta.custom_name AS custom_name,
-            ct.nombre AS ct_nombre,
-            ct.push_name AS ct_push,
-            ct.numero AS ct_numero,
-            ct_can.nombre AS ct_can_nombre,
-            ct_can.push_name AS ct_can_push,
-            ct_can.numero AS ct_can_numero,
-            ca.canonical_id
-        FROM (SELECT ? AS chat_id) m
-        LEFT JOIN chats c ON m.chat_id = c.chat_id
-        LEFT JOIN crm_contact_meta meta ON m.chat_id = meta.chat_id
-        LEFT JOIN contactos ct ON m.chat_id = ct.contact_id
-        LEFT JOIN contact_aliases ca ON m.chat_id = ca.alias_id
-        LEFT JOIN contactos ct_can ON ca.canonical_id = ct_can.contact_id
-    """, (chat_id,))
-    row = cur.fetchone()
-    if row:
-        row_d = dict(row)
-        phone = (
-            (chat_id.split("@")[0] if ("@c.us" in chat_id or "@s.whatsapp.net" in chat_id) else None)
-            or row_d.get("ct_numero")
-            or row_d.get("ct_can_numero")
-            or (row_d.get("canonical_id", "").split("@")[0] if row_d.get("canonical_id") and ("@c.us" in row_d["canonical_id"] or "@s.whatsapp.net" in row_d["canonical_id"]) else None)
-        )
-        display_name = db_manager.get_best_contact_display(
-            custom_name=row_d.get("custom_name"),
-            contact_name=row_d.get("ct_nombre") or row_d.get("ct_can_nombre") or row_d.get("chat_nombre"),
-            push_name=row_d.get("ct_push") or row_d.get("ct_can_push"),
-            phone_number=phone,
-            chat_id=chat_id
-        )
-    else:
-        display_name = chat_id
+        cur.execute("""
+            SELECT 
+                c.nombre AS chat_nombre,
+                meta.custom_name AS custom_name,
+                ct.nombre AS ct_nombre,
+                ct.push_name AS ct_push,
+                ct.numero AS ct_numero,
+                ct_can.nombre AS ct_can_nombre,
+                ct_can.push_name AS ct_can_push,
+                ct_can.numero AS ct_can_numero,
+                ca.canonical_id
+            FROM (SELECT ? AS chat_id) m
+            LEFT JOIN chats c ON m.chat_id = c.chat_id
+            LEFT JOIN contact_aliases ca ON m.chat_id = ca.alias_id
+            LEFT JOIN crm_contact_meta meta ON COALESCE(ca.canonical_id, m.chat_id) = meta.chat_id
+            LEFT JOIN contactos ct ON m.chat_id = ct.contact_id
+            LEFT JOIN contactos ct_can ON ca.canonical_id = ct_can.contact_id
+        """, (chat_id,))
+        row = cur.fetchone()
+        if row:
+            row_d = dict(row)
+            phone = (
+                (chat_id.split("@")[0] if ("@c.us" in chat_id or "@s.whatsapp.net" in chat_id) else None)
+                or row_d.get("ct_numero")
+                or row_d.get("ct_can_numero")
+                or (row_d.get("canonical_id", "").split("@")[0] if row_d.get("canonical_id") and ("@c.us" in row_d["canonical_id"] or "@s.whatsapp.net" in row_d["canonical_id"]) else None)
+            )
+            display_name = db_manager.get_best_contact_display(
+                custom_name=row_d.get("custom_name"),
+                contact_name=row_d.get("ct_nombre") or row_d.get("ct_can_nombre") or row_d.get("chat_nombre"),
+                push_name=row_d.get("ct_push") or row_d.get("ct_can_push"),
+                phone_number=phone,
+                chat_id=chat_id
+            )
+        else:
+            display_name = chat_id
 
-    contact_map = db_manager.build_contact_map(cur)
-    cur.execute("""
-        SELECT 
-            m.msg_id, m.es_mio, m.fecha_utc, m.timestamp, m.tipo, m.contenido,
-            m.archivo_local, m.mimetype, m.thumbnail,
-            m.quoted_msg_id, m.quoted_author, m.quoted_body, m.reenviado, m.eliminado,
-            COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
-            m.remitente AS remitente_jid
-        FROM mensajes m
-        LEFT JOIN contactos ct ON m.remitente = ct.contact_id
-        WHERE m.chat_id = ?
-        ORDER BY m.timestamp ASC
-    """, (chat_id,))
-    messages = [dict(r) for r in cur.fetchall()]
-    conn.close()
+        contact_map = db_manager.build_contact_map(cur)
+        cur.execute("""
+            SELECT 
+                m.msg_id, m.es_mio, m.fecha_utc, m.timestamp, m.tipo, m.contenido,
+                m.archivo_local, m.mimetype, m.thumbnail,
+                m.quoted_msg_id, m.quoted_author, m.quoted_body, m.reenviado, m.eliminado,
+                COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
+                m.remitente AS remitente_jid
+            FROM mensajes m
+            LEFT JOIN contactos ct ON m.remitente = ct.contact_id
+            WHERE m.chat_id = ?
+            ORDER BY m.timestamp ASC
+        """, (chat_id,))
+        messages = [dict(r) for r in cur.fetchall()]
 
     # Mapa para resolver citas que no traían el texto incrustado
     msg_map = {}
@@ -1013,8 +1012,16 @@ def get_cached_local_ips():
 def check_pin_rate_limit(ip):
     now = time.time()
     with _PIN_FAILURES_LOCK:
+        # Purgar entradas obsoletas si el mapa crece
+        if len(_PIN_FAILURES) > 200:
+            stale_ips = [k for k, v in _PIN_FAILURES.items() if not v or (now - max(v)) >= 600]
+            for k in stale_ips:
+                _PIN_FAILURES.pop(k, None)
         attempts = [t for t in _PIN_FAILURES.get(ip, []) if now - t < 600]
-        _PIN_FAILURES[ip] = attempts
+        if attempts:
+            _PIN_FAILURES[ip] = attempts
+        else:
+            _PIN_FAILURES.pop(ip, None)
         if len(attempts) >= 6:
             oldest = min(attempts)
             wait_sec = max(1, int(600 - (now - oldest)))
@@ -1034,10 +1041,16 @@ def clear_pin_failures(ip):
 
 def create_lan_session(operator_name, ip):
     token = secrets.token_urlsafe(32)
+    now = time.time()
     with _LAN_SESSIONS_LOCK:
+        if len(_LAN_SESSIONS) > 200:
+            expired = [k for k, v in _LAN_SESSIONS.items() if now - v.get("last_seen", v.get("created_at", 0)) > 7 * 86400]
+            for k in expired:
+                _LAN_SESSIONS.pop(k, None)
         _LAN_SESSIONS[token] = {
             "operator": operator_name or "Operador",
-            "created_at": time.time(),
+            "created_at": now,
+            "last_seen": now,
             "ip": ip
         }
     return token
@@ -1045,14 +1058,16 @@ def create_lan_session(operator_name, ip):
 def get_lan_session(token):
     if not token or not isinstance(token, str):
         return None
+    now = time.time()
     with _LAN_SESSIONS_LOCK:
         sess = _LAN_SESSIONS.get(token)
         if not sess:
             return None
-        # Expiración: 7 días
-        if time.time() - sess.get("created_at", 0) > 7 * 86400:
+        # Expiración: 7 días desde último uso
+        if now - sess.get("last_seen", sess.get("created_at", 0)) > 7 * 86400:
             _LAN_SESSIONS.pop(token, None)
             return None
+        sess["last_seen"] = now
         return sess
 
 def revoke_operator_sessions(operator_name=None):
@@ -1098,23 +1113,30 @@ class BackupServerHandler(BaseHTTPRequestHandler):
     def is_valid_host_header(self):
         """
         Protección estricta contra DNS Rebinding:
-        Valida que la cabecera Host corresponda al loopback local (127.0.0.1 / localhost)
+        Valida que la cabecera Host corresponda al loopback local (127.0.0.1 / localhost / ::1)
         o, en modo LAN, a una de las IPs locales autorizadas de esta máquina en el puerto correcto.
         """
         host_hdr = (self.headers.get("Host") or "").strip().lower()
         if not host_hdr:
             return False
 
-        if ":" in host_hdr:
-            host, _, port_str = host_hdr.partition(":")
+        try:
+            parsed = urlparse(f"http://{host_hdr}")
+            host = (parsed.hostname or "").strip().lower()
+            port = parsed.port
+        except ValueError:
+            return False
+
+        if not host:
+            return False
+
+        if port is not None:
             try:
-                server_port = self.server.server_address[1]
-                if port_str and int(port_str) != int(server_port):
+                server_port = int(self.server.server_address[1])
+                if int(port) != server_port:
                     return False
             except Exception:
-                pass
-        else:
-            host = host_hdr
+                return False
 
         if host in ("127.0.0.1", "localhost", "::1"):
             return True
@@ -1200,6 +1222,58 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return self.client_address[0]
         return "127.0.0.1"
 
+    def _get_session_from_request(self):
+        cookie_hdr = self.headers.get("Cookie", "")
+        session_token = None
+        if cookie_hdr:
+            try:
+                c = cookies.SimpleCookie()
+                c.load(cookie_hdr)
+                if "wackup_session" in c:
+                    session_token = c["wackup_session"].value
+            except Exception:
+                pass
+        if not session_token:
+            session_token = self.headers.get("X-WAckup-Session")
+        if session_token:
+            return get_lan_session(session_token)
+        return None
+
+    def get_current_operator(self, payload=None):
+        """
+        Resuelve el nombre del operador autenticado o activo para trazabilidad y permisos.
+        Prioriza la sesión activa (si tiene un operador específico), luego el payload/headers,
+        y finalmente el active_operator local cuando es petición desde localhost.
+        """
+        sess = self._get_session_from_request()
+        if sess:
+            sess_op = str(sess.get("operator") or "").strip()
+            if sess_op and sess_op.lower() != "operador":
+                return sess_op
+
+        if isinstance(payload, dict):
+            for k in ("updated_by", "operator_name", "operator", "author"):
+                val = str(payload.get(k) or "").strip()
+                if val and val.lower() != "operador":
+                    return val
+
+        hdr_op = str(self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or "").strip()
+        if hdr_op and hdr_op.lower() != "operador":
+            return hdr_op
+
+        if sess and sess.get("operator") and str(sess.get("operator")).strip().lower() != "operador":
+            return str(sess.get("operator")).strip()
+
+        if self.is_local_client():
+            try:
+                settings = config.get_system_settings()
+                active_op = str(settings.get("active_operator") or "").strip()
+                if active_op:
+                    return active_op
+            except Exception:
+                pass
+        return "Operador"
+
     def is_authorized_request(self):
         """
         Control de acceso LAN:
@@ -1220,23 +1294,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return False, 403, "El servidor está configurado en modo local (solo esta PC). Activa Modo Equipo en Red Local en Sistema."
 
         # 1. Verificar Cookie o Header de sesión
-        cookie_hdr = self.headers.get("Cookie", "")
-        session_token = None
-        if cookie_hdr:
-            try:
-                c = cookies.SimpleCookie()
-                c.load(cookie_hdr)
-                if "wackup_session" in c:
-                    session_token = c["wackup_session"].value
-            except Exception:
-                pass
-        if not session_token:
-            session_token = self.headers.get("X-WAckup-Session")
-
-        if session_token:
-            sess = get_lan_session(session_token)
-            if sess:
-                return True, 200, None
+        if self._get_session_from_request():
+            return True, 200, None
 
         # 2. Verificar PIN (Compatibilidad) con Rate-Limiting
         client_ip = self._get_client_ip()
@@ -1762,7 +1821,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/support/unanswered":
             params = parse_qs(url.query)
             account_id, db_path, _ = self._resolve_account_params(params)
-            limit = int(params.get("limit", ["30"])[0])
+            limit = int(params.get("limit", ["80"])[0])
             days = int(params.get("days", ["7"])[0])
             chats = db_manager.get_unanswered_chats(limit=limit, max_age_days=days, db_path=db_path)
             self.send_json(200, {
@@ -1881,46 +1940,47 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/chats":
             params = parse_qs(url.query)
             _, db_path, _ = self._resolve_account_params(params)
-            conn = db_manager.get_connection(db_path)
-            cur = conn.cursor()
-            contact_map = db_manager.build_contact_map(cur)
-            tags_map = db_manager.get_all_chats_tags_map(cur)
-            query = """
-            SELECT 
-                c.chat_id,
-                c.nombre AS chat_nombre,
-                c.ultimo_es_mio AS ultimo_es_mio,
-                meta.custom_name AS custom_name,
-                meta.ticket_status AS ticket_status,
-                meta.support_priority AS support_priority,
-                meta.assigned_to AS assigned_to,
-                meta.follow_up_date AS follow_up_date,
-                ct.nombre AS ct_nombre,
-                ct.push_name AS ct_push,
-                ct.numero AS ct_numero,
-                ct_num.nombre AS ct_num_nombre,
-                ct_num.push_name AS ct_num_push,
-                ct_num.numero AS ct_num_numero,
-                ct_can.nombre AS ct_can_nombre,
-                ct_can.push_name AS ct_can_push,
-                ct_can.numero AS ct_can_numero,
-                ca.canonical_id,
-                c.ultimo_mensaje AS last_msg,
-                c.ultimo_tipo AS last_tipo,
-                c.ultimo_timestamp AS last_ts
-            FROM chats c
-            LEFT JOIN crm_contact_meta meta ON c.chat_id = meta.chat_id
-            LEFT JOIN contactos ct ON c.chat_id = ct.contact_id
-            LEFT JOIN contactos ct_num ON c.chat_id LIKE '%@c.us' AND REPLACE(c.chat_id, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
-            LEFT JOIN contact_aliases ca ON c.chat_id = ca.alias_id
-            LEFT JOIN contactos ct_can ON ca.canonical_id = ct_can.contact_id
-            WHERE c.chat_id IS NOT NULL 
-              AND c.chat_id != 'status@broadcast'
-            ORDER BY c.ultimo_timestamp DESC
-            """
-            cur.execute(query)
-            rows = [dict(row) for row in cur.fetchall()]
-            conn.close()
+            with db_manager.db_connection(db_path, write=False) as conn:
+                cur = conn.cursor()
+                contact_map = db_manager.build_contact_map(cur)
+                tags_map = db_manager.get_all_chats_tags_map(cur)
+                query = """
+                SELECT 
+                    c.chat_id,
+                    c.nombre AS chat_nombre,
+                    c.ultimo_es_mio AS ultimo_es_mio,
+                    meta.custom_name AS custom_name,
+                    meta.ticket_status AS ticket_status,
+                    meta.support_priority AS support_priority,
+                    meta.assigned_to AS assigned_to,
+                    meta.follow_up_date AS follow_up_date,
+                    COALESCE(meta.radar_ignored, 0) AS radar_ignored,
+                    COALESCE(meta.radar_dismissed_at, 0) AS radar_dismissed_at,
+                    ct.nombre AS ct_nombre,
+                    ct.push_name AS ct_push,
+                    ct.numero AS ct_numero,
+                    ct_num.nombre AS ct_num_nombre,
+                    ct_num.push_name AS ct_num_push,
+                    ct_num.numero AS ct_num_numero,
+                    ct_can.nombre AS ct_can_nombre,
+                    ct_can.push_name AS ct_can_push,
+                    ct_can.numero AS ct_can_numero,
+                    ca.canonical_id,
+                    c.ultimo_mensaje AS last_msg,
+                    c.ultimo_tipo AS last_tipo,
+                    c.ultimo_timestamp AS last_ts
+                FROM chats c
+                LEFT JOIN contact_aliases ca ON c.chat_id = ca.alias_id
+                LEFT JOIN crm_contact_meta meta ON COALESCE(ca.canonical_id, c.chat_id) = meta.chat_id
+                LEFT JOIN contactos ct ON c.chat_id = ct.contact_id
+                LEFT JOIN contactos ct_num ON c.chat_id LIKE '%@c.us' AND REPLACE(c.chat_id, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
+                LEFT JOIN contactos ct_can ON ca.canonical_id = ct_can.contact_id
+                WHERE c.chat_id IS NOT NULL 
+                  AND c.chat_id != 'status@broadcast'
+                ORDER BY c.ultimo_timestamp DESC
+                """
+                cur.execute(query)
+                rows = [dict(row) for row in cur.fetchall()]
             chats = []
             for row_d in rows:
                 phone = (
@@ -1955,10 +2015,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     "is_saved": is_saved,
                     "tags": chat_tags,
                     "ultimo_es_mio": row_d.get("ultimo_es_mio", 0),
-                    "ticket_status": row_d.get("ticket_status") or "open",
+                    "ticket_status": row_d.get("ticket_status") or "none",
                     "support_priority": row_d.get("support_priority") if row_d.get("support_priority") is not None else 0,
                     "assigned_to": row_d.get("assigned_to"),
                     "follow_up_date": row_d.get("follow_up_date"),
+                    "radar_ignored": row_d.get("radar_ignored", 0),
+                    "radar_dismissed_at": row_d.get("radar_dismissed_at", 0),
                     "last_msg": db_manager.resolve_mentions_in_text(row_d["last_msg"], contact_map) if row_d.get("last_msg") else row_d.get("last_msg"),
                     "last_tipo": row_d.get("last_tipo"),
                     "last_ts": row_d.get("last_ts")
@@ -1974,41 +2036,40 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "Falta parámetro chat_id"})
                 return
 
-            conn = db_manager.get_connection(db_path)
-            cur = conn.cursor()
-            contact_map = db_manager.build_contact_map(cur)
-            query = """
-            SELECT 
-                m.msg_id,
-                m.chat_id,
-                m.es_mio,
-                m.fecha_utc,
-                m.timestamp,
-                m.tipo,
-                m.contenido,
-                m.archivo_local,
-                m.mimetype,
-                m.tamano,
-                m.duracion,
-                m.thumbnail,
-                m.estado_multimedia,
-                m.quoted_msg_id,
-                m.quoted_author,
-                m.quoted_body,
-                m.reenviado,
-                m.eliminado,
-                COALESCE(ct.nombre, ct_num.nombre, ct.push_name, ct_num.push_name, m.remitente) AS remitente_nombre,
-                m.remitente AS remitente_jid
-            FROM mensajes m
-            LEFT JOIN contactos ct ON m.remitente = ct.contact_id
-            LEFT JOIN contactos ct_num ON REPLACE(m.remitente, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
-            WHERE m.chat_id = ?
-              AND m.tipo NOT IN ('e2e_notification', 'notification_template', 'gp2', 'protocol', 'ciphertext', 'biz_content_placeholder')
-            ORDER BY m.timestamp ASC
-            """
-            cur.execute(query, (chat_id,))
-            messages = [dict(row) for row in cur.fetchall()]
-            conn.close()
+            with db_manager.db_connection(db_path, write=False) as conn:
+                cur = conn.cursor()
+                contact_map = db_manager.build_contact_map(cur)
+                query = """
+                SELECT 
+                    m.msg_id,
+                    m.chat_id,
+                    m.es_mio,
+                    m.fecha_utc,
+                    m.timestamp,
+                    m.tipo,
+                    m.contenido,
+                    m.archivo_local,
+                    m.mimetype,
+                    m.tamano,
+                    m.duracion,
+                    m.thumbnail,
+                    m.estado_multimedia,
+                    m.quoted_msg_id,
+                    m.quoted_author,
+                    m.quoted_body,
+                    m.reenviado,
+                    m.eliminado,
+                    COALESCE(ct.nombre, ct_num.nombre, ct.push_name, ct_num.push_name, m.remitente) AS remitente_nombre,
+                    m.remitente AS remitente_jid
+                FROM mensajes m
+                LEFT JOIN contactos ct ON m.remitente = ct.contact_id
+                LEFT JOIN contactos ct_num ON REPLACE(m.remitente, '@c.us', '@s.whatsapp.net') = ct_num.contact_id
+                WHERE m.chat_id = ?
+                  AND m.tipo NOT IN ('e2e_notification', 'notification_template', 'gp2', 'protocol', 'ciphertext', 'biz_content_placeholder')
+                ORDER BY m.timestamp ASC
+                """
+                cur.execute(query, (chat_id,))
+                messages = [dict(row) for row in cur.fetchall()]
 
             # Mapa de mensajes del chat para auto-resolver mensajes citados si no traían el texto incrustado
             msg_map = {}
@@ -2296,11 +2357,10 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 active_op = settings.get("active_operator", "") or (known_ops[0] if known_ops else "")
                 online_ops = sse_hub.get_sse_hub().get_online_operators()
 
-                session_token = create_lan_session(operator_name or active_op or "Operador", client_ip)
-                cookie_hdr = f"wackup_session={session_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
-
                 # Si NO se especifica operator_name, responder verificación exitosa con lista de operadores y estado
                 if not operator_name:
+                    session_token = create_lan_session(active_op or "Operador", client_ip)
+                    cookie_hdr = f"wackup_session={session_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
                     self.send_json(200, {
                         "ok": True,
                         "session_token": session_token,
@@ -2453,12 +2513,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/presence/heartbeat":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body(max_bytes=65536, allow_empty=True)
+                if payload is None:
+                    return
 
                 chat_id = payload.get("chat_id")
                 raw_op = payload.get("operator") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or ""
@@ -2466,7 +2523,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 settings = config.get_system_settings()
                 active_op = settings.get("active_operator") or (settings.get("known_operators", [""])[0] if settings.get("known_operators") else "")
                 if not raw_op or raw_op.lower() == "operador":
-                    operator = active_op or "Operador"
+                    operator = self.get_current_operator(payload) or active_op or "Operador"
                 else:
                     operator = raw_op
                 client_id = payload.get("client_id")
@@ -2486,12 +2543,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/presence/leave":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body(max_bytes=65536, allow_empty=True)
+                if payload is None:
+                    return
                 chat_id = payload.get("chat_id")
                 client_id = payload.get("client_id")
                 if client_id:
@@ -2502,24 +2556,21 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/viewer/focused":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length > 0:
-                    _ = self.rfile.read(content_length)
+                payload = self._read_json_body(max_bytes=65536, allow_empty=True)
+                if payload is None:
+                    return
                 record_viewer_focused_ack()
                 self.send_json(200, {"ok": True})
                 return
 
             elif url.path == "/api/copilot/notes/log":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body(max_bytes=262144, allow_empty=True)
+                if payload is None:
+                    return
 
                 account_id, db_path, _ = self._resolve_account_params(payload)
                 chat_id = payload.get("chat_id")
-                author = payload.get("author") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or "Operador"
+                author = self.get_current_operator(payload) or "Operador"
                 content = payload.get("content")
 
                 if not chat_id or not content:
@@ -2545,8 +2596,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 chat_id = payload.get("chat_id")
                 author = payload.get("author")
                 if not self.is_local_client():
-                    req_op = self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or author
-                    author = req_op
+                    sess = self._get_session_from_request()
+                    sess_op = (sess.get("operator") if sess else "") or ""
+                    author = (sess_op if sess_op and sess_op.lower() != "operador" else None) or self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or author
+                    if not author:
+                        self.send_json(403, {"ok": False, "error": "Identidad de operador requerida para eliminar notas en modo LAN"})
+                        return
                 deleted = db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
                 if deleted:
                     sse_hub.get_sse_hub().broadcast("crm_update", {
@@ -2733,15 +2788,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 if not self.is_local_client():
                     self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
                     return
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 new_prof = payload.get("profile")
@@ -2771,22 +2819,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/copilot/notes":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
                 chat_id = payload.get("chat_id")
                 notes = payload.get("notes", "")
                 expected_updated_at = payload.get("expected_updated_at")
-                operator_name = payload.get("updated_by") or payload.get("operator") or payload.get("operator_name") or self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or ""
+                operator_name = self.get_current_operator(payload) or ""
 
                 if not chat_id:
                     self.send_json(400, {"ok": False, "error": "Falta chat_id"})
@@ -2828,15 +2869,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/support/ticket":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
@@ -2958,26 +2992,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/radar/dismiss":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=True)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
                 chat_id = payload.get("chat_id")
                 mode = payload.get("mode", "unanswered")
                 reason = payload.get("reason", "no_reply_needed")
-                operator_name = (
-                    payload.get("operator_name")
-                    or payload.get("operator")
-                    or payload.get("updated_by")
-                    or self.headers.get("X-WAckup-Operator")
-                    or self.headers.get("X-Operator-Name")
-                    or ""
-                )
+                operator_name = self.get_current_operator(payload) or ""
 
                 if not chat_id:
                     self.send_json(400, {"ok": False, "error": "Falta chat_id"})
@@ -3005,25 +3028,14 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/radar/undo":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=True)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
                 chat_id = payload.get("chat_id")
                 prev_state = payload.get("prev_state")
-                operator_name = (
-                    payload.get("operator_name")
-                    or payload.get("operator")
-                    or payload.get("updated_by")
-                    or self.headers.get("X-WAckup-Operator")
-                    or self.headers.get("X-Operator-Name")
-                    or ""
-                )
+                operator_name = self.get_current_operator(payload) or ""
 
                 if not chat_id or not isinstance(prev_state, dict):
                     self.send_json(400, {"ok": False, "error": "Datos insuficientes para deshacer"})
@@ -3049,15 +3061,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/support/templates":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
@@ -3086,12 +3091,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/support/templates/delete":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length) if content_length > 0 else b"{}"
-                try:
-                    payload = json.loads(body.decode("utf-8")) if body else {}
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body(allow_empty=True)
+                if payload is None:
+                    return
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
                 template_id = payload.get("template_id") or payload.get("id")
                 if not template_id:
@@ -3105,15 +3107,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/sales/pipeline":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
@@ -3150,15 +3145,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/crm/kanban/move":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
@@ -3172,13 +3160,23 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     self.send_json(400, {"ok": False, "error": "Falta chat_id"})
                     return
 
+                extra_kanban = {}
+                if ticket_status in ("open", "pending", "resolved"):
+                    extra_kanban["radar_dismissed_at"] = int(time.time())
+                    if ticket_status == "open":
+                        extra_kanban["radar_ignored"] = 0
+                updated_by = self.get_current_operator(payload)
+                if updated_by:
+                    extra_kanban["updated_by"] = updated_by
+
                 res = db_manager.upsert_contact_meta(
                     chat_id,
                     sales_stage=sales_stage,
                     ticket_status=ticket_status,
                     estimated_value=estimated_value,
                     follow_up_date=follow_up_date,
-                    db_path=db_path
+                    db_path=db_path,
+                    **extra_kanban
                 )
                 sse_hub.get_sse_hub().broadcast("crm_update", {
                     "type": "kanban_moved",
@@ -3189,15 +3187,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/copilot/tags":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"ok": False, "error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
                     return
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
@@ -3345,20 +3336,20 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 note_id = params.get("id", [None])[0] or params.get("note_id", [None])[0]
                 author = params.get("author", [None])[0]
                 if not note_id:
-                    content_length = int(self.headers.get("Content-Length", 0))
-                    if content_length > 0:
-                        body = self.rfile.read(content_length)
-                        try:
-                            payload = json.loads(body.decode("utf-8"))
-                            note_id = payload.get("id") or payload.get("note_id")
-                            author = payload.get("author") or author
-                        except Exception:
-                            pass
+                    payload = self._read_json_body(allow_empty=True)
+                    if payload:
+                        note_id = payload.get("id") or payload.get("note_id")
+                        author = payload.get("author") or author
                 if not note_id:
                     self.send_json(400, {"ok": False, "error": "id de nota requerido"})
                     return
                 if not self.is_local_client():
-                    author = self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or author
+                    sess = self._get_session_from_request()
+                    sess_op = (sess.get("operator") if sess else "") or ""
+                    author = (sess_op if sess_op and sess_op.lower() != "operador" else None) or self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or author
+                    if not author:
+                        self.send_json(403, {"ok": False, "error": "Identidad de operador requerida para eliminar notas en modo LAN"})
+                        return
                 deleted = db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
                 if deleted:
                     sse_hub.get_sse_hub().broadcast("crm_update", {

@@ -105,8 +105,13 @@ class TestPhase7Support(unittest.TestCase):
         self.assertEqual(system_note["author"], "Sistema")
         self.assertIn("Ticket reabierto automáticamente", system_note["content"])
 
-        # 4. Mensaje del cliente en ticket resolved -> DEBE reabrir a 'open'
+        # 4. Mensaje del cliente en ticket resolved enviado JUNTO con el lote 'chats' (como envía bridge.js) -> DEBE reabrir a 'open'
         data_client_resolved = {
+            "chats": [{
+                "id": "cliente_resolved@c.us",
+                "name": "Cliente Resolved",
+                "t": t2
+            }],
             "messages": [{
                 "id": "false_cliente_resolved@c.us_2",
                 "chatId": "cliente_resolved@c.us",

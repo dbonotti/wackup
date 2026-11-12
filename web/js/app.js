@@ -1,8 +1,10 @@
-    // Si se abre desde la extensión o enlace directo con PIN y Operador, recordarlos de inmediato
+    // Si se abre desde la extensión o enlace directo con PIN, Handoff y Operador, recordarlos y limpiar URL de inmediato
+    let _pendingHandoffCode = null;
     try {
       const _initUrlParams = new URLSearchParams(window.location.search);
       const _urlPin = _initUrlParams.get('pin');
       const _urlOp = _initUrlParams.get('operator');
+      const _urlHandoff = _initUrlParams.get('handoff');
       let _urlParamsCleaned = false;
       if (_urlPin) {
         localStorage.setItem('wackup_office_pin', _urlPin.trim());
@@ -12,6 +14,11 @@
       if (_urlOp) {
         localStorage.setItem('wackup_operator_name', _urlOp.trim());
         _initUrlParams.delete('operator');
+        _urlParamsCleaned = true;
+      }
+      if (_urlHandoff) {
+        _pendingHandoffCode = _urlHandoff.trim();
+        _initUrlParams.delete('handoff');
         _urlParamsCleaned = true;
       }
       if (_urlParamsCleaned) {
@@ -91,6 +98,12 @@
       if (teamSec && teamSec.dataset.userToggled !== 'true') {
         teamSec.style.display = team ? 'flex' : 'none';
         if (arrow) arrow.textContent = team ? '▴' : '▾';
+      }
+
+      // 4. Métricas de Soporte: ocultar tabla de desglose por operador en modo standalone
+      const metricsOpCard = document.getElementById('metricsOperatorCard');
+      if (metricsOpCard) {
+        metricsOpCard.style.display = team ? 'block' : 'none';
       }
     }
 
@@ -299,7 +312,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeAllDropdowns();
-        if (window.innerWidth < 1440 && typeof isChatCopilotOpen !== 'undefined' && isChatCopilotOpen) {
+        if (window.innerWidth < 1100 && typeof isChatCopilotOpen !== 'undefined' && isChatCopilotOpen) {
           toggleChatCopilot(false);
         }
         return;
@@ -366,11 +379,20 @@
       }
     }
 
-    function showToast(message) {
+    let _toastHideTimer = null;
+    function showToast(message, duration = 3500) {
       const toast = document.getElementById('toast');
+      if (!toast) return;
+      if (_toastHideTimer) {
+        clearTimeout(_toastHideTimer);
+        _toastHideTimer = null;
+      }
       toast.textContent = message;
       toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3500);
+      _toastHideTimer = setTimeout(() => {
+        toast.style.display = 'none';
+        _toastHideTimer = null;
+      }, Number(duration) > 0 ? Number(duration) : 3500);
     }
 
     function updateProfileUIElements(profile, label) {
@@ -779,7 +801,7 @@
           } else if (data.status === 'dev_branch') {
             showToast(`⚙️ Modo desarrollo (${data.branch || 'rama'}). Actualizaciones pausadas.`);
           } else {
-            showToast(`✓ WAckup está actualizado (${data.current_version || 'v3.0.0'}).`);
+            showToast(`✓ WAckup está actualizado (${data.current_version || 'v3.1.0'}).`);
           }
         } else {
           showToast(`⚠️ ${data.message || 'No se pudo conectar con GitHub'}`);
@@ -793,9 +815,9 @@
       const modal = document.getElementById('updateModal');
       if (!modal) return;
       const curEl = document.getElementById('updateCurrentVer');
-      if (curEl) curEl.textContent = `v${info.current_version || '3.0.0'}`;
+      if (curEl) curEl.textContent = `v${info.current_version || '3.1.0'}`;
       const latEl = document.getElementById('updateLatestVer');
-      if (latEl) latEl.textContent = `v${info.latest_version || '3.0.0'}`;
+      if (latEl) latEl.textContent = `v${info.latest_version || '3.1.0'}`;
       const notesEl = document.getElementById('updateNotesContainer');
       if (notesEl) notesEl.textContent = info.release_notes || "Mejoras de rendimiento, estabilidad y nuevas funciones.";
       const prog = document.getElementById('updateProgressBox');
@@ -805,7 +827,7 @@
       const btn = document.getElementById('btnApplyUpdate');
       if (btn) {
         btn.disabled = false;
-        btn.textContent = `⬇️ Actualizar a v${info.latest_version || '3.0.0'}`;
+        btn.textContent = `⬇️ Actualizar a v${info.latest_version || '3.1.0'}`;
       }
       modal.style.display = 'flex';
     }
@@ -977,6 +999,24 @@
     async function init() {
       initTheme();
 
+      // Si había un handoff pendiente (por ej. si se navegó en una pestaña ya existente), canjearlo si aún no fue consumido
+      if (_pendingHandoffCode) {
+        const codeToRedeem = _pendingHandoffCode;
+        _pendingHandoffCode = null;
+        try {
+          const hRes = await _origFetch('/api/auth/redeem_handoff', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: codeToRedeem })
+          });
+          const hData = await hRes.json();
+          if (hData && hData.ok && hData.operator) {
+            myOperatorName = hData.operator;
+            localStorage.setItem('wackup_operator_name', myOperatorName);
+          }
+        } catch (e) {}
+      }
+
       // En modo red LAN / cliente remoto, verificar primero si se requiere PIN
       // para evitar disparar ráfagas de 401s antes de que el usuario ingrese sus credenciales.
       try {
@@ -1043,7 +1083,7 @@
         if (data && data.ok) {
           cachedSystemInfo = data;
           const verEl = document.getElementById('systemAppVersion');
-          if (verEl) verEl.textContent = `v${data.version || '3.0.0'}`;
+          if (verEl) verEl.textContent = `v${data.version || '3.1.0'}`;
 
           const extInp = document.getElementById('extPathInput');
           if (extInp && data.extension_path) extInp.value = data.extension_path;
@@ -1538,12 +1578,30 @@
       }
     }
 
+    function isChatUnanswered(c) {
+      if (!c) return false;
+      const cid = String(c.chat_id || '');
+      if (cid.endsWith('@g.us') || cid.endsWith('@newsletter') || cid.endsWith('@broadcast') || cid === 'status@broadcast') {
+        return false;
+      }
+      if (c.ultimo_es_mio !== 0) return false;
+      if (c.ticket_status === 'pending' || c.ticket_status === 'resolved') return false;
+      if (c.radar_ignored) return false;
+      if ((c.last_ts || 0) <= (c.radar_dismissed_at || 0)) return false;
+      return true;
+    }
+
     function setChatQuickFilter(filter) {
       currentChatQuickFilter = filter;
       ['all', 'unanswered', 'pending'].forEach(f => {
         const pill = document.getElementById('pillFilter-' + f);
         if (pill) pill.classList.toggle('active', f === filter);
       });
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput && searchInput.value.trim()) {
+        searchInput.value = '';
+        currentMode = 'chats';
+      }
       renderChats(allChats);
     }
     window.setChatQuickFilter = setChatQuickFilter;
@@ -1555,7 +1613,7 @@
 
       // Actualizar contadores de filtros rápidos
       if (Array.isArray(allChats)) {
-        const unCount = allChats.filter(c => c && c.ultimo_es_mio === 0 && !String(c.chat_id).endsWith('@g.us') && c.chat_id !== 'status@broadcast').length;
+        const unCount = allChats.filter(isChatUnanswered).length;
         const pendCount = allChats.filter(c => c && c.ticket_status === 'pending').length;
         const unEl = document.getElementById('countUnanswered');
         const pendEl = document.getElementById('countPending');
@@ -1565,7 +1623,7 @@
 
       let displayedChats = Array.isArray(chats) ? chats : [];
       if (currentChatQuickFilter === 'unanswered') {
-        displayedChats = displayedChats.filter(c => c && c.ultimo_es_mio === 0 && !String(c.chat_id).endsWith('@g.us') && c.chat_id !== 'status@broadcast');
+        displayedChats = displayedChats.filter(isChatUnanswered);
       } else if (currentChatQuickFilter === 'pending') {
         displayedChats = displayedChats.filter(c => c && c.ticket_status === 'pending');
       }
@@ -1636,10 +1694,10 @@
         }
 
         let statusBadgesHtml = '';
-        if (chat.ultimo_es_mio === 0 && !String(chat.chat_id).endsWith('@g.us') && chat.chat_id !== 'status@broadcast') {
-          statusBadgesHtml += `<span class="chat-badge-unanswered" title="Esperando respuesta del operador">🔴 Sin responder</span>`;
-        } else if (chat.ticket_status === 'pending') {
+        if (chat.ticket_status === 'pending') {
           statusBadgesHtml += `<span class="chat-badge-pending" title="En espera del cliente">🟡 En espera</span>`;
+        } else if (isChatUnanswered(chat)) {
+          statusBadgesHtml += `<span class="chat-badge-unanswered" title="Esperando respuesta del operador">🔴 Sin responder</span>`;
         }
         if (chat.support_priority == 2) {
           statusBadgesHtml += `<span class="chat-badge-priority-urgent" title="Prioridad Urgente">🔥</span>`;
@@ -2646,7 +2704,10 @@
     }
 
     function copyCopilotTemplateById(templateId) {
-      const t = currentTemplates.find(x => String(x.id) === String(templateId));
+      const list = (currentCopilotData && Array.isArray(currentCopilotData.templates))
+        ? currentCopilotData.templates
+        : (allWorkspaceTemplates || []);
+      const t = list.find(x => String(x.id) === String(templateId));
       if (t) {
         copyCopilotTemplate(t.body);
       }
@@ -2680,7 +2741,8 @@
       let processed = templateBody
         .replace(/{nombre}/gi, name)
         .replace(/{saludo}/gi, saludo)
-        .replace(/{fecha}/gi, fecha);
+        .replace(/{fecha}/gi, fecha)
+        .replace(/{operador}/gi, myOperatorName || 'Operador');
 
       navigator.clipboard.writeText(processed).then(() => {
         showToast('✅ Respuesta rápida copiada al portapapeles');
@@ -2828,7 +2890,7 @@
         if (data && data.ok) {
           flashCopilotSaveIndicator();
           showToast(val ? `Recordatorio: ${val} ✓` : 'Recordatorio eliminado');
-          const followInput = document.getElementById('copilotFollowInput');
+          const followInput = document.getElementById('copilotFollowUpInput');
           if (followInput) followInput.value = val || '';
         }
       } catch (e) {
@@ -3168,6 +3230,7 @@
               takeCaseBtn = `<button type="button" class="btn-card-action btn-card-take" onclick="takeKanbanCase('${escapeHtml(card.chat_id)}')">🙋‍♂️ Tomar</button>`;
             }
 
+            const isRadarCol = (col.id === 'radar' || card.is_radar);
             const stageBtns = (type === 'sales') ? `
               <select class="btn-card-action" onchange="moveKanbanCard('${escapeHtml(card.chat_id)}', this.value, null)" title="Cambiar etapa">
                 <option value="lead" ${card.sales_stage === 'lead' ? 'selected' : ''}>🎯 Lead</option>
@@ -3177,9 +3240,10 @@
               </select>
             ` : `
               <select class="btn-card-action" onchange="moveKanbanCard('${escapeHtml(card.chat_id)}', null, this.value)" title="Cambiar ticket">
-                <option value="open" ${card.ticket_status === 'open' ? 'selected' : ''}>🟢 Abierto</option>
-                <option value="pending" ${card.ticket_status === 'pending' ? 'selected' : ''}>🟡 En Espera</option>
-                <option value="resolved" ${card.ticket_status === 'resolved' ? 'selected' : ''}>⚪ Resuelto</option>
+                ${isRadarCol ? '<option value="radar" selected disabled>📥 Radar</option>' : ''}
+                <option value="open" ${(!isRadarCol && card.ticket_status === 'open') ? 'selected' : ''}>🟢 Abierto</option>
+                <option value="pending" ${(!isRadarCol && card.ticket_status === 'pending') ? 'selected' : ''}>🟡 En Espera</option>
+                <option value="resolved" ${(!isRadarCol && card.ticket_status === 'resolved') ? 'selected' : ''}>⚪ Resuelto</option>
               </select>
             `;
 
@@ -3767,7 +3831,10 @@
     }
 
     function copyTemplateDirectById(templateId) {
-      const t = currentTemplates.find(x => String(x.id) === String(templateId));
+      const list = (allWorkspaceTemplates && allWorkspaceTemplates.length > 0)
+        ? allWorkspaceTemplates
+        : ((currentCopilotData && Array.isArray(currentCopilotData.templates)) ? currentCopilotData.templates : []);
+      const t = list.find(x => String(x.id) === String(templateId));
       if (t) {
         copyTemplateDirect(t.body || '');
       }
@@ -4153,12 +4220,18 @@
 
       let handoffNote = '';
       if (assignedTo && myOperatorName && assignedTo.toLowerCase() !== myOperatorName.toLowerCase()) {
-        const notePrompt = prompt(`¿Deseas agregar una nota de transferencia para ${assignedTo}? (opcional):`, '');
+        const notePrompt = await showPromptDialog({
+          title: `Transferir a ${assignedTo}`,
+          message: `¿Deseas agregar una nota interna de transferencia para <b>${escapeHtml(assignedTo)}</b>? (opcional):`,
+          placeholder: 'Escribe una nota o deja vacío...',
+          confirmText: 'Transferir'
+        });
         if (notePrompt === null) {
-          sel.value = currentCopilotMeta ? (currentCopilotMeta.assigned_to || '') : '';
+          const prevAssigned = (currentCopilotData && currentCopilotData.crm) ? (currentCopilotData.crm.assigned_to || '') : '';
+          sel.value = prevAssigned;
           return;
         }
-        handoffNote = notePrompt.trim();
+        handoffNote = String(notePrompt || '').trim();
       }
 
       try {
@@ -4496,8 +4569,10 @@
 
         case 'handoff_alert':
           if (msg.to_operator && myOperatorName && msg.to_operator.toLowerCase() === myOperatorName.toLowerCase()) {
-            const noteText = msg.note ? `<br><b>Nota:</b> "${escapeHtml(msg.note)}"` : '';
-            showToast(`📢 <b>${escapeHtml(msg.from_operator || 'Un compañero')}</b> te transfirió el caso ${escapeHtml(msg.chat_id)}.${noteText}`, 7000);
+            const targetChat = Array.isArray(allChats) ? allChats.find(c => c.chat_id === msg.chat_id || c.canonical_id === msg.chat_id) : null;
+            const chatLabel = targetChat ? formatFriendlyName(targetChat.display_name, targetChat.chat_id, targetChat.phone_number) : (msg.chat_id || 'un caso');
+            const noteText = msg.note ? ` — Nota: "${msg.note}"` : '';
+            showToast(`📢 ${msg.from_operator || 'Un compañero'} te transfirió ${chatLabel}${noteText}`, 7000);
           }
           break;
 
@@ -4573,10 +4648,12 @@
           if (msg.profile && (!msg.account_id || msg.account_id === currentAccountId)) {
             const label = msg.profile_label || msg.profile;
             updateProfileUIElements(msg.profile, label);
-            const acc = accountsList.find(a => a.id === (msg.account_id || currentAccountId));
-            if (acc) {
-              acc.workspace_profile = msg.profile;
-              acc.workspace_profile_label = label;
+            if (Array.isArray(availableAccounts)) {
+              const acc = availableAccounts.find(a => a.id === (msg.account_id || currentAccountId));
+              if (acc) {
+                acc.workspace_profile = msg.profile;
+                acc.workspace_profile_label = label;
+              }
             }
           }
           break;
@@ -5007,7 +5084,9 @@
     async function showLanPinModal(errMsg = '') {
       const modal = document.getElementById('lanPinModal');
       const pinInput = document.getElementById('modalLanPinInput');
+      const opGroup = document.getElementById('lanModalOperatorGroup');
       const opSelect = document.getElementById('modalOperatorSelect');
+      const submitBtn = document.getElementById('btnLanModalSubmit') || document.querySelector('#lanPinModal .btn-primary');
       const errEl = document.getElementById('lanPinErrorMsg');
 
       // Si el modal ya está desplegado, no reiniciar los inputs ni regenerar las opciones del selector
@@ -5015,6 +5094,7 @@
         if (errEl) {
           if (errMsg) {
             errEl.textContent = errMsg;
+            errEl.style.color = '#ef4444';
             errEl.style.display = 'block';
           } else {
             errEl.style.display = 'none';
@@ -5037,21 +5117,17 @@
       if (modal) modal.style.display = 'flex';
       if (pinInput && !pinInput.value) pinInput.value = myOfficePin;
 
-      if (!knownOperatorsList || knownOperatorsList.length === 0) {
-        try {
-          const res = await _origFetch('/api/system/network');
-          const netData = await res.json();
-          if (netData && Array.isArray(netData.known_operators)) {
-            knownOperatorsList = netData.known_operators;
-          }
-        } catch (e) {}
+      const hasKnownOps = Array.isArray(knownOperatorsList) && knownOperatorsList.length > 0;
+      if (opGroup) {
+        opGroup.style.display = hasKnownOps ? 'block' : 'none';
+      }
+      if (submitBtn) {
+        submitBtn.textContent = hasKnownOps ? 'Conectar' : 'Verificar PIN';
       }
 
       if (opSelect) {
         const currentSelectedVal = opSelect.value;
-        if (!knownOperatorsList || knownOperatorsList.length === 0) {
-          opSelect.innerHTML = '<option value="">(Sin operadores dados de alta en PC principal)</option>';
-        } else {
+        if (hasKnownOps) {
           opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>' +
             knownOperatorsList.map(op => `<option value="${escapeHtml(op)}">${escapeHtml(op)}</option>`).join('');
 
@@ -5060,12 +5136,15 @@
           } else if (myOperatorName && knownOperatorsList.some(o => o.toLowerCase() === myOperatorName.toLowerCase())) {
             opSelect.value = myOperatorName;
           }
+        } else {
+          opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>';
         }
       }
 
       if (errEl) {
         if (errMsg) {
           errEl.textContent = errMsg;
+          errEl.style.color = '#ef4444';
           errEl.style.display = 'block';
         } else {
           errEl.style.display = 'none';
@@ -5073,7 +5152,9 @@
       }
 
       setTimeout(() => {
-        if (opSelect && (!opSelect.value || opSelect.value === 'Operador')) {
+        if (pinInput && !pinInput.value) {
+          pinInput.focus();
+        } else if (hasKnownOps && opSelect && (!opSelect.value || opSelect.value === 'Operador')) {
           opSelect.focus();
         } else if (pinInput) {
           pinInput.focus();
@@ -5092,9 +5173,10 @@
 
     async function submitLanPinAuth() {
       const pinInput = document.getElementById('modalLanPinInput');
+      const opGroup = document.getElementById('lanModalOperatorGroup');
       const opSelect = document.getElementById('modalOperatorSelect');
       const errEl = document.getElementById('lanPinErrorMsg');
-      const submitBtn = document.querySelector('#lanPinModal .btn-primary');
+      const submitBtn = document.getElementById('btnLanModalSubmit') || document.querySelector('#lanPinModal .btn-primary');
 
       const pin = pinInput ? pinInput.value.trim() : '';
       const op = opSelect ? opSelect.value.trim() : '';
@@ -5102,6 +5184,7 @@
       if (!pin) {
         if (errEl) {
           errEl.textContent = 'Por favor ingresa el PIN de oficina.';
+          errEl.style.color = '#ef4444';
           errEl.style.display = 'block';
         }
         if (pinInput) pinInput.focus();
@@ -5109,7 +5192,7 @@
       }
 
       if (!op) {
-        // Si aún no seleccionó operador (o no estaban cargados los operadores), validar primero el PIN
+        // Paso 1: Validar primero el PIN y poblar la lista de operadores
         if (submitBtn) {
           submitBtn.disabled = true;
           submitBtn.textContent = 'Verificando PIN...';
@@ -5123,13 +5206,29 @@
           const data = await res.json();
           if (data && data.ok) {
             knownOperatorsList = Array.isArray(data.known_operators) ? data.known_operators : [];
+            if (knownOperatorsList.length === 0) {
+              // Si no hay operadores configurados, conectar directamente con el operador activo o por defecto
+              myOfficePin = pin;
+              myOperatorName = data.active_operator || 'Operador';
+              localStorage.setItem('wackup_office_pin', myOfficePin);
+              localStorage.setItem('wackup_operator_name', myOperatorName);
+              hideLanPinModal();
+              showToast('✓ Conectado exitosamente como ' + myOperatorName);
+              connectSSE();
+              init();
+              return;
+            }
+            if (opGroup) opGroup.style.display = 'block';
             if (opSelect) {
               opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>' +
                 knownOperatorsList.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('');
+              if (myOperatorName && knownOperatorsList.some(o => o.toLowerCase() === myOperatorName.toLowerCase())) {
+                opSelect.value = myOperatorName;
+              }
               opSelect.focus();
             }
             if (errEl) {
-              errEl.textContent = '✓ PIN verificado. Por favor selecciona tu nombre de operador.';
+              errEl.textContent = '✓ PIN verificado. Selecciona tu nombre de operador y pulsa Conectar.';
               errEl.style.color = '#10b981';
               errEl.style.display = 'block';
             }
@@ -5183,6 +5282,7 @@
         } else {
           if (errEl) {
             errEl.textContent = data.error || 'PIN incorrecto. Consulta el PIN en la PC principal.';
+            errEl.style.color = '#ef4444';
             errEl.style.display = 'block';
           }
           if (pinInput) {
@@ -5193,6 +5293,7 @@
       } catch (err) {
         if (errEl) {
           errEl.textContent = 'Error de conexión con el servidor.';
+          errEl.style.color = '#ef4444';
           errEl.style.display = 'block';
         }
       } finally {

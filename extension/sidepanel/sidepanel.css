@@ -941,8 +941,6 @@ label {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
-  box-shadow: 0 0 0 1px #3b82f6;
-}
 .search-result-meta {
   display: flex;
   justify-content: space-between;

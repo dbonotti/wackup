@@ -56,7 +56,7 @@ def test_html_css_architecture():
     assert 'id="railBtnCrm"' in html, "Falta railBtnCrm"
     assert 'id="railBtnTemplates"' in html, "Falta railBtnTemplates"
     assert 'id="railBtnSystem"' in html, "Falta railBtnSystem"
-    assert 'v3.0' in html, "Falta version v3.0 en el App Rail"
+    assert any(v in html for v in ['v3.1', 'v3.0']), "Falta version v3.1/v3.0 en el App Rail"
 
     # 2. Las 4 Vistas de Espacios de Trabajo
     assert 'id="view-conversations"' in html, "Falta #view-conversations"

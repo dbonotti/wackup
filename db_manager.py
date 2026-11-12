@@ -73,6 +73,12 @@ def get_connection(db_path=DB_FILE, check_init=True):
 def init_db(db_path=DB_FILE):
     """Inicializa la base de datos, aplica migraciones de columnas y configura FTS5."""
     conn = get_connection(db_path, check_init=False)
+    try:
+        _init_db_on_conn(conn)
+    finally:
+        conn.close()
+
+def _init_db_on_conn(conn):
     cur = conn.cursor()
 
     # 1. Esquema base
@@ -323,7 +329,6 @@ def init_db(db_path=DB_FILE):
     init_workspace_tables(conn)
 
     conn.commit()
-    conn.close()
 
 def resolve_canonical_chat_id(cur_or_conn, chat_id):
     """
@@ -750,22 +755,20 @@ def get_best_contact_display(custom_name=None, chat_name=None, contact_name=None
 
 def get_contacts_for_export(db_path=DB_FILE):
     """Obtiene la lista consolidada y sin duplicados de contactos con nombre y número de teléfono."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    resolve_lid_phone_numbers(cur)
-    conn.commit()
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        resolve_lid_phone_numbers(cur)
 
-    cur.execute("""
-        SELECT contact_id, nombre, push_name, numero
-        FROM contactos
-        WHERE contact_id IS NOT NULL
-          AND contact_id != '0@c.us'
-          AND contact_id NOT LIKE '%@g.us'
-          AND contact_id NOT LIKE '%@broadcast'
-          AND contact_id NOT LIKE '%@newsletter'
-    """)
-    rows = cur.fetchall()
-    conn.close()
+        cur.execute("""
+            SELECT contact_id, nombre, push_name, numero
+            FROM contactos
+            WHERE contact_id IS NOT NULL
+              AND contact_id != '0@c.us'
+              AND contact_id NOT LIKE '%@g.us'
+              AND contact_id NOT LIKE '%@broadcast'
+              AND contact_id NOT LIKE '%@newsletter'
+        """)
+        rows = cur.fetchall()
 
     by_phone = {}
     for r in rows:
@@ -827,62 +830,61 @@ def extract_id(val):
 
 def get_sync_status(db_path=DB_FILE, include_ids=False):
     """Devuelve el estado de sincronización actual y el último timestamp registrado."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM mensajes")
-    total_messages = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM mensajes")
+        total_messages = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(*) FROM chats")
-    total_chats = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM chats")
+        total_chats = cur.fetchone()[0]
 
-    cur.execute("SELECT COUNT(*) FROM contactos")
-    total_contacts = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM contactos")
+        total_contacts = cur.fetchone()[0]
 
-    cur.execute("""
-        SELECT MAX(timestamp) FROM mensajes
-        WHERE NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = '') AND (quoted_body IS NULL OR quoted_body = ''))
-    """)
-    max_ts = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'pendiente' AND intentos < 3")
-    pending_media = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'descargado'")
-    downloaded_media = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'error' OR (estado = 'pendiente' AND intentos >= 3)")
-    failed_media = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'expirado'")
-    expired_media = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM mensajes WHERE contenido IS NOT NULL AND contenido != ''")
-    valid_messages = cur.fetchone()[0]
-
-    result = {
-        "total_messages": total_messages,
-        "valid_messages": valid_messages,
-        "total_chats": total_chats,
-        "total_contacts": total_contacts,
-        "last_timestamp": max_ts,
-        "pending_media": pending_media,
-        "downloaded_media": downloaded_media,
-        "failed_media": failed_media,
-        "expired_media": expired_media
-    }
-
-    if include_ids:
         cur.execute("""
-            SELECT msg_id FROM mensajes
-            WHERE msg_id IS NOT NULL
-              AND reenviado IS NOT NULL
-              AND NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = ''))
+            SELECT MAX(timestamp) FROM mensajes
+            WHERE NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = '') AND (quoted_body IS NULL OR quoted_body = ''))
         """)
-        result["synced_msg_ids"] = [r[0] for r in cur.fetchall()]
+        max_ts = cur.fetchone()[0] or 0
 
-    conn.close()
-    return result
+        cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'pendiente' AND intentos < 3")
+        pending_media = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'descargado'")
+        downloaded_media = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'error' OR (estado = 'pendiente' AND intentos >= 3)")
+        failed_media = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM multimedia WHERE estado = 'expirado'")
+        expired_media = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM mensajes WHERE contenido IS NOT NULL AND contenido != ''")
+        valid_messages = cur.fetchone()[0]
+
+        result = {
+            "total_messages": total_messages,
+            "valid_messages": valid_messages,
+            "total_chats": total_chats,
+            "total_contacts": total_contacts,
+            "last_timestamp": max_ts,
+            "pending_media": pending_media,
+            "downloaded_media": downloaded_media,
+            "failed_media": failed_media,
+            "expired_media": expired_media
+        }
+
+        if include_ids:
+            cur.execute("""
+                SELECT msg_id FROM mensajes
+                WHERE msg_id IS NOT NULL
+                  AND reenviado IS NOT NULL
+                  AND NOT (tipo = 'chat' AND (contenido IS NULL OR contenido = ''))
+            """)
+            result["synced_msg_ids"] = [r[0] for r in cur.fetchall()]
+
+        return result
 
 def extract_base64_jpeg(text):
     if not text or not isinstance(text, str):
@@ -1070,6 +1072,16 @@ def _save_incremental_sync_tx(cur, data):
     if contacts:
         resolve_lid_phone_numbers(cur)
 
+    # Capturar último timestamp previo de los chats antes de actualizar la tabla chats (Fase 2: auto-reapertura confiable)
+    prev_chat_timestamps = {}
+    try:
+        cur.execute("SELECT chat_id, ultimo_timestamp FROM chats")
+        for r_ch in cur.fetchall():
+            if r_ch[0]:
+                prev_chat_timestamps[r_ch[0]] = r_ch[1] or 0
+    except Exception:
+        pass
+
     # 2. Chats
     chats = data.get("chats", [])
     for ch in chats:
@@ -1252,10 +1264,9 @@ def _save_incremental_sync_tx(cur, data):
             # Auto-reapertura de tickets al responder el cliente (Fase 2)
             # Solo aplica a chats individuales (no grupos), cuando el mensaje es entrante (is_mine == 0) y ts > prev_ts
             if not chat_id.endswith("@g.us") and not is_mine and ts and m_type != "call_log":
-                cur.execute("SELECT ultimo_timestamp FROM chats WHERE chat_id = ?", (chat_id,))
-                prev_row = cur.fetchone()
-                prev_ts = prev_row[0] if (prev_row and prev_row[0]) else 0
+                prev_ts = prev_chat_timestamps.get(chat_id, 0)
                 if ts > prev_ts:
+                    prev_chat_timestamps[chat_id] = ts
                     canon_cid = resolve_canonical_chat_id(cur, chat_id)
                     cur.execute("SELECT ticket_status FROM crm_contact_meta WHERE chat_id = ?", (canon_cid,))
                     meta_row = cur.fetchone()
@@ -1358,130 +1369,126 @@ def _save_incremental_sync_tx(cur, data):
 
 def retry_failed_media(db_path=DB_FILE):
     """Restablece el contador de intentos de descargas fallidas (no expiradas) para reintentar."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE multimedia
-        SET estado = 'pendiente', intentos = 0, error_msg = NULL
-        WHERE estado = 'error' OR (estado = 'pendiente' AND intentos >= 3)
-    """)
-    reset_count = cur.rowcount
-    cur.execute("""
-        UPDATE mensajes
-        SET estado_multimedia = 'pendiente'
-        WHERE msg_id IN (SELECT msg_id FROM multimedia WHERE estado = 'pendiente')
-          AND archivo_local IS NULL
-    """)
-    conn.commit()
-    conn.close()
-    return reset_count
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE multimedia
+            SET estado = 'pendiente', intentos = 0, error_msg = NULL
+            WHERE estado = 'error' OR (estado = 'pendiente' AND intentos >= 3)
+        """)
+        reset_count = cur.rowcount
+        cur.execute("""
+            UPDATE mensajes
+            SET estado_multimedia = 'pendiente'
+            WHERE msg_id IN (SELECT msg_id FROM multimedia WHERE estado = 'pendiente')
+              AND archivo_local IS NULL
+        """)
+        return reset_count
 
 def search_full_text(query_str, chat_id=None, limit=50, db_path=DB_FILE):
     """Búsqueda de texto completo ultrarrápida usando SQLite FTS5."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-
     # Sanitizar consulta para FTS5
     clean_query = "".join(ch for ch in query_str if ch.isalnum() or ch.isspace()).strip()
     if not clean_query:
-        conn.close()
         return []
 
     fts_match = " ".join([f'"{token}"*' for token in clean_query.split()])
 
-    target_ids = []
-    if chat_id:
-        if isinstance(chat_id, (list, tuple, set)):
-            target_ids = [str(x).strip() for x in chat_id if str(x).strip()]
-        elif isinstance(chat_id, str):
-            target_ids = [x.strip() for x in chat_id.split(",") if x.strip()]
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
 
-    if target_ids:
-        # Resolver identidades canónicas, aliases y nombres de contactos a sus JIDs
-        resolved_set = set()
-        for tid in target_ids:
-            resolved_set.add(tid)
-            # Si no es un JID (@c.us, @lid, @g.us, etc.), buscar por nombre o teléfono
-            if "@" not in tid:
+        target_ids = []
+        if chat_id:
+            if isinstance(chat_id, (list, tuple, set)):
+                target_ids = [str(x).strip() for x in chat_id if str(x).strip()]
+            elif isinstance(chat_id, str):
+                target_ids = [x.strip() for x in chat_id.split(",") if x.strip()]
+
+        if target_ids:
+            # Resolver identidades canónicas, aliases y nombres de contactos a sus JIDs
+            resolved_set = set()
+            for tid in target_ids:
+                resolved_set.add(tid)
+                # Si no es un JID (@c.us, @lid, @g.us, etc.), buscar por nombre o teléfono
+                if "@" not in tid:
+                    try:
+                        cur.execute("SELECT chat_id FROM chats WHERE nombre = ? OR chat_id = ?", (tid, tid))
+                        for r in cur.fetchall():
+                            if r[0]: resolved_set.add(r[0])
+                        cur.execute("SELECT contact_id, numero FROM contactos WHERE nombre = ? OR push_name = ? OR contact_id = ?", (tid, tid, tid))
+                        for r in cur.fetchall():
+                            if r[0]: resolved_set.add(r[0])
+                            if r[1]:
+                                resolved_set.add(f"{r[1]}@c.us")
+                                resolved_set.add(f"{r[1]}@s.whatsapp.net")
+                    except Exception:
+                        pass
+
+            # Expandir bidireccionalmente con contact_aliases
+            if resolved_set:
+                seed_ids = list(resolved_set)
+                seed_ph = ",".join("?" for _ in seed_ids)
                 try:
-                    cur.execute("SELECT chat_id FROM chats WHERE nombre = ? OR chat_id = ?", (tid, tid))
+                    cur.execute(f"""
+                        SELECT alias_id, canonical_id FROM contact_aliases
+                        WHERE alias_id IN ({seed_ph}) OR canonical_id IN ({seed_ph})
+                    """, seed_ids + seed_ids)
                     for r in cur.fetchall():
                         if r[0]: resolved_set.add(r[0])
-                    cur.execute("SELECT contact_id, numero FROM contactos WHERE nombre = ? OR push_name = ? OR contact_id = ?", (tid, tid, tid))
-                    for r in cur.fetchall():
-                        if r[0]: resolved_set.add(r[0])
-                        if r[1]:
-                            resolved_set.add(f"{r[1]}@c.us")
-                            resolved_set.add(f"{r[1]}@s.whatsapp.net")
+                        if r[1]: resolved_set.add(r[1])
                 except Exception:
                     pass
+                target_ids = list(resolved_set)
 
-        # Expandir bidireccionalmente con contact_aliases
-        if resolved_set:
-            seed_ids = list(resolved_set)
-            seed_ph = ",".join("?" for _ in seed_ids)
-            try:
-                cur.execute(f"""
-                    SELECT alias_id, canonical_id FROM contact_aliases
-                    WHERE alias_id IN ({seed_ph}) OR canonical_id IN ({seed_ph})
-                """, seed_ids + seed_ids)
-                for r in cur.fetchall():
-                    if r[0]: resolved_set.add(r[0])
-                    if r[1]: resolved_set.add(r[1])
-            except Exception:
-                pass
-            target_ids = list(resolved_set)
+        if target_ids:
+            placeholders = ",".join("?" for _ in target_ids)
+            sql = f"""
+            SELECT 
+                m.msg_id,
+                m.chat_id,
+                COALESCE(c.nombre, ct.nombre, ct.push_name, m.chat_id) AS chat_nombre,
+                COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
+                m.es_mio,
+                m.fecha_utc,
+                m.timestamp,
+                m.tipo,
+                m.contenido,
+                m.archivo_local,
+                snippet(mensajes_fts, 2, char(1), char(2), '...', 25) AS snippet
+            FROM mensajes_fts fts
+            JOIN mensajes m ON fts.msg_id = m.msg_id
+            LEFT JOIN chats c ON m.chat_id = c.chat_id
+            LEFT JOIN contactos ct ON m.remitente = ct.contact_id
+            WHERE mensajes_fts MATCH ? AND m.chat_id IN ({placeholders})
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+            """
+            cur.execute(sql, [fts_match] + target_ids + [limit])
+        else:
+            sql = """
+            SELECT 
+                m.msg_id,
+                m.chat_id,
+                COALESCE(c.nombre, ct.nombre, ct.push_name, m.chat_id) AS chat_nombre,
+                COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
+                m.es_mio,
+                m.fecha_utc,
+                m.timestamp,
+                m.tipo,
+                m.contenido,
+                m.archivo_local,
+                snippet(mensajes_fts, 2, char(1), char(2), '...', 25) AS snippet
+            FROM mensajes_fts fts
+            JOIN mensajes m ON fts.msg_id = m.msg_id
+            LEFT JOIN chats c ON m.chat_id = c.chat_id
+            LEFT JOIN contactos ct ON m.remitente = ct.contact_id
+            WHERE mensajes_fts MATCH ?
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+            """
+            cur.execute(sql, (fts_match, limit))
 
-    if target_ids:
-        placeholders = ",".join("?" for _ in target_ids)
-        sql = f"""
-        SELECT 
-            m.msg_id,
-            m.chat_id,
-            COALESCE(c.nombre, ct.nombre, ct.push_name, m.chat_id) AS chat_nombre,
-            COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
-            m.es_mio,
-            m.fecha_utc,
-            m.timestamp,
-            m.tipo,
-            m.contenido,
-            m.archivo_local,
-            snippet(mensajes_fts, 2, char(1), char(2), '...', 25) AS snippet
-        FROM mensajes_fts fts
-        JOIN mensajes m ON fts.msg_id = m.msg_id
-        LEFT JOIN chats c ON m.chat_id = c.chat_id
-        LEFT JOIN contactos ct ON m.remitente = ct.contact_id
-        WHERE mensajes_fts MATCH ? AND m.chat_id IN ({placeholders})
-        ORDER BY m.timestamp DESC
-        LIMIT ?
-        """
-        cur.execute(sql, [fts_match] + target_ids + [limit])
-    else:
-        sql = """
-        SELECT 
-            m.msg_id,
-            m.chat_id,
-            COALESCE(c.nombre, ct.nombre, ct.push_name, m.chat_id) AS chat_nombre,
-            COALESCE(ct.nombre, ct.push_name, m.remitente) AS remitente_nombre,
-            m.es_mio,
-            m.fecha_utc,
-            m.timestamp,
-            m.tipo,
-            m.contenido,
-            m.archivo_local,
-            snippet(mensajes_fts, 2, char(1), char(2), '...', 25) AS snippet
-        FROM mensajes_fts fts
-        JOIN mensajes m ON fts.msg_id = m.msg_id
-        LEFT JOIN chats c ON m.chat_id = c.chat_id
-        LEFT JOIN contactos ct ON m.remitente = ct.contact_id
-        WHERE mensajes_fts MATCH ?
-        ORDER BY m.timestamp DESC
-        LIMIT ?
-        """
-        cur.execute(sql, (fts_match, limit))
-
-    results = [dict(row) for row in cur.fetchall()]
-    conn.close()
+        results = [dict(row) for row in cur.fetchall()]
 
     # Escapar el texto del mensaje ANTES de insertar los resaltados para evitar XSS:
     # FTS5 devuelve el contenido crudo; los delimitadores char(1)/char(2) se convierten en <mark> tras escapar.
@@ -1499,10 +1506,14 @@ def create_manual_backup(db_path=DB_FILE, backup_dir=BACKUP_DIR):
     backup_path = os.path.join(backup_dir, backup_filename)
 
     src_conn = get_connection(db_path)
-    dst_conn = sqlite3.connect(backup_path)
-    src_conn.backup(dst_conn)
-    dst_conn.close()
-    src_conn.close()
+    dst_conn = None
+    try:
+        dst_conn = sqlite3.connect(backup_path)
+        src_conn.backup(dst_conn)
+    finally:
+        if dst_conn is not None:
+            dst_conn.close()
+        src_conn.close()
 
     file_size = os.path.getsize(backup_path)
     return {
@@ -1542,52 +1553,32 @@ def get_copilot_context(chat_query, profile_type=None, db_path=None):
     if not chat_query:
         return None
 
-    conn = get_connection(db_path)
-    cur = conn.cursor()
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
 
-    query_str = str(chat_query).strip()
-    digits = re.sub(r'\D', '', query_str)
+        query_str = str(chat_query).strip()
+        digits = re.sub(r'\D', '', query_str)
 
-    found_ids = set()
-    contact_name = None
-    contact_push_name = None
-    phone_number = None
+        found_ids = set()
+        contact_name = None
+        contact_push_name = None
+        phone_number = None
 
-    # 1. Buscar en chats por chat_id o nombre exacto
-    cur.execute("SELECT chat_id, nombre FROM chats WHERE chat_id = ? OR nombre = ? LIMIT 1", (query_str, query_str))
-    row = cur.fetchone()
-    if row:
-        found_ids.add(row["chat_id"])
-        if row["nombre"]:
-            contact_name = row["nombre"]
+        # 1. Buscar en chats por chat_id o nombre exacto
+        cur.execute("SELECT chat_id, nombre FROM chats WHERE chat_id = ? OR nombre = ? LIMIT 1", (query_str, query_str))
+        row = cur.fetchone()
+        if row:
+            found_ids.add(row["chat_id"])
+            if row["nombre"]:
+                contact_name = row["nombre"]
 
-    # 2. Buscar en contactos por contact_id, nombre, push_name o número
-    cur.execute("""
-        SELECT contact_id, nombre, push_name, numero
-        FROM contactos
-        WHERE contact_id = ? OR nombre = ? OR push_name = ? OR (numero IS NOT NULL AND numero = ?)
-        LIMIT 1
-    """, (query_str, query_str, query_str, digits if len(digits) >= 7 else "___"))
-    crow = cur.fetchone()
-    if crow:
-        found_ids.add(crow["contact_id"])
-        if crow["push_name"]:
-            contact_push_name = crow["push_name"]
-        if crow["nombre"]:
-            contact_name = crow["nombre"]
-        if crow["numero"]:
-            phone_number = crow["numero"]
-            found_ids.add(f"{crow['numero']}@c.us")
-            found_ids.add(f"{crow['numero']}@s.whatsapp.net")
-
-    # 3. Si no hubo coincidencia exacta, buscar con LIKE en contactos y chats
-    if not found_ids and len(query_str) >= 2:
+        # 2. Buscar en contactos por contact_id, nombre, push_name o número
         cur.execute("""
             SELECT contact_id, nombre, push_name, numero
             FROM contactos
-            WHERE nombre LIKE ? OR push_name LIKE ?
+            WHERE contact_id = ? OR nombre = ? OR push_name = ? OR (numero IS NOT NULL AND numero = ?)
             LIMIT 1
-        """, (f"%{query_str}%", f"%{query_str}%"))
+        """, (query_str, query_str, query_str, digits if len(digits) >= 7 else "___"))
         crow = cur.fetchone()
         if crow:
             found_ids.add(crow["contact_id"])
@@ -1599,158 +1590,176 @@ def get_copilot_context(chat_query, profile_type=None, db_path=None):
                 phone_number = crow["numero"]
                 found_ids.add(f"{crow['numero']}@c.us")
                 found_ids.add(f"{crow['numero']}@s.whatsapp.net")
-        else:
-            cur.execute("SELECT chat_id, nombre FROM chats WHERE nombre LIKE ? LIMIT 1", (f"%{query_str}%",))
-            ch_row = cur.fetchone()
-            if ch_row:
-                found_ids.add(ch_row["chat_id"])
-                contact_name = ch_row["nombre"]
 
-    # 4. Manejar dígitos de teléfono directos si los hay
-    if digits and len(digits) >= 7 and not phone_number:
-        phone_number = digits
-        found_ids.add(f"{digits}@c.us")
-        found_ids.add(f"{digits}@s.whatsapp.net")
+        # 3. Si no hubo coincidencia exacta, buscar con LIKE en contactos y chats
+        if not found_ids and len(query_str) >= 2:
+            cur.execute("""
+                SELECT contact_id, nombre, push_name, numero
+                FROM contactos
+                WHERE nombre LIKE ? OR push_name LIKE ?
+                LIMIT 1
+            """, (f"%{query_str}%", f"%{query_str}%"))
+            crow = cur.fetchone()
+            if crow:
+                found_ids.add(crow["contact_id"])
+                if crow["push_name"]:
+                    contact_push_name = crow["push_name"]
+                if crow["nombre"]:
+                    contact_name = crow["nombre"]
+                if crow["numero"]:
+                    phone_number = crow["numero"]
+                    found_ids.add(f"{crow['numero']}@c.us")
+                    found_ids.add(f"{crow['numero']}@s.whatsapp.net")
+            else:
+                cur.execute("SELECT chat_id, nombre FROM chats WHERE nombre LIKE ? LIMIT 1", (f"%{query_str}%",))
+                ch_row = cur.fetchone()
+                if ch_row:
+                    found_ids.add(ch_row["chat_id"])
+                    contact_name = ch_row["nombre"]
 
-    if not found_ids:
-        found_ids.add(query_str)
+        # 4. Manejar dígitos de teléfono directos si los hay
+        if digits and len(digits) >= 7 and not phone_number:
+            phone_number = digits
+            found_ids.add(f"{digits}@c.us")
+            found_ids.add(f"{digits}@s.whatsapp.net")
 
-    # 5. Si conocemos el número de teléfono, vincular cualquier @lid asociado en contactos
-    if phone_number:
-        cur.execute("SELECT contact_id FROM contactos WHERE numero = ?", (phone_number,))
-        for r in cur.fetchall():
-            found_ids.add(r["contact_id"])
+        if not found_ids:
+            found_ids.add(query_str)
 
-    # Expandir con contact_aliases bidireccionalmente
-    seed_ids = list(found_ids)
-    if seed_ids:
-        seed_ph = ",".join("?" for _ in seed_ids)
-        cur.execute(f"""
-            SELECT alias_id, canonical_id FROM contact_aliases
-            WHERE alias_id IN ({seed_ph}) OR canonical_id IN ({seed_ph})
-        """, seed_ids + seed_ids)
-        for r in cur.fetchall():
-            if r["alias_id"]:
-                found_ids.add(r["alias_id"])
-            if r["canonical_id"]:
-                found_ids.add(r["canonical_id"])
+        # 5. Si conocemos el número de teléfono, vincular cualquier @lid asociado en contactos
+        if phone_number:
+            cur.execute("SELECT contact_id FROM contactos WHERE numero = ?", (phone_number,))
+            for r in cur.fetchall():
+                found_ids.add(r["contact_id"])
 
-    id_list = list(found_ids)
-    placeholders = ",".join("?" for _ in id_list)
+        # Expandir con contact_aliases bidireccionalmente
+        seed_ids = list(found_ids)
+        if seed_ids:
+            seed_ph = ",".join("?" for _ in seed_ids)
+            cur.execute(f"""
+                SELECT alias_id, canonical_id FROM contact_aliases
+                WHERE alias_id IN ({seed_ph}) OR canonical_id IN ({seed_ph})
+            """, seed_ids + seed_ids)
+            for r in cur.fetchall():
+                if r["alias_id"]:
+                    found_ids.add(r["alias_id"])
+                if r["canonical_id"]:
+                    found_ids.add(r["canonical_id"])
 
-    # Determinar qué ID tiene mayor historial de mensajes y resolver canonical_id
-    cur.execute(f"""
-        SELECT chat_id, COUNT(*) as cnt
-        FROM mensajes
-        WHERE chat_id IN ({placeholders})
-        GROUP BY chat_id
-        ORDER BY cnt DESC
-        LIMIT 1
-    """, id_list)
-    top_row = cur.fetchone()
-    if top_row:
-        effective_chat_id = top_row["chat_id"]
-    elif phone_number:
-        effective_chat_id = f"{phone_number}@c.us"
-    else:
-        effective_chat_id = id_list[0]
-
-    canonical_chat_id = resolve_canonical_chat_id(cur, f"{phone_number}@c.us" if phone_number else effective_chat_id)
-    if canonical_chat_id and canonical_chat_id not in found_ids:
-        found_ids.add(canonical_chat_id)
         id_list = list(found_ids)
         placeholders = ",".join("?" for _ in id_list)
 
-    # Obtener metadatos CRM buscando en cualquiera de los IDs asociados
-    cur.execute(f"""
-        SELECT custom_name, ticket_status, support_priority,
-               sales_stage, estimated_value, follow_up_date, notes,
-               coalesce(assigned_to, '') as assigned_to,
-               coalesce(updated_by, '') as updated_by,
-               coalesce(radar_dismissed_at, 0) as radar_dismissed_at,
-               coalesce(radar_ignored, 0) as radar_ignored,
-               updated_at
-        FROM crm_contact_meta
-        WHERE chat_id IN ({placeholders})
-        ORDER BY updated_at DESC
-        LIMIT 1
-    """, id_list)
-    crm_row = cur.fetchone()
-    crm_meta = dict(crm_row) if crm_row else {
-        "custom_name": None,
-        "ticket_status": "none",
-        "support_priority": 0,
-        "sales_stage": "none",
-        "estimated_value": 0.0,
-        "follow_up_date": None,
-        "notes": "",
-        "assigned_to": "",
-        "updated_by": "",
-        "radar_dismissed_at": 0,
-        "radar_ignored": 0,
-        "updated_at": None
-    }
-    if "assigned_to" not in crm_meta:
-        crm_meta["assigned_to"] = ""
-    if "updated_by" not in crm_meta:
-        crm_meta["updated_by"] = ""
-    if "radar_dismissed_at" not in crm_meta:
-        crm_meta["radar_dismissed_at"] = 0
-    if "radar_ignored" not in crm_meta:
-        crm_meta["radar_ignored"] = 0
+        # Determinar qué ID tiene mayor historial de mensajes y resolver canonical_id
+        cur.execute(f"""
+            SELECT chat_id, COUNT(*) as cnt
+            FROM mensajes
+            WHERE chat_id IN ({placeholders})
+            GROUP BY chat_id
+            ORDER BY cnt DESC
+            LIMIT 1
+        """, id_list)
+        top_row = cur.fetchone()
+        if top_row:
+            effective_chat_id = top_row["chat_id"]
+        elif phone_number:
+            effective_chat_id = f"{phone_number}@c.us"
+        else:
+            effective_chat_id = id_list[0]
 
-    # Obtener notas históricas de la bitácora colaborativa
-    cur.execute(f"""
-        SELECT id, chat_id, author, content, created_at
-        FROM crm_contact_notes_log
-        WHERE chat_id IN ({placeholders})
-        ORDER BY created_at DESC, id DESC
-        LIMIT 50
-    """, id_list)
-    notes_log = [dict(r) for r in cur.fetchall()]
+        canonical_chat_id = resolve_canonical_chat_id(cur, f"{phone_number}@c.us" if phone_number else effective_chat_id)
+        if canonical_chat_id and canonical_chat_id not in found_ids:
+            found_ids.add(canonical_chat_id)
+            id_list = list(found_ids)
+            placeholders = ",".join("?" for _ in id_list)
 
-    # Obtener etiquetas de cualquiera de los IDs asociados
-    cur.execute(f"""
-        SELECT DISTINCT tag, category 
-        FROM crm_chat_tags 
-        WHERE chat_id IN ({placeholders}) 
-        ORDER BY tag
-    """, id_list)
-    tags = [dict(r) for r in cur.fetchall()]
+        # Obtener metadatos CRM buscando en cualquiera de los IDs asociados
+        cur.execute(f"""
+            SELECT custom_name, ticket_status, support_priority,
+                   sales_stage, estimated_value, follow_up_date, notes,
+                   coalesce(assigned_to, '') as assigned_to,
+                   coalesce(updated_by, '') as updated_by,
+                   coalesce(radar_dismissed_at, 0) as radar_dismissed_at,
+                   coalesce(radar_ignored, 0) as radar_ignored,
+                   updated_at
+            FROM crm_contact_meta
+            WHERE chat_id IN ({placeholders})
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """, id_list)
+        crm_row = cur.fetchone()
+        crm_meta = dict(crm_row) if crm_row else {
+            "custom_name": None,
+            "ticket_status": "none",
+            "support_priority": 0,
+            "sales_stage": "none",
+            "estimated_value": 0.0,
+            "follow_up_date": None,
+            "notes": "",
+            "assigned_to": "",
+            "updated_by": "",
+            "radar_dismissed_at": 0,
+            "radar_ignored": 0,
+            "updated_at": None
+        }
+        if "assigned_to" not in crm_meta:
+            crm_meta["assigned_to"] = ""
+        if "updated_by" not in crm_meta:
+            crm_meta["updated_by"] = ""
+        if "radar_dismissed_at" not in crm_meta:
+            crm_meta["radar_dismissed_at"] = 0
+        if "radar_ignored" not in crm_meta:
+            crm_meta["radar_ignored"] = 0
 
-    # Estadísticas globales unificadas de mensajes
-    cur.execute(f"""
-        SELECT 
-            COUNT(*) as total_msgs,
-            MIN(timestamp) as min_ts,
-            MAX(timestamp) as max_ts
-        FROM mensajes
-        WHERE chat_id IN ({placeholders})
-    """, id_list)
-    stats_row = cur.fetchone()
+        # Obtener notas históricas de la bitácora colaborativa
+        cur.execute(f"""
+            SELECT id, chat_id, author, content, created_at
+            FROM crm_contact_notes_log
+            WHERE chat_id IN ({placeholders})
+            ORDER BY created_at DESC, id DESC
+            LIMIT 50
+        """, id_list)
+        notes_log = [dict(r) for r in cur.fetchall()]
 
-    total_msgs = stats_row["total_msgs"] if stats_row else 0
-    min_ts = stats_row["min_ts"] if stats_row and stats_row["min_ts"] else 0
-    max_ts = stats_row["max_ts"] if stats_row and stats_row["max_ts"] else 0
+        # Obtener etiquetas de cualquiera de los IDs asociados
+        cur.execute(f"""
+            SELECT DISTINCT tag, category 
+            FROM crm_chat_tags 
+            WHERE chat_id IN ({placeholders}) 
+            ORDER BY tag
+        """, id_list)
+        tags = [dict(r) for r in cur.fetchall()]
 
-    # Último mensaje para preview
-    cur.execute(f"""
-        SELECT remitente, es_mio, contenido, tipo, timestamp
-        FROM mensajes
-        WHERE chat_id IN ({placeholders})
-        ORDER BY timestamp DESC
-        LIMIT 1
-    """, id_list)
-    last_msg_row = cur.fetchone()
-    last_msg = dict(last_msg_row) if last_msg_row else None
+        # Estadísticas globales unificadas de mensajes
+        cur.execute(f"""
+            SELECT 
+                COUNT(*) as total_msgs,
+                MIN(timestamp) as min_ts,
+                MAX(timestamp) as max_ts
+            FROM mensajes
+            WHERE chat_id IN ({placeholders})
+        """, id_list)
+        stats_row = cur.fetchone()
+
+        total_msgs = stats_row["total_msgs"] if stats_row else 0
+        min_ts = stats_row["min_ts"] if stats_row and stats_row["min_ts"] else 0
+        max_ts = stats_row["max_ts"] if stats_row and stats_row["max_ts"] else 0
+
+        # Último mensaje para preview
+        cur.execute(f"""
+            SELECT remitente, es_mio, contenido, tipo, timestamp
+            FROM mensajes
+            WHERE chat_id IN ({placeholders})
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, id_list)
+        last_msg_row = cur.fetchone()
+        last_msg = dict(last_msg_row) if last_msg_row else None
 
     # Cálculo del SLA del contacto
     sla_text = get_chat_sla(id_list, db_path=db_path)
 
     # Plantillas disponibles
     templates = list_quick_templates(profile_type=profile_type, db_path=db_path)
-
-    conn.close()
 
     def _fmt_date(ts):
         if not ts:
@@ -1809,26 +1818,25 @@ def get_chat_sla(chat_ids, db_path=None):
     """Calcula el tiempo promedio histórico de respuesta (SLA) para un contacto."""
     if not chat_ids:
         return "Sin datos"
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    placeholders = ",".join("?" for _ in chat_ids)
-    cur.execute(f"""
-        WITH ordered AS (
-            SELECT 
-                es_mio, 
-                timestamp,
-                LAG(es_mio) OVER (ORDER BY timestamp ASC) as prev_mio,
-                LAG(timestamp) OVER (ORDER BY timestamp ASC) as prev_ts
-            FROM mensajes
-            WHERE chat_id IN ({placeholders})
-            ORDER BY timestamp ASC
-        )
-        SELECT AVG(timestamp - prev_ts) as avg_response_sec
-        FROM ordered
-        WHERE es_mio = 1 AND prev_mio = 0 AND (timestamp - prev_ts) BETWEEN 5 AND 86400
-    """, list(chat_ids))
-    res = cur.fetchone()
-    conn.close()
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in chat_ids)
+        cur.execute(f"""
+            WITH ordered AS (
+                SELECT 
+                    es_mio, 
+                    timestamp,
+                    LAG(es_mio) OVER (ORDER BY timestamp ASC) as prev_mio,
+                    LAG(timestamp) OVER (ORDER BY timestamp ASC) as prev_ts
+                FROM mensajes
+                WHERE chat_id IN ({placeholders})
+                ORDER BY timestamp ASC
+            )
+            SELECT AVG(timestamp - prev_ts) as avg_response_sec
+            FROM ordered
+            WHERE es_mio = 1 AND prev_mio = 0 AND (timestamp - prev_ts) BETWEEN 5 AND 86400
+        """, list(chat_ids))
+        res = cur.fetchone()
     if not res or not res[0]:
         return "Sin datos suficientes"
     sec = float(res[0])
@@ -1989,7 +1997,16 @@ def get_sales_followups(limit=30, db_path=None):
               AND ch.ultimo_timestamp IS NOT NULL
               AND coalesce(c.radar_ignored, 0) = 0
               AND (
-                  (c.follow_up_date IS NOT NULL AND c.follow_up_date != '' AND c.follow_up_date <= ?)
+                  (
+                      c.follow_up_date IS NOT NULL
+                      AND c.follow_up_date != ''
+                      AND coalesce(c.ticket_status, 'none') != 'resolved'
+                      AND coalesce(c.sales_stage, 'none') NOT IN ('won', 'lost', 'ganado', 'perdido')
+                      AND (
+                          c.follow_up_date <= ?
+                          OR c.ticket_status IN ('open', 'pending')
+                      )
+                  )
                   OR (
                       (c.follow_up_date IS NULL OR c.follow_up_date = '')
                       AND (
@@ -2154,6 +2171,18 @@ def upsert_contact_meta(chat_id, custom_name=None, ticket_status=None, support_p
                             "updated_at": current_row["updated_at"],
                             "updated_by": current_row["updated_by"] or ""
                         }
+
+        # Si se marca como 'pending' o 'resolved' manualmente, actualizar radar_dismissed_at al último mensaje conocido
+        # para que salga inmediatamente del Radar hasta que entre un nuevo mensaje posterior del cliente
+        if ticket_status in ("pending", "resolved") and radar_dismissed_at is None:
+            cur.execute("""
+                SELECT MAX(ultimo_timestamp) as max_ts
+                FROM chats
+                WHERE chat_id = ? OR chat_id = ?
+                   OR chat_id IN (SELECT alias_id FROM contact_aliases WHERE canonical_id = ?)
+            """, (chat_id, canonical_id, canonical_id))
+            ts_row = cur.fetchone()
+            radar_dismissed_at = int(ts_row["max_ts"]) if (ts_row and ts_row["max_ts"]) else int(time.time())
 
         cur.execute("""
             INSERT INTO crm_contact_meta (
@@ -2601,8 +2630,7 @@ def get_all_chats_tags_map(cur=None, db_path=None):
                     tag_map.setdefault(alias, set()).add(tag)
 
             return {k: sorted(list(v)) for k, v in tag_map.items()}
-        except Exception as e:
-            logger.error(f"Error en get_all_chats_tags_map: {e}")
+        except Exception:
             return {}
 
     if cur is not None:
@@ -2612,53 +2640,48 @@ def get_all_chats_tags_map(cur=None, db_path=None):
 
 def list_quick_templates(profile_type=None, db_path=None):
     """Devuelve las plantillas de respuesta rápida filtradas por tipo o todas."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    if profile_type and profile_type != "full":
-        cur.execute("""
-            SELECT id, profile_type, shortcut, title, body
-            FROM crm_quick_templates
-            WHERE profile_type IN (?, 'both')
-            ORDER BY id ASC
-        """, (profile_type,))
-    else:
-        cur.execute("""
-            SELECT id, profile_type, shortcut, title, body
-            FROM crm_quick_templates
-            ORDER BY id ASC
-        """)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
+        if profile_type and profile_type != "full":
+            cur.execute("""
+                SELECT id, profile_type, shortcut, title, body
+                FROM crm_quick_templates
+                WHERE profile_type IN (?, 'both')
+                ORDER BY id ASC
+            """, (profile_type,))
+        else:
+            cur.execute("""
+                SELECT id, profile_type, shortcut, title, body
+                FROM crm_quick_templates
+                ORDER BY id ASC
+            """)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
 
 def save_quick_template(shortcut, title, body, profile_type="both", template_id=None, db_path=None):
     """Crea o actualiza una plantilla de respuesta rápida."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    if template_id:
-        cur.execute("""
-            UPDATE crm_quick_templates
-            SET profile_type = ?, shortcut = ?, title = ?, body = ?
-            WHERE id = ?
-        """, (profile_type, shortcut, title, body, template_id))
-    else:
-        cur.execute("""
-            INSERT INTO crm_quick_templates (profile_type, shortcut, title, body)
-            VALUES (?, ?, ?, ?)
-        """, (profile_type, shortcut, title, body))
-        template_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return template_id
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        if template_id:
+            cur.execute("""
+                UPDATE crm_quick_templates
+                SET profile_type = ?, shortcut = ?, title = ?, body = ?
+                WHERE id = ?
+            """, (profile_type, shortcut, title, body, template_id))
+        else:
+            cur.execute("""
+                INSERT INTO crm_quick_templates (profile_type, shortcut, title, body)
+                VALUES (?, ?, ?, ?)
+            """, (profile_type, shortcut, title, body))
+            template_id = cur.lastrowid
+        return template_id
 
 def delete_quick_template(template_id, db_path=None):
     """Elimina una plantilla por su ID."""
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM crm_quick_templates WHERE id = ?", (template_id,))
-    conn.commit()
-    conn.close()
-    return True
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM crm_quick_templates WHERE id = ?", (template_id,))
+        return True
 
 # =========================================================================
 # FASE 4: Centro de Gestión, Kanban, RFM y Métricas de Demanda / SLA
@@ -2682,47 +2705,46 @@ def get_kanban_board(board_type="sales", db_path=None):
     - board_type='sales': columnas lead, quoted, won, lost.
     - board_type='support': columnas open, pending, resolved.
     """
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    now_ts = int(time.time())
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
+        now_ts = int(time.time())
 
-    cur.execute("""
-        SELECT 
-            c.chat_id,
-            ca.canonical_id,
-            c.custom_name,
-            ch.nombre as chat_nombre,
-            con.nombre as contact_nombre,
-            con.push_name as push_name,
-            coalesce(
-                con.numero,
-                case when ca.canonical_id like '%@c.us' then replace(ca.canonical_id, '@c.us', '') end,
-                case when c.chat_id like '%@c.us' or c.chat_id like '%@s.whatsapp.net' then substr(c.chat_id, 1, instr(c.chat_id, '@') - 1) end
-            ) as phone_number,
-            coalesce(c.sales_stage, 'none') as sales_stage,
-            coalesce(c.estimated_value, 0.0) as estimated_value,
-            c.follow_up_date,
-            coalesce(c.assigned_to, '') as assigned_to,
-            coalesce(c.updated_by, '') as updated_by,
-            coalesce(c.ticket_status, 'none') as ticket_status,
-            coalesce(c.support_priority, 0) as support_priority,
-            c.notes,
-            c.updated_at,
-            ch.ultimo_mensaje as last_message,
-            ch.ultimo_es_mio as last_from_me,
-            ch.ultimo_timestamp as last_ts
-        FROM crm_contact_meta c
-        LEFT JOIN contact_aliases ca ON c.chat_id = ca.alias_id
-        LEFT JOIN chats ch ON c.chat_id = ch.chat_id
-        LEFT JOIN contactos con ON c.chat_id = con.contact_id OR c.chat_id = (con.numero || '@c.us')
-        WHERE c.chat_id NOT IN (SELECT alias_id FROM contact_aliases)
-        GROUP BY c.chat_id
-        ORDER BY 
-            CASE WHEN ? = 'support' THEN coalesce(c.support_priority, 0) ELSE 0 END DESC,
-            coalesce(c.updated_at, ch.ultimo_timestamp, 0) DESC
-    """, (board_type,))
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
+        cur.execute("""
+            SELECT 
+                c.chat_id,
+                ca.canonical_id,
+                c.custom_name,
+                ch.nombre as chat_nombre,
+                con.nombre as contact_nombre,
+                con.push_name as push_name,
+                coalesce(
+                    con.numero,
+                    case when ca.canonical_id like '%@c.us' then replace(ca.canonical_id, '@c.us', '') end,
+                    case when c.chat_id like '%@c.us' or c.chat_id like '%@s.whatsapp.net' then substr(c.chat_id, 1, instr(c.chat_id, '@') - 1) end
+                ) as phone_number,
+                coalesce(c.sales_stage, 'none') as sales_stage,
+                coalesce(c.estimated_value, 0.0) as estimated_value,
+                c.follow_up_date,
+                coalesce(c.assigned_to, '') as assigned_to,
+                coalesce(c.updated_by, '') as updated_by,
+                coalesce(c.ticket_status, 'none') as ticket_status,
+                coalesce(c.support_priority, 0) as support_priority,
+                c.notes,
+                c.updated_at,
+                ch.ultimo_mensaje as last_message,
+                ch.ultimo_es_mio as last_from_me,
+                ch.ultimo_timestamp as last_ts
+            FROM crm_contact_meta c
+            LEFT JOIN contact_aliases ca ON c.chat_id = ca.alias_id
+            LEFT JOIN chats ch ON c.chat_id = ch.chat_id
+            LEFT JOIN contactos con ON c.chat_id = con.contact_id OR c.chat_id = (con.numero || '@c.us')
+            WHERE c.chat_id NOT IN (SELECT alias_id FROM contact_aliases)
+            GROUP BY c.chat_id
+            ORDER BY 
+                CASE WHEN ? = 'support' THEN coalesce(c.support_priority, 0) ELSE 0 END DESC,
+                coalesce(ch.ultimo_timestamp, c.updated_at, 0) DESC
+        """, (board_type,))
+        rows = [dict(r) for r in cur.fetchall()]
 
     def _fmt_activity(ts):
         if not ts:
@@ -2791,68 +2813,67 @@ def get_rfm_dormant_clients(days=45, min_messages=10, limit=5, db_path=None):
     con historial relevante que llevan más de 'days' días sin actividad.
     Genera un mensaje personalizado sugerido para copiar en 1 clic.
     """
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    now_ts = int(time.time())
-    threshold_sec = days * 86400
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
+        now_ts = int(time.time())
+        threshold_sec = days * 86400
 
-    cur.execute("""
-        WITH client_stats AS (
+        cur.execute("""
+            WITH client_stats AS (
+                SELECT 
+                    chat_id,
+                    COUNT(*) as total_msgs,
+                    MAX(timestamp) as last_ts
+                FROM mensajes
+                WHERE chat_id IS NOT NULL 
+                  AND chat_id NOT LIKE '%@g.us'
+                  AND chat_id NOT LIKE '%@newsletter'
+                  AND chat_id != 'status@broadcast'
+                  AND tipo NOT IN ('e2e_notification', 'notification_template', 'protocol')
+                GROUP BY chat_id
+                HAVING COUNT(*) >= ? AND (? - MAX(timestamp)) >= ?
+            ),
+            latest_msgs AS (
+                SELECT 
+                    m.chat_id,
+                    m.contenido,
+                    m.es_mio,
+                    m.timestamp,
+                    ROW_NUMBER() OVER (PARTITION BY m.chat_id ORDER BY m.timestamp DESC) as rn
+                FROM mensajes m
+                WHERE m.contenido IS NOT NULL AND m.contenido != ''
+                  AND m.tipo NOT IN ('e2e_notification', 'notification_template', 'protocol')
+            )
             SELECT 
-                chat_id,
-                COUNT(*) as total_msgs,
-                MAX(timestamp) as last_ts
-            FROM mensajes
-            WHERE chat_id IS NOT NULL 
-              AND chat_id NOT LIKE '%@g.us'
-              AND chat_id NOT LIKE '%@newsletter'
-              AND chat_id != 'status@broadcast'
-              AND tipo NOT IN ('e2e_notification', 'notification_template', 'protocol')
-            GROUP BY chat_id
-            HAVING COUNT(*) >= ? AND (? - MAX(timestamp)) >= ?
-        ),
-        latest_msgs AS (
-            SELECT 
-                m.chat_id,
-                m.contenido,
-                m.es_mio,
-                m.timestamp,
-                ROW_NUMBER() OVER (PARTITION BY m.chat_id ORDER BY m.timestamp DESC) as rn
-            FROM mensajes m
-            WHERE m.contenido IS NOT NULL AND m.contenido != ''
-              AND m.tipo NOT IN ('e2e_notification', 'notification_template', 'protocol')
-        )
-        SELECT 
-            s.chat_id,
-            s.total_msgs,
-            s.last_ts,
-            ch.nombre as chat_nombre,
-            c.custom_name as crm_custom,
-            con.nombre as con_nombre,
-            con.push_name as con_push,
-            con.numero as con_numero,
-            con_can.nombre as con_can_nombre,
-            con_can.push_name as con_can_push,
-            con_can.numero as con_can_numero,
-            ca.canonical_id,
-            coalesce(c.sales_stage, 'none') as sales_stage,
-            coalesce(c.estimated_value, 0.0) as estimated_value,
-            lm.contenido as last_message,
-            lm.es_mio as last_from_me
-        FROM client_stats s
-        LEFT JOIN chats ch ON s.chat_id = ch.chat_id
-        LEFT JOIN contactos con ON s.chat_id = con.contact_id OR s.chat_id = (con.numero || '@c.us')
-        LEFT JOIN contact_aliases ca ON s.chat_id = ca.alias_id
-        LEFT JOIN contactos con_can ON ca.canonical_id = con_can.contact_id
-        LEFT JOIN crm_contact_meta c ON s.chat_id = c.chat_id
-        LEFT JOIN latest_msgs lm ON s.chat_id = lm.chat_id AND lm.rn = 1
-        GROUP BY s.chat_id
-        ORDER BY s.total_msgs DESC
-        LIMIT ?
-    """, (min_messages, now_ts, threshold_sec, limit))
+                s.chat_id,
+                s.total_msgs,
+                s.last_ts,
+                ch.nombre as chat_nombre,
+                c.custom_name as crm_custom,
+                con.nombre as con_nombre,
+                con.push_name as con_push,
+                con.numero as con_numero,
+                con_can.nombre as con_can_nombre,
+                con_can.push_name as con_can_push,
+                con_can.numero as con_can_numero,
+                ca.canonical_id,
+                coalesce(c.sales_stage, 'none') as sales_stage,
+                coalesce(c.estimated_value, 0.0) as estimated_value,
+                lm.contenido as last_message,
+                lm.es_mio as last_from_me
+            FROM client_stats s
+            LEFT JOIN chats ch ON s.chat_id = ch.chat_id
+            LEFT JOIN contactos con ON s.chat_id = con.contact_id OR s.chat_id = (con.numero || '@c.us')
+            LEFT JOIN contact_aliases ca ON s.chat_id = ca.alias_id
+            LEFT JOIN contactos con_can ON ca.canonical_id = con_can.contact_id
+            LEFT JOIN crm_contact_meta c ON s.chat_id = c.chat_id
+            LEFT JOIN latest_msgs lm ON s.chat_id = lm.chat_id AND lm.rn = 1
+            GROUP BY s.chat_id
+            ORDER BY s.total_msgs DESC
+            LIMIT ?
+        """, (min_messages, now_ts, threshold_sec, limit))
 
-    rows = cur.fetchall()
-    conn.close()
+        rows = cur.fetchall()
 
     result = []
     for r in rows:
@@ -2903,23 +2924,22 @@ def get_demand_thermometer(days=60, limit=25, db_path=None):
     Termómetro de Demanda: extrae y cuantifica los conceptos y términos
     más consultados por los clientes en mensajes entrantes en los últimos 'days' días.
     """
-    conn = get_connection(db_path)
-    cur = conn.cursor()
-    now_ts = int(time.time())
-    since_ts = now_ts - (days * 86400)
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
+        now_ts = int(time.time())
+        since_ts = now_ts - (days * 86400)
 
-    cur.execute("""
-        SELECT contenido 
-        FROM mensajes 
-        WHERE es_mio = 0 
-          AND timestamp >= ?
-          AND contenido IS NOT NULL 
-          AND tipo = 'chat'
-        ORDER BY timestamp DESC
-        LIMIT 3000
-    """, (since_ts,))
-    rows = cur.fetchall()
-    conn.close()
+        cur.execute("""
+            SELECT contenido 
+            FROM mensajes 
+            WHERE es_mio = 0 
+              AND timestamp >= ?
+              AND contenido IS NOT NULL 
+              AND tipo = 'chat'
+            ORDER BY timestamp DESC
+            LIMIT 3000
+        """, (since_ts,))
+        rows = cur.fetchall()
 
     from collections import Counter
     import re
@@ -2955,8 +2975,6 @@ def get_support_metrics(days="all", db_path=None):
     sin descartar silenciosamente tiempos de respuesta > 12h.
     Soporta filtro days=1|7|30|'all'.
     """
-    conn = get_connection(db_path)
-    cur = conn.cursor()
     now_ts = int(time.time())
 
     # Normalizar días
@@ -2972,99 +2990,107 @@ def get_support_metrics(days="all", db_path=None):
             min_ts = 0
             days_label = "all"
 
-    # 1. Conteo de tickets
-    cur.execute("""
-        SELECT ticket_status, COUNT(*) as cnt
-        FROM crm_contact_meta
-        WHERE ticket_status IN ('open', 'pending', 'resolved')
-        GROUP BY ticket_status
-    """)
-    ticket_counts = {r["ticket_status"]: r["cnt"] for r in cur.fetchall()}
+    min_ts_ms = min_ts * 1000
 
-    # 2. SLA global promedio (sin descartar tiempos de respuesta > 12h)
-    sla_query = """
-        WITH ordered AS (
+    with db_connection(db_path, write=False) as conn:
+        cur = conn.cursor()
+
+        # 1. Conteo de tickets (filtrando resueltos por el período cuando aplica)
+        cur.execute("""
+            SELECT ticket_status, COUNT(*) as cnt
+            FROM crm_contact_meta
+            WHERE ticket_status IN ('open', 'pending')
+               OR (ticket_status = 'resolved' AND (? = 0 OR coalesce(updated_at, 0) >= ?))
+            GROUP BY ticket_status
+        """, (min_ts, min_ts_ms))
+        ticket_counts = {r["ticket_status"]: r["cnt"] for r in cur.fetchall()}
+
+        # 2. SLA global promedio (sin descartar tiempos de respuesta > 12h)
+        sla_query = """
+            WITH ordered AS (
+                SELECT 
+                    chat_id,
+                    es_mio, 
+                    timestamp,
+                    LAG(es_mio) OVER (PARTITION BY chat_id ORDER BY timestamp ASC) as prev_mio,
+                    LAG(timestamp) OVER (PARTITION BY chat_id ORDER BY timestamp ASC) as prev_ts
+                FROM mensajes
+                WHERE chat_id NOT LIKE '%@g.us'
+                  AND chat_id NOT LIKE '%@newsletter'
+                  AND (? = 0 OR timestamp >= ?)
+                ORDER BY timestamp ASC
+            )
+            SELECT AVG(timestamp - prev_ts) as avg_response_sec
+            FROM ordered
+            WHERE es_mio = 1 AND prev_mio = 0 AND (timestamp - prev_ts) >= 5
+        """
+        cur.execute(sla_query, (min_ts, min_ts))
+        sla_row = cur.fetchone()
+        avg_sec = float(sla_row[0]) if (sla_row and sla_row[0]) else 0
+        if avg_sec < 60:
+            sla_formatted = f"~{int(avg_sec)} seg"
+        elif avg_sec < 3600:
+            sla_formatted = f"~{int(avg_sec // 60)} min"
+        else:
+            sla_formatted = f"~{round(avg_sec / 3600, 1)} h"
+
+        # 3. Rendimiento por operador (tickets abiertos, en espera, resueltos en el período)
+        cur.execute("""
             SELECT 
-                chat_id,
-                es_mio, 
-                timestamp,
-                LAG(es_mio) OVER (PARTITION BY chat_id ORDER BY timestamp ASC) as prev_mio,
-                LAG(timestamp) OVER (PARTITION BY chat_id ORDER BY timestamp ASC) as prev_ts
+                coalesce(nullif(trim(assigned_to), ''), 'Sin Asignar') as op,
+                SUM(CASE WHEN ticket_status = 'open' THEN 1 ELSE 0 END) as open_cnt,
+                SUM(CASE WHEN ticket_status = 'pending' THEN 1 ELSE 0 END) as pending_cnt,
+                SUM(CASE WHEN ticket_status = 'resolved' AND (? = 0 OR coalesce(updated_at, 0) >= ?) THEN 1 ELSE 0 END) as resolved_cnt
+            FROM crm_contact_meta
+            WHERE ticket_status IN ('open', 'pending')
+               OR (ticket_status = 'resolved' AND (? = 0 OR coalesce(updated_at, 0) >= ?))
+            GROUP BY coalesce(nullif(trim(assigned_to), ''), 'Sin Asignar')
+        """, (min_ts, min_ts_ms, min_ts, min_ts_ms))
+        operators = []
+        for r in cur.fetchall():
+            op_open = r["open_cnt"] or 0
+            op_pend = r["pending_cnt"] or 0
+            op_res = r["resolved_cnt"] or 0
+            op_tot = op_open + op_pend + op_res
+            operators.append({
+                "operator": r["op"],
+                "open": op_open,
+                "pending": op_pend,
+                "resolved": op_res,
+                "total": op_tot
+            })
+        operators.sort(key=lambda x: (-x["total"], x["operator"]))
+
+        # 4. Mapa de calor 7 días x 24 horas (mensajes de clientes)
+        cur.execute("""
+            SELECT 
+                cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as dow,
+                cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as hod,
+                COUNT(*) as cnt
             FROM mensajes
-            WHERE chat_id NOT LIKE '%@g.us'
+            WHERE es_mio = 0 
+              AND chat_id NOT LIKE '%@g.us'
               AND chat_id NOT LIKE '%@newsletter'
+              AND chat_id != 'status@broadcast'
               AND (? = 0 OR timestamp >= ?)
-            ORDER BY timestamp ASC
-        )
-        SELECT AVG(timestamp - prev_ts) as avg_response_sec
-        FROM ordered
-        WHERE es_mio = 1 AND prev_mio = 0 AND (timestamp - prev_ts) >= 5
-    """
-    cur.execute(sla_query, (min_ts, min_ts))
-    sla_row = cur.fetchone()
-    avg_sec = float(sla_row[0]) if (sla_row and sla_row[0]) else 0
-    if avg_sec < 60:
-        sla_formatted = f"~{int(avg_sec)} seg"
-    elif avg_sec < 3600:
-        sla_formatted = f"~{int(avg_sec // 60)} min"
-    else:
-        sla_formatted = f"~{round(avg_sec / 3600, 1)} h"
+            GROUP BY dow, hod
+        """, (min_ts, min_ts))
+        grid = [[0]*24 for _ in range(7)]
+        max_val = 0
+        peak_dow = 1
+        peak_hod = 10
+        total_incoming = 0
 
-    # 3. Rendimiento por operador (tickets abiertos, en espera, resueltos)
-    cur.execute("""
-        SELECT 
-            coalesce(nullif(trim(assigned_to), ''), 'Sin Asignar') as op,
-            SUM(CASE WHEN ticket_status = 'open' THEN 1 ELSE 0 END) as open_cnt,
-            SUM(CASE WHEN ticket_status = 'pending' THEN 1 ELSE 0 END) as pending_cnt,
-            SUM(CASE WHEN ticket_status = 'resolved' THEN 1 ELSE 0 END) as resolved_cnt,
-            COUNT(*) as total_cnt
-        FROM crm_contact_meta
-        WHERE ticket_status IN ('open', 'pending', 'resolved')
-        GROUP BY coalesce(nullif(trim(assigned_to), ''), 'Sin Asignar')
-        ORDER BY total_cnt DESC, op ASC
-    """)
-    operators = []
-    for r in cur.fetchall():
-        operators.append({
-            "operator": r["op"],
-            "open": r["open_cnt"] or 0,
-            "pending": r["pending_cnt"] or 0,
-            "resolved": r["resolved_cnt"] or 0,
-            "total": r["total_cnt"] or 0
-        })
-
-    # 4. Mapa de calor 7 días x 24 horas (mensajes de clientes)
-    cur.execute("""
-        SELECT 
-            cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as dow,
-            cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as hod,
-            COUNT(*) as cnt
-        FROM mensajes
-        WHERE es_mio = 0 
-          AND chat_id NOT LIKE '%@g.us'
-          AND chat_id NOT LIKE '%@newsletter'
-          AND chat_id != 'status@broadcast'
-          AND (? = 0 OR timestamp >= ?)
-        GROUP BY dow, hod
-    """, (min_ts, min_ts))
-    grid = [[0]*24 for _ in range(7)]
-    max_val = 0
-    peak_dow = 1
-    peak_hod = 10
-    total_incoming = 0
-
-    for r in cur.fetchall():
-        dow = r["dow"]
-        hod = r["hod"]
-        cnt = r["cnt"]
-        grid[dow][hod] = cnt
-        total_incoming += cnt
-        if cnt > max_val:
-            max_val = cnt
-            peak_dow = dow
-            peak_hod = hod
-
-    conn.close()
+        for r in cur.fetchall():
+            dow = r["dow"]
+            hod = r["hod"]
+            cnt = r["cnt"]
+            grid[dow][hod] = cnt
+            total_incoming += cnt
+            if cnt > max_val:
+                max_val = cnt
+                peak_dow = dow
+                peak_hod = hod
 
     days_names = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
     peak_desc = f"{days_names[peak_dow]} {peak_hod:02d}:00 - {peak_hod+1:02d}:00 hs ({max_val} msgs)"

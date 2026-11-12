@@ -43,7 +43,7 @@ def get_version() -> str:
                     return v
         except Exception:
             pass
-    return "3.0.0"
+    return "3.1.0"
 
 
 def calculate_sha256(filepath: str) -> str:
@@ -70,7 +70,7 @@ def download_python_embed(target_path: str):
 
     print(f"[DESCARGA] Descargando Python 3.12 Embeddable desde python.org...")
     print(f"           URL: {PYTHON_EMBED_URL}")
-    req = urllib.request.Request(PYTHON_EMBED_URL, headers={"User-Agent": "WAckup-Builder/3.0.0"})
+    req = urllib.request.Request(PYTHON_EMBED_URL, headers={"User-Agent": "WAckup-Builder/3.1.0"})
     with urllib.request.urlopen(req, timeout=60) as resp, open(target_path, "wb") as out_f:
         shutil.copyfileobj(resp, out_f)
     print(f"[OK] Descarga completada ({os.path.getsize(target_path) / 1024 / 1024:.2f} MB)")

@@ -1,6 +1,6 @@
-# 💬 WAckup 3.0 — Respaldo Local Pasivo, Copiloto CRM y Modo Equipo
+# 💬 WAckup 3.1 — Respaldo Local Pasivo, Copiloto Soporte/CRM, Radar Kanban y Modo Equipo
 
-> **WAckup** es la plataforma local definitiva para WhatsApp Web: combina un **respaldo pasivo e incremental offline** con un **Copiloto nativo en panel lateral (`chrome.sidePanel`)**, **Mini-CRM comercial**, métricas de atención y un **Modo Equipo en Red Local (LAN)** con semáforo anti-colisión en tiempo real.
+> **WAckup** es la plataforma local definitiva para WhatsApp Web: combina un **respaldo pasivo e incremental offline** con un **Copiloto nativo en panel lateral (`chrome.sidePanel`)**, **Mesa de Ayuda y Mini-CRM**, **Radar Kanban con Drag & Drop y SLA**, métricas de atención y un **Modo Equipo en Red Local (LAN)** con semáforo anti-colisión y transferencias en tiempo real.
 >
 > 🌐 **Repositorio Oficial:** [https://github.com/dbonotti/wackup](https://github.com/dbonotti/wackup)  
 > 📖 **Documentación Completa:** Para procedimientos paso a paso, arquitectura y guías detalladas, consulta el [Manual de Usuario](MANUAL_DE_USUARIO.md).
@@ -16,19 +16,31 @@
 
 ---
 
-## 🌟 ¿Qué resuelve WAckup?
+## 🌟 ¿Qué resuelve WAckup 3.1?
 
 1. **Soberanía Total de Datos:**  
-   Tus chats, fotos, audios y contactos se respaldan perpetuamente en una base de datos local SQLite bajo tu control absoluto, sin depender de la nube ni exponer datos a terceros.
+   Tus chats, fotos, audios, documentos y contactos se respaldan perpetuamente en una base de datos local SQLite bajo tu control absoluto, sin depender de la nube ni exponer datos a terceros.
 
 2. **Atención en Equipo sin Colisiones:**  
-   Varios operadores en la misma oficina pueden responder chats concurrentemente. Si dos personas abren la misma conversación, un semáforo visual en tiempo real avisa quién la está atendiendo para no duplicar respuestas.
+   Varios operadores en la misma oficina atienden concurrentemente. Un semáforo visual en tiempo real avisa quién tiene el chat abierto (distinguiendo entre WhatsApp Web y el Visor Web) para evitar respuestas duplicadas.
 
-3. **Copiloto Integrado (Mini-CRM):**  
-   Al lado de WhatsApp Web dispones de notas privadas por cliente, asignación de etiquetas, resolución automática de números ocultos (`@lid`) y plantillas de respuesta rápida en 1 clic.
+3. **Mesa de Ayuda, Radar & Kanban Interactivo (Novedad 3.1):**  
+   - **Kanban de Soporte con Radar en vivo**: Arrastra y suelta (`Drag & Drop`) casos entre estados (*Radar*, *Abierto*, *En espera*, *Resuelto*, *Cerrado*).
+   - **Semáforo de SLA dinámico**: Identifica visualmente chats demorados (<15m verde, 15-60m amarillo, >60m rojo, >2h violeta).
+   - **Auto-reapertura inteligente**: Si un cliente vuelve a escribir en un ticket resuelto o en espera, el caso se reabre automáticamente en el Radar.
+   - **Filtros rápidos en lista de chats**: Conmuta entre `[Todos]`, `[Sin responder]` y `[En espera]` al instante.
 
-4. **Radar de Atención y Métricas:**  
-   Detecta automáticamente los mensajes que esperan respuesta, organizados por urgencia y con ventana de atención configurable para no saturar al equipo con chats antiguos.
+4. **Copiloto Ergonómico & Transferencias (Novedad 3.1):**  
+   - Respuestas rápidas prioritarias con buscador instantáneo y atajos `Alt + 1` a `Alt + 5`.
+   - Botón de 1 clic para auto-asignarse casos ("Tomar caso").
+   - Transferencia ágil de casos con notas explicativas y alertas SSE interactivas para el operador receptor.
+   - Perfil de trabajo `support` por defecto para una experiencia limpia y centrada en la resolución técnica y operativa.
+
+5. **Blindaje de Red y Seguridad Reforzada (Novedad 3.1):**  
+   - Sesiones seguras protegidas con cookies `HttpOnly` y `SameSite=Lax`.
+   - Protección contra SSRF y DNS Rebinding validando cabeceras `Host` en red local.
+   - Sanitización contra CSV Formula Injection en exportación de contactos.
+   - Rotación automática de registros de sincronización (`sync.log`) y optimizaciones WAL sin bloqueos en SQLite.
 
 ---
 
@@ -36,28 +48,29 @@
 
 ```mermaid
 flowchart LR
-    A["🖥️ Servidor Central (Host)\nBackend Python + SQLite\nVisor Web (http://ip:5000)"] <-->|"Red Local (LAN)\nPIN 6 dígitos"| B["💻 Puestos Operadores\nWhatsApp Web +\nExtensión Copiloto"]
-    A <-->|"Auditoría / Métricas"| C["📊 Puestos Supervisores\nSolo Navegador Web"]
+    A["🖥️ Servidor Central (Host)\nBackend Python + SQLite WAL\nVisor Web (http://ip:5000)"] <-->|"Red Local (LAN)\nPIN + Cookie HttpOnly"| B["💻 Puestos Operadores\nWhatsApp Web +\nCopiloto chrome.sidePanel"]
+    A <-->|"Supervisión / Kanban / Métricas"| C["📊 Puestos Supervisores\nSolo Navegador Web"]
 ```
 
-* **Servidor Central:** Ejecuta el backend y aloja la base de datos única (`whatsapp_chats.db`).
+* **Servidor Central:** Ejecuta el backend Python y aloja la base de datos única (`whatsapp_chats.db`).
 * **Puestos Operadores:** Solo necesitan cargar la **Extensión** en Chrome/Edge. No requieren instalar Python ni bases de datos.
-* **Supervisores:** Solo abren el **Visor Web** en su navegador favorito.
+* **Supervisores:** Abren el **Visor Web** directamente en cualquier navegador moderno de la red local.
 
 ---
 
 ## 🚀 Inicio Rápido en 3 Pasos
 
 ### 1. Iniciar el Servidor (PC Principal)
-* Descarga el paquete portable y haz doble clic en **`iniciar_visor.bat`** (sitúa el control en la bandeja del sistema junto al reloj).
+* Descarga el paquete portable `WAckup_Portable_v3.1.0.zip` y descomprímelo.
+* Haz doble clic en **`iniciar_visor.bat`** (se ejecuta en segundo plano alojándose en la bandeja del sistema junto al reloj).
 * Se abrirá automáticamente el Visor Web en `http://localhost:5000`.
 
 ### 2. Instalar la Extensión (Puestos de Trabajo)
-* En Chrome/Edge, abre `chrome://extensions` y activa el **Modo de desarrollador**.
+* En Chrome/Edge/Brave, abre `chrome://extensions` y activa el **Modo de desarrollador**.
 * Haz clic en **Cargar descomprimida** y selecciona la carpeta `extension/`.
 
 ### 3. Conectar y Trabajar
-* Abre WhatsApp Web y haz clic en el ícono de WAckup para desplegar el **Copiloto**.
+* Abre WhatsApp Web y haz clic en el ícono de WAckup para desplegar el **Copiloto** lateral.
 * En **⚙️ Configuración**, introduce la URL y el PIN de la oficina, elige tu nombre de operador y ¡listo!
 
 ---
@@ -67,9 +80,10 @@ flowchart LR
 Para obtener explicaciones exhaustivas sobre configuración de red, gestión de operadores, resolución de problemas y capturas de pantalla, consulta la documentación oficial del proyecto:
 
 * 📖 **[Manual de Usuario y Guía Operativa Oficial](MANUAL_DE_USUARIO.md)**
-  - Arquitectura detallada y flujo de sincronización.
+  - Arquitectura detallada y flujo de sincronización pasiva.
   - Guía completa del Copiloto Lateral y Visor Web.
-  - Procedimientos de alta de operadores y liberación de sesiones.
+  - Flujo del Kanban de Soporte, SLA y Auto-Reapertura.
+  - Procedimientos de alta de operadores, transferencias y liberación de sesiones.
   - Respaldo y restauración de bases de datos.
   - Preguntas frecuentes y diagnóstico de red.
 

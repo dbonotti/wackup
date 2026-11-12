@@ -575,6 +575,7 @@ def list_accounts(force_refresh=False):
         last_ts = 0
 
         if os.path.isfile(db_path):
+            conn = None
             try:
                 conn = sqlite3.connect(db_path, timeout=5.0)
                 cur = conn.cursor()
@@ -594,9 +595,14 @@ def list_accounts(force_refresh=False):
                             name = crow[0]
                         if not meta.get("phone") and crow[1]:
                             phone = crow[1]
-                conn.close()
             except Exception:
                 pass
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         # Si es la carpeta 'default' vacía (0 mensajes), no listarla como cuenta
         if aid == DEFAULT_ACCOUNT_ID and total_msgs == 0:
@@ -633,6 +639,7 @@ def list_accounts(force_refresh=False):
         last_ts = 0
         phone = ""
         name = "Cuenta Principal"
+        conn = None
         try:
             conn = sqlite3.connect(legacy_db, timeout=5.0)
             cur = conn.cursor()
@@ -650,9 +657,14 @@ def list_accounts(force_refresh=False):
                 if crow:
                     if crow[0]: name = crow[0]
                     if crow[1]: phone = crow[1]
-            conn.close()
         except Exception:
             pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         accounts.append({
             "id": DEFAULT_ACCOUNT_ID,
@@ -691,6 +703,7 @@ def merge_account_databases(source_db, target_db, target_account_id):
     if not os.path.isfile(source_db) or not os.path.isfile(target_db):
         return False
 
+    conn = None
     try:
         conn = sqlite3.connect(target_db, timeout=30.0)
         cur = conn.cursor()
@@ -798,11 +811,16 @@ def merge_account_databases(source_db, target_db, target_account_id):
             cur.execute("DETACH DATABASE src")
         except Exception:
             pass
-        conn.close()
         return True
     except Exception as e:
         print(f"[ERROR] Error al fusionar bases de datos: {e}")
         return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def migrate_single_to_multi_account(account_id, name=None, phone=None):
@@ -889,14 +907,20 @@ def migrate_single_to_multi_account(account_id, name=None, phone=None):
     if os.path.isdir(default_dir) and os.path.abspath(default_dir) != os.path.abspath(target_dir):
         if os.path.isfile(default_db):
             has_data = False
+            c_test = None
             try:
                 c_test = sqlite3.connect(default_db, timeout=5.0)
                 cur_t = c_test.cursor()
                 cur_t.execute("SELECT COUNT(*) FROM mensajes")
                 has_data = cur_t.fetchone()[0] > 0
-                c_test.close()
             except Exception:
                 pass
+            finally:
+                if c_test:
+                    try:
+                        c_test.close()
+                    except Exception:
+                        pass
 
             if has_data:
                 if not os.path.exists(target_db) or os.path.getsize(target_db) == 0:
@@ -936,10 +960,12 @@ def backup_all_databases(target_base_dir=None):
 
     def _do_sqlite_backup(src_db, dst_bak):
         os.makedirs(os.path.dirname(dst_bak), exist_ok=True)
+        src_conn = None
+        dst_conn = None
         try:
-            with sqlite3.connect(src_db) as src_conn:
-                with sqlite3.connect(dst_bak) as dst_conn:
-                    src_conn.backup(dst_conn)
+            src_conn = sqlite3.connect(src_db)
+            dst_conn = sqlite3.connect(dst_bak)
+            src_conn.backup(dst_conn)
             return True
         except Exception:
             try:
@@ -947,6 +973,17 @@ def backup_all_databases(target_base_dir=None):
                 return True
             except Exception:
                 return False
+        finally:
+            if dst_conn:
+                try:
+                    dst_conn.close()
+                except Exception:
+                    pass
+            if src_conn:
+                try:
+                    src_conn.close()
+                except Exception:
+                    pass
 
     if target_base_dir:
         for root, dirs, files in os.walk(base_data):

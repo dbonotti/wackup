@@ -178,6 +178,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Recarga en caliente asistida de la extensión con recarga sincronizada de pestañas
   if (request.action === "reload_extension") {
+    if (sender && sender.tab) {
+      sendResponse({ ok: false, error: "No permitido desde content script" });
+      return;
+    }
     sendResponse({ ok: true });
     const shouldReloadTabs = request.reloadWhatsAppTabs !== false;
 
@@ -331,16 +335,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Obtener / guardar configuración
   if (request.action === "get_config") {
+    if (sender && sender.tab) {
+      sendResponse({ ok: true, config: { serverUrl: config.serverUrl } });
+      return;
+    }
     sendResponse({ ok: true, config });
     return;
   }
 
   if (request.action === "save_config") {
+    if (sender && sender.tab) {
+      sendResponse({ ok: false, error: "No permitido desde content script" });
+      return;
+    }
     const newCfg = request.config || {};
     const toSave = {};
     if (typeof newCfg.serverUrl === "string") toSave.serverUrl = newCfg.serverUrl.trim().replace(/\/+$/, "");
     if (typeof newCfg.officePin === "string") toSave.officePin = newCfg.officePin.trim();
     if (typeof newCfg.operatorName === "string") toSave.operatorName = newCfg.operatorName.trim();
+    if (typeof newCfg.sessionToken === "string") toSave.sessionToken = newCfg.sessionToken.trim();
 
     chrome.storage.local.set(toSave, () => {
       Object.assign(config, toSave);

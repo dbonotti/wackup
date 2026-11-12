@@ -13,7 +13,7 @@
     <!-- 1. Barra Lateral de Navegación Fija (App Rail - 58px) -->
     <nav id="app-rail" class="app-rail" aria-label="Navegación principal de WAckup">
       <div class="rail-top">
-        <div class="rail-brand" title="WAckup 3.0 - Sistema Local">
+        <div class="rail-brand" title="WAckup 3.1 - Sistema Local">
           <img class="rail-logo" src="/favicon.jpg" alt="WAckup">
         </div>
         <div class="rail-divider"></div>
@@ -40,7 +40,7 @@
           <span class="rail-icon" id="themeMenuIcon">🌙</span>
           <span class="rail-tooltip" id="themeMenuText">Modo oscuro</span>
         </button>
-        <div class="rail-version" title="WAckup versión 3.0.1">v3.0.1</div>
+        <div class="rail-version" title="WAckup versión 3.1.0">v3.1.0</div>
       </div>
     </nav>
 
@@ -553,7 +553,7 @@
             <span class="sub-label">Administración integral del servidor local, backups, multimedia y diagnóstico</span>
           </div>
           <div class="view-header-actions">
-            <span class="system-version-tag" id="systemAppVersion">v3.0.1</span>
+            <span class="system-version-tag" id="systemAppVersion">v3.1.0</span>
             <button class="btn-secondary" onclick="openOnboardingModal(1)" title="Asistente de primer uso">🚀 Asistente de Inicio</button>
             <button class="btn-secondary" onclick="checkSystemUpdates()" title="Atajo: U">🔄 Comprobar Actualizaciones</button>
             <button class="btn-primary" onclick="promptRestartSystem()" title="Atajo: R">⚡ Reiniciar Servidor</button>
@@ -838,22 +838,22 @@
         <h3>🔐 Acceso a WAckup Oficina</h3>
       </div>
       <div style="padding: 16px 20px;">
-        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
-          Te estás conectando desde otra PC de la red local. Selecciona tu <b>Nombre</b> e ingresa el <b>PIN de Oficina</b> para colaborar:
+        <p id="lanModalDesc" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
+          Te estás conectando desde otra PC de la red local. Ingresa el <b>PIN de Oficina</b> para conectar y seleccionar tu operador:
         </p>
         <div class="form-group mb-2">
-          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">Operador / Responsable</label>
-          <select id="modalOperatorSelect" class="search-box" style="width:100%;" onkeydown="if(event.key==='Enter') document.getElementById('modalLanPinInput').focus()">
-            <option value="">Cargando operadores...</option>
-          </select>
-        </div>
-        <div class="form-group mb-2" style="margin-top: 12px;">
           <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">PIN de Oficina</label>
           <input type="password" id="modalLanPinInput" class="search-box" placeholder="Ej. 123456" maxlength="8" style="width:100%;" onkeydown="if(event.key==='Enter') submitLanPinAuth()">
         </div>
+        <div id="lanModalOperatorGroup" class="form-group mb-2" style="margin-top: 12px; display: none;">
+          <label style="display:block; margin-bottom:4px; font-size:12px; font-weight:600;">Operador / Responsable</label>
+          <select id="modalOperatorSelect" class="search-box" style="width:100%;" onkeydown="if(event.key==='Enter') submitLanPinAuth()">
+            <option value="">-- Selecciona tu nombre --</option>
+          </select>
+        </div>
         <div id="lanPinErrorMsg" style="display: none; color: #ef4444; font-size: 12px; margin-top: 8px;"></div>
         <div style="margin-top: 18px; display: flex; justify-content: flex-end;">
-          <button type="button" class="btn-primary" onclick="submitLanPinAuth()">Conectar</button>
+          <button type="button" id="btnLanModalSubmit" class="btn-primary" onclick="submitLanPinAuth()">Verificar PIN</button>
         </div>
       </div>
     </div>
@@ -869,7 +869,7 @@
     <div class="modal-card onboarding-card">
       <div class="modal-header">
         <div>
-          <h3>🎉 ¡Bienvenido a WAckup 3.0!</h3>
+          <h3>🎉 ¡Bienvenido a WAckup 3.1!</h3>
           <p style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0 0;">Configuración inicial en 3 pasos (menos de 60 segundos)</p>
         </div>
         <button type="button" class="btn-modal-close" onclick="closeOnboardingModal()">&times;</button>
@@ -1001,8 +1001,8 @@
       </div>
       <div style="padding: 16px 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; background: var(--bg-hover); padding: 8px 12px; border-radius: 6px;">
-          <span style="font-size: 13px;">Versión instalada: <b id="updateCurrentVer">v3.0.1</b></span>
-          <span style="font-size: 13px; color: var(--accent);">Nueva versión: <b id="updateLatestVer">v3.0.1</b></span>
+          <span style="font-size: 13px;">Versión instalada: <b id="updateCurrentVer">v3.1.0</b></span>
+          <span style="font-size: 13px; color: var(--accent);">Nueva versión: <b id="updateLatestVer">v3.1.0</b></span>
         </div>
         <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Novedades y Cambios:</label>
         <div id="updateNotesContainer" style="margin-top: 6px; padding: 10px 12px; background: var(--bg-app); border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;">

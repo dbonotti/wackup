@@ -57,7 +57,7 @@
     }
 
     // 3. Botón de 1 clic "Tomar caso" en ficha de contacto
-    const btnTake = document.getElementById("btn-take-case-contact");
+    const btnTake = document.getElementById("btn-take-case");
     if (btnTake) {
       const isAssignedToMe = Boolean(currentAssignedTo && operatorName && currentAssignedTo.toLowerCase() === operatorName.toLowerCase());
       btnTake.style.display = (team && currentChatId && !isAssignedToMe) ? "inline-flex" : "none";
@@ -774,12 +774,17 @@
         const assignedVal = sel.value;
         let handoffNote = "";
         if (assignedVal && operatorName && assignedVal.toLowerCase() !== operatorName.toLowerCase()) {
-          const notePrompt = prompt(`¿Deseas agregar una nota de transferencia para ${assignedVal}? (opcional):`, "");
+          const notePrompt = await showSidePanelPrompt({
+            title: `Transferir a ${assignedVal}`,
+            message: `¿Deseas agregar una nota interna de transferencia para <b>${escapeHtml(assignedVal)}</b>? (opcional):`,
+            placeholder: "Escribe una nota o deja vacío...",
+            confirmText: "Transferir"
+          });
           if (notePrompt === null) {
             sel.value = currentAssignedTo || "";
             return;
           }
-          handoffNote = notePrompt.trim();
+          handoffNote = String(notePrompt || "").trim();
         }
         try {
           await apiFetch("/api/copilot/assignment", {
@@ -801,7 +806,7 @@
       });
     }
 
-    const btnTakeContact = document.getElementById("btn-take-case-contact");
+    const btnTakeContact = document.getElementById("btn-take-case");
     if (btnTakeContact) {
       btnTakeContact.addEventListener("click", async () => {
         if (!currentChatId) return;
@@ -920,7 +925,15 @@
           } else if (msg.event === "handoff_alert") {
             if (msg.to_operator && operatorName && msg.to_operator.toLowerCase() === operatorName.toLowerCase()) {
               const notePart = msg.note ? `\nNota: "${msg.note}"` : "";
-              showToast(`📢 ${msg.from_operator || 'Un compañero'} te transfirió el caso ${msg.chat_id}.${notePart}`, 7000);
+              showToast(`📢 ${msg.from_operator || 'Un compañero'} te transfirió un caso (${msg.chat_id}).${notePart}`, {
+                duration: 7000,
+                actionLabel: "Ver caso",
+                onAction: () => {
+                  const tabMgmt = document.querySelector('.tab-btn[data-tab="tab-management"]');
+                  if (tabMgmt) tabMgmt.click();
+                  if (msg.chat_id) loadChatContext(msg.chat_id);
+                }
+              });
             }
           } else if (msg.event === "profile_update") {
             if (!msg.account_id || msg.account_id === currentAccountId || currentAccountId === "default") {
@@ -1193,7 +1206,8 @@
     return String(rawBody)
       .replace(/\{nombre\}/gi, firstName)
       .replace(/\{saludo\}/gi, saludo)
-      .replace(/\{fecha\}/gi, fecha);
+      .replace(/\{fecha\}/gi, fecha)
+      .replace(/\{operador\}/gi, operatorName || "Operador");
   }
 
   function renderTemplates(list) {
@@ -1235,7 +1249,8 @@
       }
       const filtered = templatesList.filter(t => 
         (t.title && t.title.toLowerCase().includes(q)) || 
-        (t.body && t.body.toLowerCase().includes(q))
+        (t.body && t.body.toLowerCase().includes(q)) ||
+        (t.shortcut && t.shortcut.toLowerCase().includes(q))
       );
       renderTemplates(filtered);
     });
@@ -1893,7 +1908,7 @@
       }
 
       el.addEventListener("click", () => {
-        const tabMgmt = document.querySelector('.tab-btn[data-target="tab-management"]');
+        const tabMgmt = document.querySelector('.tab-btn[data-tab="tab-management"]');
         if (tabMgmt) tabMgmt.click();
         loadChatContext(item.chat_id || copyQuery);
       });
@@ -2077,7 +2092,7 @@
       }
 
       el.addEventListener("click", () => {
-        const tabMgmt = document.querySelector('.tab-btn[data-target="tab-management"]');
+        const tabMgmt = document.querySelector('.tab-btn[data-tab="tab-management"]');
         if (tabMgmt) tabMgmt.click();
         loadChatContext(item.chat_id || copyQuery);
       });
@@ -2445,10 +2460,8 @@
     const executeOpen = (handoffCode = null) => {
       if (handoffCode) {
         params.set("handoff", handoffCode);
-        params.delete("pin");
-      } else if (currentOfficePin) {
-        params.set("pin", currentOfficePin);
       }
+      params.delete("pin");
       const qs = params.toString();
       const finalUrl = `${base}/index.html${qs ? "?" + qs : ""}`;
 
@@ -2562,6 +2575,47 @@
         if (toggleBtn) toggleBtn.classList.remove("active");
       });
     }
+
+    if (btnBackupManual) {
+      btnBackupManual.addEventListener("click", () => {
+        chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: false });
+        showToast("Sincronizando...");
+      });
+    }
+
+    if (btnUpdateExt) {
+      btnUpdateExt.addEventListener("click", async () => {
+        const verText = latestDiskVersion ? ` a la versión <b>v${escapeHtml(latestDiskVersion)}</b>` : "";
+        const confirmed = await showSidePanelConfirm({
+          title: "Actualizar WAckup",
+          message: `Nueva versión disponible de WAckup${verText}.<br><br>` +
+            `Para aplicar la actualización y reactivar la sincronización, se recargará la extensión y la pestaña de WhatsApp Web automáticamente.<br><br>` +
+            `¿Deseas continuar?`,
+          confirmText: "Actualizar Ahora"
+        });
+        if (!confirmed) return;
+
+        showToast("Actualizando y recargando WhatsApp Web...");
+        chrome.runtime.sendMessage({ action: "reload_extension", reloadWhatsAppTabs: true });
+      });
+    }
+
+    if (btnAddTag) {
+      btnAddTag.addEventListener("click", async () => {
+        const tag = await showSidePanelPrompt({
+          title: "Nueva Etiqueta",
+          message: "Ingresa el nombre de la etiqueta para este contacto:",
+          placeholder: "ej: cliente, vip, proveedor...",
+          confirmText: "Agregar",
+          validator: (val) => {
+            if (!val || !val.trim()) return "El nombre de la etiqueta no puede estar vacío.";
+            return null;
+          }
+        });
+        if (tag && tag.trim()) addTag(tag.trim());
+      });
+    }
+  }
 
   // =========================================================================
   // MODALES Y DIÁLOGOS ELEGANTES DE SIDEPANEL
@@ -2731,47 +2785,6 @@
         }, 50);
       }
     });
-  }
-
-    if (btnBackupManual) {
-      btnBackupManual.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: false });
-        showToast("Sincronizando...");
-      });
-    }
-
-    if (btnUpdateExt) {
-      btnUpdateExt.addEventListener("click", async () => {
-        const verText = latestDiskVersion ? ` a la versión <b>v${escapeHtml(latestDiskVersion)}</b>` : "";
-        const confirmed = await showSidePanelConfirm({
-          title: "Actualizar WAckup",
-          message: `Nueva versión disponible de WAckup${verText}.<br><br>` +
-            `Para aplicar la actualización y reactivar la sincronización, se recargará la extensión y la pestaña de WhatsApp Web automáticamente.<br><br>` +
-            `¿Deseas continuar?`,
-          confirmText: "Actualizar Ahora"
-        });
-        if (!confirmed) return;
-
-        showToast("Actualizando y recargando WhatsApp Web...");
-        chrome.runtime.sendMessage({ action: "reload_extension", reloadWhatsAppTabs: true });
-      });
-    }
-
-    if (btnAddTag) {
-      btnAddTag.addEventListener("click", async () => {
-        const tag = await showSidePanelPrompt({
-          title: "Nueva Etiqueta",
-          message: "Ingresa el nombre de la etiqueta para este contacto:",
-          placeholder: "ej: cliente, vip, proveedor...",
-          confirmText: "Agregar",
-          validator: (val) => {
-            if (!val || !val.trim()) return "El nombre de la etiqueta no puede estar vacío.";
-            return null;
-          }
-        });
-        if (tag && tag.trim()) addTag(tag.trim());
-      });
-    }
   }
 
   // =========================================================================

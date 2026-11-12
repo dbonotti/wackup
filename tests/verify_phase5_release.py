@@ -105,10 +105,13 @@ class TestPhase5Release(unittest.TestCase):
             os.makedirs(user_data_dir, exist_ok=True)
             db_path = os.path.join(user_data_dir, "whatsapp_backup.db")
 
-            with sqlite3.connect(db_path) as conn:
+            conn = sqlite3.connect(db_path)
+            try:
                 conn.execute("CREATE TABLE test_data (id INTEGER PRIMARY KEY, note TEXT);")
                 conn.execute("INSERT INTO test_data (note) VALUES ('Dato vital del usuario');")
                 conn.commit()
+            finally:
+                conn.close()
 
             media_dir = os.path.join(user_data_dir, "media")
             os.makedirs(media_dir, exist_ok=True)
@@ -159,12 +162,15 @@ class TestPhase5Release(unittest.TestCase):
             self.assertTrue(os.path.isfile(new_static))
 
             # 5. PRESERVACIÓN TOTAL DE DATOS: Verificar que data/ no fue tocada
-            with sqlite3.connect(db_path) as conn:
+            conn = sqlite3.connect(db_path)
+            try:
                 cursor = conn.cursor()
                 cursor.execute("SELECT note FROM test_data WHERE id=1;")
                 row = cursor.fetchone()
                 self.assertIsNotNone(row)
                 self.assertEqual(row[0], "Dato vital del usuario")
+            finally:
+                conn.close()
 
             with open(media_file, "rb") as f:
                 read_bytes = f.read()
@@ -181,12 +187,15 @@ class TestPhase5Release(unittest.TestCase):
             self.assertGreaterEqual(len(bak_files), 1)
 
             bak_db = os.path.join(bak_dir, bak_files[0])
-            with sqlite3.connect(bak_db) as conn:
+            conn = sqlite3.connect(bak_db)
+            try:
                 cursor = conn.cursor()
                 cursor.execute("SELECT note FROM test_data WHERE id=1;")
                 row = cursor.fetchone()
                 self.assertIsNotNone(row)
                 self.assertEqual(row[0], "Dato vital del usuario")
+            finally:
+                conn.close()
 
         finally:
             shutil.rmtree(sandbox, ignore_errors=True)

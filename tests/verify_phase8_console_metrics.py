@@ -229,6 +229,84 @@ class TestPhase4ConsoleMetrics(unittest.TestCase):
             urllib.request.urlopen(req)
         self.assertIn(ctx.exception.code, (401, 403, 400))
 
+    def test_08_http_support_ticket_and_canonical_lid_chats(self):
+        """Verifica HTTP POST /api/support/ticket, resolución canónica @lid en GET /api/chats y movimiento Kanban."""
+        now_ts = int(time.time())
+        with db_manager.db_connection(self.db_path, write=True) as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO contactos (contact_id, nombre, numero)
+                VALUES ('9988776655@lid', 'Cliente LID', '5493518888888')
+            """)
+            cur.execute("""
+                INSERT INTO contact_aliases (alias_id, canonical_id, updated_at)
+                VALUES ('9988776655@lid', '5493518888888@c.us', ?)
+            """, (now_ts,))
+            cur.execute("""
+                INSERT INTO chats (chat_id, nombre, ultimo_mensaje, ultimo_tipo, ultimo_timestamp, ultimo_es_mio)
+                VALUES ('9988776655@lid', 'Cliente LID', 'Consulta por LID', 'chat', ?, 0)
+            """, (now_ts - 60,))
+
+        # 1. Actualizar ticket vía HTTP POST /api/support/ticket usando el @lid
+        ticket_payload = json.dumps({
+            "account_id": self.test_acc,
+            "chat_id": "9988776655@lid",
+            "ticket_status": "pending",
+            "support_priority": 1,
+            "assigned_to": "Dario",
+            "follow_up_date": "2026-12-01"
+        }).encode("utf-8")
+        req_ticket = urllib.request.Request(
+            f"{self.base_url}/api/support/ticket",
+            data=ticket_payload,
+            headers={
+                "Host": f"127.0.0.1:{self.port}",
+                "Content-Type": "application/json",
+                "X-WAckup-Operator": "Dario"
+            }
+        )
+        with urllib.request.urlopen(req_ticket) as resp:
+            self.assertEqual(resp.status, 200)
+            t_res = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(t_res.get("ok"))
+            self.assertEqual(t_res.get("ticket_status"), "pending")
+            self.assertEqual(t_res.get("support_priority"), 1)
+
+        # 2. Verificar que GET /api/chats resuelva el crm_contact_meta canónico del @lid
+        req_chats = urllib.request.Request(
+            f"{self.base_url}/api/chats?account_id={self.test_acc}",
+            headers={"Host": f"127.0.0.1:{self.port}"}
+        )
+        with urllib.request.urlopen(req_chats) as resp:
+            chats = json.loads(resp.read().decode("utf-8"))
+        lid_chat = next((c for c in chats if c["chat_id"] == "9988776655@lid"), None)
+        self.assertIsNotNone(lid_chat)
+        self.assertEqual(lid_chat.get("ticket_status"), "pending")
+        self.assertEqual(lid_chat.get("support_priority"), 1)
+        self.assertEqual(lid_chat.get("assigned_to"), "Dario")
+
+        # 3. Mover tarjeta en Kanban a 'open' debe actualizar radar_dismissed_at para que no rebote a Radar
+        move_payload = json.dumps({
+            "account_id": self.test_acc,
+            "chat_id": "9988776655@lid",
+            "ticket_status": "open"
+        }).encode("utf-8")
+        req_move = urllib.request.Request(
+            f"{self.base_url}/api/crm/kanban/move",
+            data=move_payload,
+            headers={
+                "Host": f"127.0.0.1:{self.port}",
+                "Content-Type": "application/json"
+            }
+        )
+        with urllib.request.urlopen(req_move) as resp:
+            self.assertEqual(resp.status, 200)
+            m_res = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(m_res.get("ok"))
+
+        unanswered = db_manager.get_unanswered_chats(limit=80, max_age_days=7, db_path=self.db_path)
+        self.assertNotIn("9988776655@lid", {c["chat_id"] for c in unanswered})
+
 
 if __name__ == "__main__":
     unittest.main()
