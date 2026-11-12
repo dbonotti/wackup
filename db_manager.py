@@ -576,6 +576,10 @@ def init_workspace_tables(conn):
         cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN radar_dismissed_at INTEGER DEFAULT 0")
     if "radar_ignored" not in existing_meta_cols:
         cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN radar_ignored INTEGER DEFAULT 0")
+    if "support_priority" not in existing_meta_cols:
+        cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN support_priority INTEGER DEFAULT 0")
+    if "follow_up_date" not in existing_meta_cols:
+        cur.execute("ALTER TABLE crm_contact_meta ADD COLUMN follow_up_date TEXT")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_contact_assigned ON crm_contact_meta (assigned_to)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_contact_radar ON crm_contact_meta (radar_ignored, radar_dismissed_at)")
 
@@ -1245,6 +1249,25 @@ def _save_incremental_sync_tx(cur, data):
 
         # Asegurar que el chat padre exista en la tabla chats y actualizar campos desnormalizados
         if chat_id:
+            # Auto-reapertura de tickets al responder el cliente (Fase 2)
+            # Solo aplica a chats individuales (no grupos), cuando el mensaje es entrante (is_mine == 0) y ts > prev_ts
+            if not chat_id.endswith("@g.us") and not is_mine and ts and m_type != "call_log":
+                cur.execute("SELECT ultimo_timestamp FROM chats WHERE chat_id = ?", (chat_id,))
+                prev_row = cur.fetchone()
+                prev_ts = prev_row[0] if (prev_row and prev_row[0]) else 0
+                if ts > prev_ts:
+                    canon_cid = resolve_canonical_chat_id(cur, chat_id)
+                    cur.execute("SELECT ticket_status FROM crm_contact_meta WHERE chat_id = ?", (canon_cid,))
+                    meta_row = cur.fetchone()
+                    if meta_row and meta_row[0] in ("pending", "resolved"):
+                        now_ms = int(time.time() * 1000)
+                        now_s = int(time.time())
+                        cur.execute("UPDATE crm_contact_meta SET ticket_status = 'open', updated_at = ? WHERE chat_id = ?", (now_ms, canon_cid))
+                        cur.execute(
+                            "INSERT INTO crm_contact_notes_log (chat_id, author, content, created_at) VALUES (?, ?, ?, ?)",
+                            (canon_cid, "Sistema", "🔄 Ticket reabierto automáticamente por nuevo mensaje del cliente", now_s)
+                        )
+
             cur.execute("""
                 INSERT INTO chats (chat_id, nombre, ultimo_timestamp, ultimo_mensaje, ultimo_es_mio, ultimo_tipo)
                 VALUES (?, NULL, ?, ?, ?, ?)
@@ -1511,7 +1534,7 @@ def list_manual_backups(backup_dir=BACKUP_DIR):
 # FUNCIONES DE CONSULTA Y GESTIÓN DE COPILOTO Y CRM LOCAL
 # =========================================================================
 
-def get_copilot_context(chat_query, db_path=None):
+def get_copilot_context(chat_query, profile_type=None, db_path=None):
     """
     Busca de forma ultra-rápida (< 20ms) el contexto de un chat por ID, número o nombre.
     Retorna metadatos CRM, etiquetas, estadísticas de mensajes y notas.
@@ -1725,7 +1748,7 @@ def get_copilot_context(chat_query, db_path=None):
     sla_text = get_chat_sla(id_list, db_path=db_path)
 
     # Plantillas disponibles
-    templates = list_quick_templates(db_path=db_path)
+    templates = list_quick_templates(profile_type=profile_type, db_path=db_path)
 
     conn.close()
 
@@ -1817,7 +1840,7 @@ def get_chat_sla(chat_ids, db_path=None):
         hours = round(sec / 3600, 1)
         return f"~{hours} h"
 
-def get_unanswered_chats(limit=30, max_age_days=7, db_path=None):
+def get_unanswered_chats(limit=80, max_age_days=7, db_path=None):
     """
     Radar de chats sin responder: devuelve conversaciones individuales donde el último mensaje
     es del cliente (es_mio = 0) dentro de la ventana de antigüedad (por defecto últimos 7 días)
@@ -1861,16 +1884,14 @@ def get_unanswered_chats(limit=30, max_age_days=7, db_path=None):
               AND ch.chat_id != 'status@broadcast'
               AND ch.ultimo_timestamp IS NOT NULL
               AND coalesce(c.radar_ignored, 0) = 0
+              AND ch.ultimo_es_mio = 0
+              AND ch.ultimo_timestamp > coalesce(c.radar_dismissed_at, 0)
               AND (
                   c.ticket_status = 'open'
-                  OR (
-                      ch.ultimo_es_mio = 0
-                      AND ch.ultimo_timestamp >= ?
-                      AND ch.ultimo_timestamp > coalesce(c.radar_dismissed_at, 0)
-                  )
+                  OR ch.ultimo_timestamp >= ?
               )
             GROUP BY coalesce(ca.canonical_id, ch.chat_id)
-            ORDER BY ch.ultimo_timestamp DESC
+            ORDER BY coalesce(c.support_priority, 0) DESC, ch.ultimo_timestamp ASC
             LIMIT ?
         """, (min_ts, limit))
         rows = cur.fetchall()
@@ -1952,6 +1973,8 @@ def get_sales_followups(limit=30, db_path=None):
                 coalesce(c.sales_stage, 'none') as sales_stage,
                 coalesce(c.estimated_value, 0.0) as estimated_value,
                 c.follow_up_date,
+                coalesce(c.ticket_status, 'none') as ticket_status,
+                coalesce(c.support_priority, 0) as support_priority,
                 coalesce(c.assigned_to, '') as assigned_to,
                 coalesce(c.updated_by, '') as updated_by
             FROM chats ch
@@ -2033,6 +2056,8 @@ def get_sales_followups(limit=30, db_path=None):
             "sales_stage": r["sales_stage"],
             "estimated_value": float(r["estimated_value"] or 0.0),
             "follow_up_date": r["follow_up_date"],
+            "ticket_status": r["ticket_status"] if "ticket_status" in r else "none",
+            "support_priority": r["support_priority"] if "support_priority" in r else 0,
             "assigned_to": r["assigned_to"] if "assigned_to" in r else "",
             "updated_by": r["updated_by"] if "updated_by" in r else ""
         })
@@ -2480,7 +2505,7 @@ def delete_contact_note_log(note_id, author=None, db_path=None):
     with db_connection(db_path, write=True) as conn:
         cur = conn.cursor()
         if author:
-            cur.execute("DELETE FROM crm_contact_notes_log WHERE id = ? AND author = ?", (note_id, author))
+            cur.execute("DELETE FROM crm_contact_notes_log WHERE id = ? AND LOWER(author) = LOWER(?)", (note_id, author))
         else:
             cur.execute("DELETE FROM crm_contact_notes_log WHERE id = ?", (note_id,))
         return cur.rowcount > 0
@@ -2680,6 +2705,7 @@ def get_kanban_board(board_type="sales", db_path=None):
             coalesce(c.assigned_to, '') as assigned_to,
             coalesce(c.updated_by, '') as updated_by,
             coalesce(c.ticket_status, 'none') as ticket_status,
+            coalesce(c.support_priority, 0) as support_priority,
             c.notes,
             c.updated_at,
             ch.ultimo_mensaje as last_message,
@@ -2691,8 +2717,10 @@ def get_kanban_board(board_type="sales", db_path=None):
         LEFT JOIN contactos con ON c.chat_id = con.contact_id OR c.chat_id = (con.numero || '@c.us')
         WHERE c.chat_id NOT IN (SELECT alias_id FROM contact_aliases)
         GROUP BY c.chat_id
-        ORDER BY coalesce(c.updated_at, ch.ultimo_timestamp, 0) DESC
-    """)
+        ORDER BY 
+            CASE WHEN ? = 'support' THEN coalesce(c.support_priority, 0) ELSE 0 END DESC,
+            coalesce(c.updated_at, ch.ultimo_timestamp, 0) DESC
+    """, (board_type,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 

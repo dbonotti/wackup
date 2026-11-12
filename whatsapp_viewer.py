@@ -15,8 +15,12 @@ import webbrowser
 import traceback
 import html
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http import cookies
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
+import secrets
+import hmac
+import hashlib
 
 # En Windows con pythonw.exe, sys.stdout y sys.stderr se inicializan como None.
 # Redirigir a os.devnull para prevenir caídas ('NoneType' object has no attribute 'write')
@@ -42,6 +46,7 @@ from config import (
 )
 
 PORT = 8080
+SAFE_DATA_IMAGE_REGEX = re.compile(r"^data:image/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$")
 _last_sync_epoch = 0
 _server_instance = None
 _server_stopping = False
@@ -230,7 +235,7 @@ def generate_chat_html_export(chat_id, embed_media=False, db_path=None):
                 media_html = f'<audio controls src="{src_uri}"></audio>'
             else:
                 media_html = f'<div>📄 <a href="{rel_url}">{html.escape(m["archivo_local"].split("/")[-1])}</a></div>'
-        elif m.get("thumbnail") and str(m.get("thumbnail")).startswith("data:image"):
+        elif m.get("thumbnail") and SAFE_DATA_IMAGE_REGEX.match(str(m.get("thumbnail")).strip()):
             media_html = f'<img class="media-img" src="{m["thumbnail"]}">'
 
         time_str = m["fecha_utc"].split(" ")[1][:5] if m.get("fecha_utc") else ""
@@ -961,14 +966,159 @@ def log_sync_status(stats, account_id="default"):
     # 2. Actualizar visualmente la línea en el panel de control
     update_status_display()
 
+_LAN_SESSIONS = {}
+_LAN_SESSIONS_LOCK = threading.Lock()
+_PIN_FAILURES = {}
+_PIN_FAILURES_LOCK = threading.Lock()
+_IP_CACHE = {"ips": [], "ts": 0}
+
+def get_cached_local_ips():
+    now = time.time()
+    if now - _IP_CACHE["ts"] > 30:
+        try:
+            _IP_CACHE["ips"] = config.get_local_ip_addresses()
+            _IP_CACHE["ts"] = now
+        except Exception:
+            pass
+    return _IP_CACHE["ips"]
+
+def check_pin_rate_limit(ip):
+    now = time.time()
+    with _PIN_FAILURES_LOCK:
+        attempts = [t for t in _PIN_FAILURES.get(ip, []) if now - t < 600]
+        _PIN_FAILURES[ip] = attempts
+        if len(attempts) >= 6:
+            oldest = min(attempts)
+            wait_sec = max(1, int(600 - (now - oldest)))
+            return False, wait_sec
+        return True, 0
+
+def record_pin_failure(ip):
+    now = time.time()
+    with _PIN_FAILURES_LOCK:
+        attempts = [t for t in _PIN_FAILURES.get(ip, []) if now - t < 600]
+        attempts.append(now)
+        _PIN_FAILURES[ip] = attempts
+
+def clear_pin_failures(ip):
+    with _PIN_FAILURES_LOCK:
+        _PIN_FAILURES.pop(ip, None)
+
+def create_lan_session(operator_name, ip):
+    token = secrets.token_urlsafe(32)
+    with _LAN_SESSIONS_LOCK:
+        _LAN_SESSIONS[token] = {
+            "operator": operator_name or "Operador",
+            "created_at": time.time(),
+            "ip": ip
+        }
+    return token
+
+def get_lan_session(token):
+    if not token or not isinstance(token, str):
+        return None
+    with _LAN_SESSIONS_LOCK:
+        sess = _LAN_SESSIONS.get(token)
+        if not sess:
+            return None
+        # Expiración: 7 días
+        if time.time() - sess.get("created_at", 0) > 7 * 86400:
+            _LAN_SESSIONS.pop(token, None)
+            return None
+        return sess
+
+def revoke_operator_sessions(operator_name=None):
+    with _LAN_SESSIONS_LOCK:
+        if not operator_name:
+            _LAN_SESSIONS.clear()
+        else:
+            to_del = [t for t, s in _LAN_SESSIONS.items() if s.get("operator", "").lower() == operator_name.lower()]
+            for t in to_del:
+                _LAN_SESSIONS.pop(t, None)
+
+_HANDOFF_CODES = {}
+_HANDOFF_LOCK = threading.Lock()
+
+def create_handoff_code(operator_name="Operador", ip=""):
+    code = secrets.token_urlsafe(24)
+    now = time.time()
+    with _HANDOFF_LOCK:
+        expired = [k for k, v in _HANDOFF_CODES.items() if v.get("expires_at", 0) < now]
+        for k in expired:
+            _HANDOFF_CODES.pop(k, None)
+        _HANDOFF_CODES[code] = {
+            "operator": operator_name or "Operador",
+            "ip": ip,
+            "expires_at": now + 20.0
+        }
+    return code
+
+def redeem_handoff_code(code, ip=""):
+    if not code:
+        return None
+    now = time.time()
+    with _HANDOFF_LOCK:
+        data = _HANDOFF_CODES.pop(code, None)
+    if not data:
+        return None
+    if now > data.get("expires_at", 0):
+        return None
+    return data.get("operator", "Operador")
+
+
 class BackupServerHandler(BaseHTTPRequestHandler):
+    def is_valid_host_header(self):
+        """
+        Protección estricta contra DNS Rebinding:
+        Valida que la cabecera Host corresponda al loopback local (127.0.0.1 / localhost)
+        o, en modo LAN, a una de las IPs locales autorizadas de esta máquina en el puerto correcto.
+        """
+        host_hdr = (self.headers.get("Host") or "").strip().lower()
+        if not host_hdr:
+            return False
+
+        if ":" in host_hdr:
+            host, _, port_str = host_hdr.partition(":")
+            try:
+                server_port = self.server.server_address[1]
+                if port_str and int(port_str) != int(server_port):
+                    return False
+            except Exception:
+                pass
+        else:
+            host = host_hdr
+
+        if host in ("127.0.0.1", "localhost", "::1"):
+            return True
+
+        settings = config.get_system_settings()
+        if settings.get("network_mode") == "lan":
+            allowed_ips = set(get_cached_local_ips())
+            if host in allowed_ips:
+                return True
+
+        return False
+
     def is_trusted_origin(self):
         origin = self.headers.get("Origin")
         if not origin:
             return True
+
+        sec_fetch_site = self.headers.get("Sec-Fetch-Site", "").lower()
+        if sec_fetch_site == "cross-site":
+            if not origin.startswith("chrome-extension://") and not origin.startswith("moz-extension://"):
+                return False
+
+        # Solo loopback y extensiones
+        server_port = PORT
+        try:
+            server_port = self.server.server_address[1]
+        except Exception:
+            pass
+
         allowed_origins = [
-            f"http://127.0.0.1:{PORT}",
-            f"http://localhost:{PORT}",
+            f"http://127.0.0.1:{server_port}",
+            f"http://localhost:{server_port}",
             "https://web.whatsapp.com"
         ]
         if origin in allowed_origins or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://"):
@@ -986,12 +1136,18 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 pass
         return False
 
+    def send_default_security_headers(self):
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+
     def send_cors_headers(self):
         origin = self.headers.get("Origin")
         if origin and self.is_trusted_origin():
             self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Range, X-WAckup-Pin, X-Office-PIN, X-WAckup-Operator, X-Operator-Name")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Range, X-WAckup-Pin, X-Office-PIN, X-WAckup-Operator, X-Operator-Name, X-WAckup-Session")
             self.send_header("Vary", "Origin")
 
     def is_local_client(self):
@@ -1008,13 +1164,24 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return clean_sim in ("127.0.0.1", "localhost", "::1")
         return True
 
+    def _get_client_ip(self):
+        simulated = self.headers.get("X-Forwarded-For") or self.headers.get("X-Remote-IP")
+        if simulated:
+            return simulated.split(",")[0].strip()
+        if self.client_address:
+            return self.client_address[0]
+        return "127.0.0.1"
+
     def is_authorized_request(self):
         """
         Control de acceso LAN:
         - Si el cliente es local (127.0.0.1): 100% autorizado sin pedir PIN.
         - Si el cliente es remoto:
           - Si network_mode != 'lan': 403 Forbidden.
-          - Si network_mode == 'lan': exige PIN válido (X-WAckup-Pin, X-Office-PIN o query ?pin=).
+          - Si network_mode == 'lan':
+            1. Verifica sesión previa válida por Cookie (wackup_session) o Header (X-WAckup-Session).
+            2. Si no hay sesión válida, verifica PIN (X-WAckup-Pin, X-Office-PIN o query ?pin=)
+               con comparación segura contra timing attacks y rate-limiting de máx 6 fallos en 10 min.
             Si falta o no coincide -> 401 Unauthorized.
         """
         if self.is_local_client():
@@ -1023,6 +1190,31 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         settings = config.get_system_settings()
         if settings.get("network_mode") != "lan":
             return False, 403, "El servidor está configurado en modo local (solo esta PC). Activa Modo Equipo en Red Local en Sistema."
+
+        # 1. Verificar Cookie o Header de sesión
+        cookie_hdr = self.headers.get("Cookie", "")
+        session_token = None
+        if cookie_hdr:
+            try:
+                c = cookies.SimpleCookie()
+                c.load(cookie_hdr)
+                if "wackup_session" in c:
+                    session_token = c["wackup_session"].value
+            except Exception:
+                pass
+        if not session_token:
+            session_token = self.headers.get("X-WAckup-Session")
+
+        if session_token:
+            sess = get_lan_session(session_token)
+            if sess:
+                return True, 200, None
+
+        # 2. Verificar PIN (Compatibilidad) con Rate-Limiting
+        client_ip = self._get_client_ip()
+        allowed, wait_sec = check_pin_rate_limit(client_ip)
+        if not allowed:
+            return False, 429, f"Demasiados intentos de PIN erróneos desde esta dirección. Por favor espera {wait_sec} segundos."
 
         expected_pin = str(settings.get("lan_pin", "")).strip()
         client_pin = (
@@ -1039,27 +1231,74 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-        if not expected_pin or client_pin != expected_pin:
+        if not expected_pin or not client_pin:
+            return False, 401, "PIN de oficina requerido o sesión inválida"
+
+        if not hmac.compare_digest(client_pin.encode("utf-8"), expected_pin.encode("utf-8")):
+            record_pin_failure(client_ip)
             return False, 401, "PIN de oficina requerido o incorrecto"
 
+        clear_pin_failures(client_ip)
         return True, 200, None
 
+    def _read_json_body(self, max_bytes=1_048_576, allow_empty=True):
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            content_length = 0
+
+        if content_length <= 0:
+            if allow_empty:
+                return {}
+            self.send_json(400, {"error": "Cuerpo de solicitud vacío"})
+            return None
+
+        if content_length > max_bytes:
+            self.send_json(413, {"error": "Carga útil demasiado grande"})
+            return None
+
+        try:
+            raw_bytes = self.rfile.read(content_length)
+            if len(raw_bytes) != content_length:
+                self.send_json(400, {"error": "Cuerpo de solicitud incompleto"})
+                return None
+            body = raw_bytes.decode("utf-8")
+            return json.loads(body) if body.strip() else {}
+        except UnicodeDecodeError:
+            self.send_json(400, {"error": "Codificación de caracteres inválida (se requiere UTF-8)"})
+            return None
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "Formato JSON inválido"})
+            return None
+        except Exception as e:
+            self.send_json(400, {"error": f"Error leyendo solicitud: {e}"})
+            return None
+
     def do_OPTIONS(self):
+        if not self.is_valid_host_header():
+            self.send_response(403)
+            self.end_headers()
+            return
         if not self.is_trusted_origin():
             self.send_response(403)
             self.end_headers()
             return
         self.send_response(200)
+        self.send_default_security_headers()
         self.send_cors_headers()
         self.end_headers()
 
-    def send_json(self, status_code, data):
+    def send_json(self, status_code, data, extra_headers=None):
         response_bytes = json.dumps(data).encode("utf-8")
         try:
             self.send_response(status_code)
             self.send_header("Content-type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(response_bytes)))
+            self.send_default_security_headers()
             self.send_cors_headers()
+            if extra_headers:
+                for k, v in extra_headers.items():
+                    self.send_header(k, v)
             self.end_headers()
             self.wfile.write(response_bytes)
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
@@ -1070,8 +1309,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             else:
                 raise
 
-    def _serve_file_with_range(self, filepath, mime_type):
-        """Sirve un archivo soportando peticiones HTTP Range (206 Partial Content) y streaming por bloques."""
+    def _serve_file_with_range(self, filepath, mime_type, force_attachment=False):
+        """Sirve un archivo soportando peticiones HTTP Range (206 Partial Content) y streaming por bloques con defensas anti-XSS."""
         file_size = os.path.getsize(filepath)
         range_header = self.headers.get("Range")
 
@@ -1092,12 +1331,31 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
         length = end - start + 1
         self.send_response(status_code)
+
+        # Reglas de seguridad anti-XSS en archivos multimedia
+        lower_path = filepath.lower()
+        is_safe_inline_media = (
+            (mime_type.startswith("image/") and not lower_path.endswith(".svg") and not lower_path.endswith(".html") and not lower_path.endswith(".htm"))
+            or mime_type.startswith("audio/")
+            or mime_type.startswith("video/")
+        )
+
+        if not is_safe_inline_media or force_attachment:
+            # Nunca servir archivos HTML ni SVG con mime ejecutable inline
+            if lower_path.endswith(".html") or lower_path.endswith(".htm") or lower_path.endswith(".svg") or lower_path.endswith(".xml"):
+                mime_type = "application/octet-stream"
+            filename = os.path.basename(filepath)
+            safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+            self.send_header("Content-Disposition", f'attachment; filename="{safe_filename}"')
+
         self.send_header("Content-Type", mime_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
         if status_code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
         self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_default_security_headers()
+        self.send_header("Content-Security-Policy", "default-src 'none'; media-src 'self'; img-src 'self'; sandbox")
         self.send_cors_headers()
         self.end_headers()
 
@@ -1142,6 +1400,10 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         global _last_client_ping, _last_sync_epoch
+        if not self.is_valid_host_header():
+            self.send_response(403)
+            self.end_headers()
+            return
         if not self.is_trusted_origin():
             self.send_json(403, {"error": "Origen no permitido"})
             return
@@ -1150,6 +1412,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
         if url.path in ["/", "/index.html"]:
             record_web_viewer_ping()
+            params = parse_qs(url.query)
+            handoff_code = params.get("handoff", [None])[0]
+            cookie_header = None
+            if handoff_code:
+                client_ip = self._get_client_ip()
+                op_name = redeem_handoff_code(handoff_code, ip=client_ip)
+                if op_name:
+                    tok = create_lan_session(op_name, client_ip)
+                    cookie_header = f"wackup_session={tok}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
             index_path = os.path.join(WEB_DIR, "index.html")
             if os.path.isfile(index_path):
                 with open(index_path, "rb") as f:
@@ -1158,6 +1429,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(content_bytes)))
                 self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                if cookie_header:
+                    self.send_header("Set-Cookie", cookie_header)
+                self.send_default_security_headers()
                 self.end_headers()
                 self.wfile.write(content_bytes)
             else:
@@ -1188,8 +1462,10 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(content_bytes)))
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_default_security_headers()
             self.end_headers()
             self.wfile.write(content_bytes)
+            return
             return
 
         elif url.path in ["/favicon.jpg", "/favicon.ico"]:
@@ -1231,6 +1507,17 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             ips = config.get_local_ip_addresses()
             auth_ok, _, _ = self.is_authorized_request()
             can_see_pin = is_local or auth_ok
+
+            if not can_see_pin:
+                # Pre-autenticación en LAN: ocultar operadores e IPs internas hasta validar PIN
+                self.send_json(200, {
+                    "ok": True,
+                    "network_mode": settings.get("network_mode", "local"),
+                    "needs_pin": True,
+                    "is_local": False
+                })
+                return
+
             known_ops = settings.get("known_operators", [])
             active_op = settings.get("active_operator", "") or (known_ops[0] if known_ops else "")
 
@@ -1244,9 +1531,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 "active_operator": active_op,
                 "online_operators": sse_hub.get_sse_hub().get_online_operators(),
                 "is_local": is_local,
-                "needs_pin": not can_see_pin
+                "needs_pin": False
             }
-            if can_see_pin:
+            if is_local:
                 resp_data["lan_pin"] = settings.get("lan_pin", "")
             self.send_json(200, resp_data)
             return
@@ -1418,11 +1705,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             if not chat_query:
                 self.send_json(400, {"ok": False, "error": "Falta parámetro chat_query"})
                 return
-            context = db_manager.get_copilot_context(chat_query, db_path=db_path)
+            prof = config.get_account_profile(account_id)
+            p_type = prof if prof in ("support", "sales") else None
+            context = db_manager.get_copilot_context(chat_query, profile_type=p_type, db_path=db_path)
             if not context:
                 self.send_json(404, {"ok": False, "error": "Chat no encontrado"})
                 return
-            prof = config.get_account_profile(account_id)
             context["account_id"] = account_id
             context["profile"] = prof
             context["profile_label"] = config.WORKSPACE_PROFILE_NAMES.get(prof, prof)
@@ -1742,6 +2030,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return
 
         elif url.path == "/api/backup/list":
+            if not self.is_local_client():
+                self.send_json(403, {"ok": False, "error": "Gestión de respaldos disponible únicamente desde la PC principal"})
+                return
             params = parse_qs(url.query)
             _, _, backup_dir = self._resolve_account_params(params)
             backups = db_manager.list_manual_backups(backup_dir=backup_dir)
@@ -1749,13 +2040,16 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             return
 
         elif url.path == "/api/backup/download":
+            if not self.is_local_client():
+                self.send_json(403, {"ok": False, "error": "Descarga de respaldos disponible únicamente desde la PC principal"})
+                return
             params = parse_qs(url.query)
             _, _, backup_dir = self._resolve_account_params(params)
             filename = os.path.basename(params.get("file", [""])[0])
             backups_root = os.path.abspath(backup_dir)
             filepath = os.path.abspath(os.path.join(backups_root, filename))
             if filepath.startswith(backups_root + os.sep) and os.path.isfile(filepath):
-                self._serve_file_with_range(filepath, "application/octet-stream")
+                self._serve_file_with_range(filepath, "application/octet-stream", force_attachment=True)
                 return
             else:
                 self.send_response(404)
@@ -1765,7 +2059,6 @@ class BackupServerHandler(BaseHTTPRequestHandler):
         elif url.path.startswith("/media/") or (url.path.startswith("/data/") and "/media/" in url.path):
             decoded_path = unquote(url.path).lstrip("/")
             abs_file_path = os.path.abspath(os.path.join(BASE_DIR, decoded_path))
-            data_root = os.path.abspath(DATA_DIR)
             legacy_media_root = os.path.abspath(os.path.join(BASE_DIR, "media"))
 
             # Fallback si se solicitó "/media/..." o "/data/media/..." directamente
@@ -1787,16 +2080,25 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                                 abs_file_path = os.path.abspath(acc_media)
                                 break
 
-            # Prevenir vulnerabilidad de Path Traversal
-            is_valid = (
-                (abs_file_path.startswith(data_root + os.sep) or abs_file_path.startswith(legacy_media_root + os.sep))
-                and os.path.isfile(abs_file_path)
-            )
+            # Prevenir vulnerabilidad de Path Traversal:
+            # El archivo debe residir estrictamente dentro de un directorio 'media/' legítimo, NUNCA en la raíz de data/
+            real_file = os.path.realpath(abs_file_path)
+            allowed_media_roots = [
+                os.path.realpath(MEDIA_DIR),
+                os.path.realpath(legacy_media_root)
+            ]
+            for acc in config.list_accounts():
+                allowed_media_roots.append(os.path.realpath(os.path.join(acc["dir"], "media")))
 
-            if is_valid:
-                mime, _ = mimetypes.guess_type(abs_file_path)
+            is_under_media = any(os.path.commonpath([real_file, r]) == r for r in allowed_media_roots)
+            lower_file = real_file.lower()
+            forbidden_exts = (".db", ".db-wal", ".db-shm", ".json", ".log", ".py", ".bat", ".cmd", ".vbs", ".ps1")
+            is_forbidden = any(lower_file.endswith(fe) for fe in forbidden_exts)
+
+            if is_under_media and not is_forbidden and os.path.isfile(real_file):
+                mime, _ = mimetypes.guess_type(real_file)
                 mime = mime or "application/octet-stream"
-                self._serve_file_with_range(abs_file_path, mime)
+                self._serve_file_with_range(real_file, mime)
                 return
             else:
                 self.send_response(404)
@@ -1856,14 +2158,20 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if not self.is_valid_host_header():
+                self.send_response(403)
+                self.send_default_security_headers()
+                self.end_headers()
+                return
+
             if not self.is_trusted_origin():
                 self.send_json(403, {"error": "Origen no permitido"})
                 return
 
             url = urlparse(self.path)
 
-            # Control de autorización para endpoints de API (excepto /api/auth/verify_pin)
-            if url.path.startswith("/api/") and url.path != "/api/auth/verify_pin":
+            # Control de autorización para endpoints de API (excepto /api/auth/verify_pin y /api/auth/redeem_handoff)
+            if url.path.startswith("/api/") and url.path not in ("/api/auth/verify_pin", "/api/auth/redeem_handoff"):
                 auth_ok, status_code, err_msg = self.is_authorized_request()
                 if not auth_ok:
                     self.send_json(status_code, {
@@ -1874,12 +2182,20 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     return
 
             if url.path == "/api/auth/verify_pin":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body(max_bytes=65536)
+                if payload is None:
+                    return
+
+                client_ip = self._get_client_ip()
+                allowed, wait_sec = check_pin_rate_limit(client_ip)
+                if not allowed:
+                    self.send_json(429, {
+                        "ok": False,
+                        "error": f"Demasiados intentos de PIN. Espera {wait_sec} segundos.",
+                        "rate_limited": True
+                    })
+                    return
+
                 pin = str(payload.get("pin", "")).strip()
                 operator_name = str(payload.get("operator") or payload.get("operator_name", "")).strip()
 
@@ -1890,35 +2206,44 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
                 # Si está en modo LAN o se requiere PIN, validar si se especificó expected_pin
                 if (network_mode == "lan" or not is_local) and expected_pin:
-                    if not pin or pin != expected_pin:
+                    if not pin or not hmac.compare_digest(pin.encode("utf-8"), expected_pin.encode("utf-8")):
+                        record_pin_failure(client_ip)
                         self.send_json(401, {
                             "ok": False,
                             "error": "PIN de oficina incorrecto",
                             "needs_pin": True
                         })
                         return
-                elif pin and expected_pin and pin != expected_pin:
-                    self.send_json(401, {
-                        "ok": False,
-                        "error": "PIN de oficina incorrecto",
-                        "needs_pin": True
-                    })
-                    return
+                elif pin and expected_pin:
+                    if not hmac.compare_digest(pin.encode("utf-8"), expected_pin.encode("utf-8")):
+                        record_pin_failure(client_ip)
+                        self.send_json(401, {
+                            "ok": False,
+                            "error": "PIN de oficina incorrecto",
+                            "needs_pin": True
+                        })
+                        return
+
+                clear_pin_failures(client_ip)
 
                 known_ops = settings.get("known_operators", [])
                 active_op = settings.get("active_operator", "") or (known_ops[0] if known_ops else "")
                 online_ops = sse_hub.get_sse_hub().get_online_operators()
 
+                session_token = create_lan_session(operator_name or active_op or "Operador", client_ip)
+                cookie_hdr = f"wackup_session={session_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
+
                 # Si NO se especifica operator_name, responder verificación exitosa con lista de operadores y estado
                 if not operator_name:
                     self.send_json(200, {
                         "ok": True,
+                        "session_token": session_token,
                         "network_mode": network_mode,
                         "known_operators": known_ops,
                         "active_operator": active_op,
                         "online_operators": online_ops,
                         "message": "PIN verificado correctamente"
-                    })
+                    }, extra_headers={"Set-Cookie": cookie_hdr})
                     return
 
                 if known_ops:
@@ -1940,27 +2265,58 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     known_ops = [operator_name]
                     active_op = operator_name
 
+                session_token = create_lan_session(operator_name, client_ip)
+                cookie_hdr = f"wackup_session={session_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
                 self.send_json(200, {
                     "ok": True,
+                    "session_token": session_token,
                     "operator_name": operator_name,
                     "known_operators": known_ops,
                     "active_operator": active_op,
                     "online_operators": online_ops,
                     "message": "PIN verificado correctamente"
-                })
+                }, extra_headers={"Set-Cookie": cookie_hdr})
+                return
+
+            elif url.path == "/api/auth/handoff":
+                payload = self._read_json_body(max_bytes=65536)
+                if payload is None:
+                    return
+                client_ip = self._get_client_ip()
+                op_name = (payload.get("operator") or payload.get("operator_name") or
+                           self.headers.get("X-WAckup-Operator") or "Operador")
+                handoff_code = create_handoff_code(op_name, client_ip)
+                self.send_json(200, {"ok": True, "handoff_code": handoff_code, "expires_in": 20})
+                return
+
+            elif url.path == "/api/auth/redeem_handoff":
+                payload = self._read_json_body(max_bytes=65536)
+                if payload is None:
+                    return
+                client_ip = self._get_client_ip()
+                code = payload.get("code") or payload.get("handoff_code")
+                op_name = redeem_handoff_code(code, client_ip)
+                if not op_name:
+                    self.send_json(400, {"ok": False, "error": "Código de salto inválido o expirado"})
+                    return
+                session_token = create_lan_session(op_name, client_ip)
+                cookie_hdr = f"wackup_session={session_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
+                self.send_json(200, {
+                    "ok": True,
+                    "session_token": session_token,
+                    "operator": op_name
+                }, extra_headers={"Set-Cookie": cookie_hdr})
                 return
 
             elif url.path == "/api/presence/kick":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body()
+                if payload is None:
+                    return
                 target_op = str(payload.get("operator") or payload.get("operator_name", "")).strip()
                 if not target_op:
                     self.send_json(400, {"ok": False, "error": "Falta el nombre de operador a liberar"})
                     return
+                revoke_operator_sessions(target_op)
                 kicked = sse_hub.get_sse_hub().kick_operator(target_op)
                 online_ops = sse_hub.get_sse_hub().get_online_operators()
                 self.send_json(200, {
@@ -1973,18 +2329,21 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/system/network":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
+                payload = self._read_json_body()
+                if payload is None:
+                    return
 
                 net_mode = payload.get("network_mode")
                 lan_pin = payload.get("lan_pin")
                 add_op = payload.get("operator_name") or payload.get("add_operator")
                 remove_op = payload.get("remove_operator")
                 rename_op = payload.get("rename_operator") or payload.get("update_operator")
+
+                if lan_pin is not None:
+                    revoke_operator_sessions()
 
                 updated = config.update_system_settings(
                     network_mode=net_mode,
@@ -2004,12 +2363,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/system/operator/active":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
+                payload = self._read_json_body()
+                if payload is None:
+                    return
                 target_op = str(payload.get("operator") or payload.get("operator_name") or "").strip()
                 if not target_op:
                     self.send_json(400, {"ok": False, "error": "operator requerido"})
@@ -2112,54 +2471,103 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/copilot/notes/log/delete":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body()
+                if payload is None:
+                    return
                 _, db_path, _ = self._resolve_account_params(payload)
                 note_id = payload.get("id") or payload.get("note_id")
                 chat_id = payload.get("chat_id")
                 author = payload.get("author")
-                db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
-                sse_hub.get_sse_hub().broadcast("crm_update", {
-                    "type": "note_log_deleted",
-                    "chat_id": chat_id,
-                    "note_id": note_id
-                })
-                self.send_json(200, {"ok": True})
+                if not self.is_local_client():
+                    req_op = self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or author
+                    author = req_op
+                deleted = db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
+                if deleted:
+                    sse_hub.get_sse_hub().broadcast("crm_update", {
+                        "type": "note_log_deleted",
+                        "chat_id": chat_id,
+                        "note_id": note_id
+                    })
+                self.send_json(200, {"ok": True, "deleted": deleted})
                 return
 
             elif url.path == "/api/copilot/assignment":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                payload = self._read_json_body()
+                if payload is None:
+                    return
 
                 _, db_path, _ = self._resolve_account_params(payload)
                 chat_id = payload.get("chat_id")
                 assigned_to = payload.get("assigned_to", "")
                 operator_name = payload.get("operator_name") or payload.get("updated_by") or self.headers.get("X-WAckup-Operator") or ""
+                handoff_note = (payload.get("note") or payload.get("handoff_note") or "").strip()
+                ticket_status = payload.get("ticket_status")
 
-                res = db_manager.upsert_contact_meta(chat_id, assigned_to=assigned_to, updated_by=operator_name, db_path=db_path)
+                extra = {"assigned_to": assigned_to, "updated_by": operator_name}
+                if ticket_status:
+                    extra["ticket_status"] = ticket_status
+                    if ticket_status == "open":
+                        extra["radar_ignored"] = 0
+
+                res = db_manager.upsert_contact_meta(chat_id, db_path=db_path, **extra)
+
+                from_name = operator_name or "Operador"
+                if handoff_note:
+                    to_name = assigned_to or "Sin asignar"
+                    log_text = f"↪️ {from_name} transfirió a {to_name}: {handoff_note}"
+                    created_note = db_manager.add_contact_note_log(chat_id, from_name, log_text, db_path=db_path)
+                    if created_note:
+                        sse_hub.get_sse_hub().broadcast("crm_update", {
+                            "type": "note_log_added",
+                            "chat_id": chat_id,
+                            "note": created_note,
+                            "author": from_name
+                        })
+                elif assigned_to:
+                    if assigned_to == operator_name:
+                        log_text = f"🙋‍♂️ {from_name} tomó el caso"
+                    else:
+                        log_text = f"👤 {from_name} asignó a {assigned_to}"
+                    created_note = db_manager.add_contact_note_log(chat_id, from_name, log_text, db_path=db_path)
+                    if created_note:
+                        sse_hub.get_sse_hub().broadcast("crm_update", {
+                            "type": "note_log_added",
+                            "chat_id": chat_id,
+                            "note": created_note,
+                            "author": from_name
+                        })
+
                 sse_hub.get_sse_hub().broadcast("crm_update", {
                     "type": "assignment_updated",
                     "chat_id": chat_id,
                     "assigned_to": assigned_to,
+                    "ticket_status": ticket_status or (res.get("ticket_status") if isinstance(res, dict) else None),
                     "updated_by": operator_name
                 })
+
+                if assigned_to and assigned_to != operator_name:
+                    sse_hub.get_sse_hub().broadcast("handoff_alert", {
+                        "chat_id": chat_id,
+                        "from_operator": operator_name,
+                        "to_operator": assigned_to,
+                        "note": handoff_note
+                    })
+
                 self.send_json(200, {"ok": True, "meta": res})
                 return
 
             elif url.path == "/api/logs/open":
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
                 open_logs_window()
                 self.send_json(200, {"success": True, "message": "Ventana de logs abierta"})
                 return
 
             elif url.path == "/api/system/restart":
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
                 self.send_json(200, {"ok": True, "message": "Reiniciando visor..."})
                 def _do_restart():
                     time.sleep(0.4)
@@ -2168,12 +2576,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/system/onboarding":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
+                payload = self._read_json_body()
+                if payload is None:
+                    return
                 completed = payload.get("completed", True)
                 profile = payload.get("profile")
                 config.update_system_settings(onboarding_completed=completed)
@@ -2192,12 +2600,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/system/shortcuts":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
+                payload = self._read_json_body()
+                if payload is None:
+                    return
                 action = payload.get("action", "")
                 enable = payload.get("enable", True)
                 res = manage_windows_shortcut(action, enable=enable)
@@ -2205,15 +2613,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/system/update/apply":
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {}
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
+                payload = self._read_json_body()
+                if payload is None:
+                    return
                 force = bool(payload.get("force", False))
-                download_url = payload.get("download_url")
-                result = updater.apply_update(download_url=download_url, force=force, restart=False)
+                # Cierre RCE: no aceptar download_url ni zip_path desde la petición HTTP
+                result = updater.apply_update(download_url=None, force=force, restart=False)
                 if result.get("ok"):
                     self.send_json(200, result)
                     def _do_update_restart():
@@ -2225,6 +2633,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/profile/cycle":
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
                 params = parse_qs(url.query)
                 acc_id, _, _ = self._resolve_account_params(params)
                 curr = config.get_account_profile(acc_id)
@@ -2253,6 +2664,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/profile":
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
+                    return
                 content_length = int(self.headers.get("Content-Length", 0))
                 if content_length == 0:
                     self.send_json(400, {"ok": False, "error": "Cuerpo vacío"})
@@ -2361,20 +2775,120 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
                 account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
                 chat_id = payload.get("chat_id")
-                ticket_status = payload.get("ticket_status", "none")
+                ticket_status = payload.get("ticket_status")
+                support_priority = payload.get("support_priority")
+                follow_up_date = payload.get("follow_up_date")
+                assigned_to = payload.get("assigned_to")
+                updated_by = self.get_current_operator(payload) or "Operador"
 
                 if not chat_id:
                     self.send_json(400, {"ok": False, "error": "Falta chat_id"})
                     return
 
-                extra_kwargs = {"radar_ignored": 0} if ticket_status == "open" else {}
+                # Obtener estado previo para auditar en bitácora si hay cambios
+                old_meta = db_manager.get_contact_meta(chat_id, db_path=db_path) or {}
+
+                extra_kwargs = {}
+                if ticket_status == "open":
+                    extra_kwargs["radar_ignored"] = 0
+                if support_priority is not None:
+                    try:
+                        extra_kwargs["support_priority"] = int(support_priority)
+                    except (ValueError, TypeError):
+                        pass
+                if follow_up_date is not None:
+                    extra_kwargs["follow_up_date"] = follow_up_date
+                if assigned_to is not None:
+                    extra_kwargs["assigned_to"] = assigned_to
+                if updated_by:
+                    extra_kwargs["updated_by"] = updated_by
+
                 res = db_manager.upsert_contact_meta(chat_id, ticket_status=ticket_status, db_path=db_path, **extra_kwargs)
+
+                # Registrar notas auditables en crm_contact_notes_log
+                ticket_labels = {"open": "Abierto", "pending": "En Espera", "resolved": "Resuelto", "none": "Sin ticket"}
+                priority_labels = {0: "Normal", 1: "Alta 🟠", 2: "Urgente 🔥"}
+
+                if ticket_status is not None and ticket_status != old_meta.get("ticket_status"):
+                    old_st = old_meta.get("ticket_status", "none")
+                    if old_st != "none" or ticket_status != "none":
+                        db_manager.add_contact_note_log(
+                            chat_id, updated_by,
+                            f"🎫 Estado de ticket cambiado a: {ticket_labels.get(ticket_status, ticket_status)}",
+                            db_path=db_path
+                        )
+
+                if support_priority is not None:
+                    try:
+                        p_int = int(support_priority)
+                        if p_int != int(old_meta.get("support_priority") or 0):
+                            db_manager.add_contact_note_log(
+                                chat_id, updated_by,
+                                f"⚡ Prioridad de atención cambiada a: {priority_labels.get(p_int, str(p_int))}",
+                                db_path=db_path
+                            )
+                    except Exception:
+                        pass
+
+                if follow_up_date is not None and follow_up_date != (old_meta.get("follow_up_date") or ""):
+                    if follow_up_date:
+                        db_manager.add_contact_note_log(
+                            chat_id, updated_by,
+                            f"⏰ Recordatorio agendado para: {follow_up_date}",
+                            db_path=db_path
+                        )
+                    elif old_meta.get("follow_up_date"):
+                        db_manager.add_contact_note_log(
+                            chat_id, updated_by,
+                            "⏰ Recordatorio de seguimiento eliminado",
+                            db_path=db_path
+                        )
+
+                handoff_note = (payload.get("note") or payload.get("handoff_note") or "").strip()
+                if assigned_to is not None and assigned_to != (old_meta.get("assigned_to") or ""):
+                    if assigned_to:
+                        if handoff_note:
+                            log_text = f"↪️ {updated_by or 'Operador'} transfirió a {assigned_to}: {handoff_note}"
+                        elif assigned_to == updated_by:
+                            log_text = f"🙋‍♂️ {updated_by or 'Operador'} tomó el caso"
+                        else:
+                            log_text = f"👤 Asignado a: {assigned_to}"
+                        db_manager.add_contact_note_log(
+                            chat_id, updated_by or "Operador",
+                            log_text,
+                            db_path=db_path
+                        )
+                        if assigned_to != updated_by:
+                            sse_hub.get_sse_hub().broadcast("handoff_alert", {
+                                "chat_id": chat_id,
+                                "from_operator": updated_by,
+                                "to_operator": assigned_to,
+                                "note": handoff_note
+                            })
+                    elif old_meta.get("assigned_to"):
+                        db_manager.add_contact_note_log(
+                            chat_id, updated_by or "Operador",
+                            "👤 Asignación removida (Sin asignar)",
+                            db_path=db_path
+                        )
+
+                current_meta = db_manager.get_contact_meta(chat_id, db_path=db_path)
                 sse_hub.get_sse_hub().broadcast("crm_update", {
                     "type": "ticket_updated",
                     "chat_id": chat_id,
-                    "ticket_status": res.get("ticket_status", "none")
+                    "ticket_status": current_meta.get("ticket_status", "none"),
+                    "support_priority": current_meta.get("support_priority", 0),
+                    "follow_up_date": current_meta.get("follow_up_date", "") or "",
+                    "assigned_to": current_meta.get("assigned_to", "") or ""
                 })
-                self.send_json(200, {"ok": True, "chat_id": chat_id, "ticket_status": res.get("ticket_status", "none")})
+                self.send_json(200, {
+                    "ok": True,
+                    "chat_id": chat_id,
+                    "ticket_status": current_meta.get("ticket_status", "none"),
+                    "support_priority": current_meta.get("support_priority", 0),
+                    "follow_up_date": current_meta.get("follow_up_date", "") or "",
+                    "assigned_to": current_meta.get("assigned_to", "") or ""
+                })
                 return
 
             elif url.path == "/api/radar/dismiss":
@@ -2648,16 +3162,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/sync":
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length == 0:
-                    self.send_json(400, {"error": "Cuerpo de solicitud vacío"})
-                    return
-
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except Exception as e:
-                    self.send_json(400, {"error": f"JSON inválido: {e}"})
+                payload = self._read_json_body(max_bytes=25 * 1024 * 1024, allow_empty=False)
+                if payload is None:
                     return
 
                 account_id = payload.get("account_id")
@@ -2691,6 +3197,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 return
 
             elif url.path == "/api/backup/create":
+                if not self.is_local_client():
+                    self.send_json(403, {"ok": False, "error": "Creación de respaldos disponible únicamente desde la PC principal"})
+                    return
                 params = parse_qs(url.query)
                 _, db_path, backup_dir = self._resolve_account_params(params)
                 backup_info = db_manager.create_manual_backup(db_path=db_path, backup_dir=backup_dir)
@@ -2720,6 +3229,12 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         try:
+            if not self.is_valid_host_header():
+                self.send_response(403)
+                self.send_default_security_headers()
+                self.end_headers()
+                return
+
             if not self.is_trusted_origin():
                 self.send_json(403, {"error": "Origen no permitido"})
                 return
@@ -2772,12 +3287,15 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 if not note_id:
                     self.send_json(400, {"ok": False, "error": "id de nota requerido"})
                     return
-                db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
-                sse_hub.get_sse_hub().broadcast("crm_update", {
-                    "type": "note_log_deleted",
-                    "note_id": note_id
-                })
-                self.send_json(200, {"ok": True, "deleted": True, "note_id": note_id})
+                if not self.is_local_client():
+                    author = self.headers.get("X-WAckup-Operator") or self.headers.get("X-Operator-Name") or author
+                deleted = db_manager.delete_contact_note_log(note_id, author=author, db_path=db_path)
+                if deleted:
+                    sse_hub.get_sse_hub().broadcast("crm_update", {
+                        "type": "note_log_deleted",
+                        "note_id": note_id
+                    })
+                self.send_json(200, {"ok": True, "deleted": deleted, "note_id": note_id})
                 return
 
             self.send_response(404)

@@ -73,9 +73,8 @@ WORKSPACE_PROFILE_NAMES = {
     "full": "Suite Completa (Soporte + Ventas)"
 }
 
-# RECORDATORIO: En desarrollo se usa "full" por defecto.
-# Al pasar a producción, migrar a la Opción C (preguntar en consola en el primer arranque).
-DEFAULT_WORKSPACE_PROFILE = "full"
+# Perfil recomendado por defecto: Soporte y Atención
+DEFAULT_WORKSPACE_PROFILE = "support"
 
 
 def generate_lan_pin():
@@ -484,11 +483,13 @@ def set_account_profile(account_id=None, profile=None):
     if profile not in VALID_WORKSPACE_PROFILES:
         profile = DEFAULT_WORKSPACE_PROFILE
 
-    # Persistir globalmente en system_settings.json de la estación
-    try:
-        update_system_settings(workspace_profile=profile)
-    except Exception:
-        pass
+    # Persistir globalmente en system_settings.json solo si es la cuenta default o no hay cuenta sincronizada aún
+    is_default_target = (not account_id or account_id == DEFAULT_ACCOUNT_ID)
+    if is_default_target:
+        try:
+            update_system_settings(workspace_profile=profile)
+        except Exception:
+            pass
 
     if not account_id or account_id == DEFAULT_ACCOUNT_ID:
         try:

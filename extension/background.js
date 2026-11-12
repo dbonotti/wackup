@@ -4,7 +4,8 @@
 let config = {
   serverUrl: "http://127.0.0.1:8080",
   officePin: "",
-  operatorName: ""
+  operatorName: "",
+  sessionToken: ""
 };
 
 let lastActiveChat = {
@@ -78,10 +79,11 @@ chrome.tabs.query({ url: ["https://web.whatsapp.com/*", "http://web.whatsapp.com
 });
 
 // Cargar configuración inicial desde chrome.storage.local
-chrome.storage.local.get(["serverUrl", "officePin", "operatorName"], (res) => {
+chrome.storage.local.get(["serverUrl", "officePin", "operatorName", "sessionToken"], (res) => {
   if (res && res.serverUrl) config.serverUrl = res.serverUrl.replace(/\/+$/, "");
   if (res && res.officePin) config.officePin = res.officePin;
   if (res && res.operatorName) config.operatorName = res.operatorName;
+  if (res && res.sessionToken) config.sessionToken = res.sessionToken;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -89,6 +91,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.serverUrl) config.serverUrl = (changes.serverUrl.newValue || "http://127.0.0.1:8080").replace(/\/+$/, "");
     if (changes.officePin) config.officePin = changes.officePin.newValue || "";
     if (changes.operatorName) config.operatorName = changes.operatorName.newValue || "";
+    if (changes.sessionToken) config.sessionToken = changes.sessionToken.newValue || "";
   }
 });
 
@@ -154,11 +157,12 @@ const ALLOWED_ENDPOINTS = [
   { method: "GET", pattern: /^\/api\/system\/network(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/system\/network\/?$/ },
   { method: "POST", pattern: /^\/api\/auth\/verify_pin\/?$/ },
+  { method: "POST", pattern: /^\/api\/auth\/handoff\/?$/ },
+  { method: "POST", pattern: /^\/api\/auth\/redeem_handoff\/?$/ },
   { method: "GET", pattern: /^\/api\/system\/info(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/system\/onboarding(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/system\/onboarding\/?$/ },
-  { method: "GET", pattern: /^\/api\/system\/update\/check(\?.*)?$/ },
-  { method: "POST", pattern: /^\/api\/system\/update\/apply\/?$/ }
+  { method: "GET", pattern: /^\/api\/system\/update\/check(\?.*)?$/ }
 ];
 
 function isAllowedRequest(endpoint, method) {
@@ -347,14 +351,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Proxy seguro de peticiones HTTP al backend local/LAN
   if (request.action === "backend_fetch") {
-    // Permitir mensajes tanto de WhatsApp Web (content script) como del sidePanel nativo
-    const isExtensionOrigin = sender.id === chrome.runtime.id;
-    const senderUrl = (sender && (sender.url || (sender.tab && sender.tab.url))) || "";
-    const isWhatsApp = senderUrl.startsWith("https://web.whatsapp.com/");
-
-    if (!isExtensionOrigin && !isWhatsApp) {
-      sendResponse({ ok: false, error: "Origen no permitido" });
-      return;
+    const fromContentScript = Boolean(sender && sender.tab);
+    if (fromContentScript) {
+      // Content scripts (bridge.js en web.whatsapp.com) solo pueden consultar estado o enviar sincronización
+      const isSyncStatus = request.endpoint.startsWith("/api/sync/status") && (!request.options || !request.options.method || request.options.method.toUpperCase() === "GET");
+      const isSyncPost = request.endpoint === "/api/sync" && request.options && request.options.method && request.options.method.toUpperCase() === "POST";
+      if (!isSyncStatus && !isSyncPost) {
+        sendResponse({ ok: false, error: "Acceso no autorizado desde content script" });
+        return;
+      }
+    } else {
+      const isExtensionOrigin = sender.id === chrome.runtime.id;
+      if (!isExtensionOrigin) {
+        sendResponse({ ok: false, error: "Origen no permitido" });
+        return;
+      }
     }
 
     const opts = request.options || {};
@@ -365,6 +376,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     const headers = { "Accept": "application/json" };
+    const effectiveSession = request.sessionToken || config.sessionToken;
+    if (effectiveSession) {
+      headers["X-WAckup-Session"] = effectiveSession;
+    }
     const effectivePin = request.pin !== undefined ? request.pin : config.officePin;
     if (effectivePin) {
       headers["X-WAckup-Pin"] = effectivePin;
@@ -393,6 +408,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           json = JSON.parse(text);
         } catch (e) {
           json = null;
+        }
+
+        if (res.ok && json && json.session_token) {
+          config.sessionToken = json.session_token;
+          chrome.storage.local.set({ sessionToken: json.session_token });
         }
 
         sendResponse({

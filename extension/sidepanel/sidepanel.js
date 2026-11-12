@@ -28,6 +28,41 @@
   let activePresenceMap = {};
   let currentAssignFilter = "all";
   let knownOperators = [];
+  let currentNetworkMode = "local";
+  let currentAssignedTo = "";
+
+  function isTeamMode() {
+    return currentNetworkMode === "lan" || (Array.isArray(knownOperators) && knownOperators.length > 1);
+  }
+
+  function applyTeamModeUI() {
+    const team = isTeamMode();
+
+    // 1. Selector de responsable en ficha de gestión
+    const assignWrapper = document.querySelector(".assigned-wrapper");
+    if (assignWrapper) {
+      assignWrapper.style.display = team ? "flex" : "none";
+    }
+
+    // 2. Barra de filtros de asignación en Radar
+    const radarFilterBar = document.getElementById("radar-assign-filter-bar");
+    if (radarFilterBar) {
+      radarFilterBar.style.display = team ? "flex" : "none";
+    }
+    if (!team) {
+      currentAssignFilter = "all";
+      document.querySelectorAll(".btn-assign-filter").forEach(b => {
+        b.classList.toggle("active", b.getAttribute("data-assign") === "all");
+      });
+    }
+
+    // 3. Botón de 1 clic "Tomar caso" en ficha de contacto
+    const btnTake = document.getElementById("btn-take-case-contact");
+    if (btnTake) {
+      const isAssignedToMe = Boolean(currentAssignedTo && operatorName && currentAssignedTo.toLowerCase() === operatorName.toLowerCase());
+      btnTake.style.display = (team && currentChatId && !isAssignedToMe) ? "inline-flex" : "none";
+    }
+  }
 
   let notesDebounceTimer = null;
   let pipelineDebounceTimer = null;
@@ -268,7 +303,11 @@
     const secSupport = document.getElementById("sec-support-ticket");
     const secSales = document.getElementById("sec-sales-pipeline");
 
-    if (badge) badge.textContent = profileLabels[currentProfile] || "CRM";
+    if (badge) {
+      badge.textContent = profileLabels[currentProfile] || "CRM";
+      badge.style.cursor = "default";
+      badge.title = "Perfil activo (configurable desde el Panel de Control en el Visor Web)";
+    }
 
     if (currentProfile === "backup_only") {
       if (viewBackupOnly) viewBackupOnly.style.display = "block";
@@ -444,6 +483,16 @@
         btn.classList.toggle("active", btn.getAttribute("data-status") === ticketStatus);
       });
 
+      // Ticket prioridad y seguimiento
+      const ticketPriority = parseInt(crmMeta.support_priority !== undefined ? crmMeta.support_priority : (data.support_priority || 0), 10) || 0;
+      document.querySelectorAll(".btn-ticket-priority").forEach(btn => {
+        btn.classList.toggle("active", parseInt(btn.getAttribute("data-priority"), 10) === ticketPriority);
+      });
+      const ticketFollowInput = document.getElementById("input-ticket-followup");
+      if (ticketFollowInput) {
+        ticketFollowInput.value = crmMeta.follow_up_date || data.followup_date || "";
+      }
+
       // Pipeline comercial
       const stageSelect = document.getElementById("select-sales-stage");
       const dealInput = document.getElementById("input-deal-value");
@@ -464,10 +513,12 @@
 
       // Responsable asignado
       const assignedVal = data.assigned_to || crmMeta.assigned_to || "";
+      currentAssignedTo = assignedVal;
       const assignSel = document.getElementById("select-assigned-to");
       if (assignSel) {
         populateAssigneeOptions(assignSel, assignedVal);
       }
+      applyTeamModeUI();
 
       // Notas privadas (Nota Fijada con bloqueo optimista)
       const notesEl = document.getElementById("contact-notes");
@@ -621,9 +672,10 @@
       entry.className = "log-entry";
       const d = n.created_at ? new Date(n.created_at * 1000) : new Date();
       const timeStr = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth()+1).toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+      const authorHtml = isTeamMode() ? `<span class="log-author">${escapeHtml(n.author || 'Operador')}</span>` : '';
       entry.innerHTML = `
         <div class="log-meta">
-          <span class="log-author">${escapeHtml(n.author || 'Operador')}</span>
+          ${authorHtml}
           <span>${timeStr} <span class="log-del" data-id="${n.id}" title="Eliminar entrada">✕</span></span>
         </div>
         <div class="log-body">${escapeHtml(n.content || '')}</div>
@@ -716,29 +768,71 @@
 
   function setupAssignmentSelect() {
     const sel = document.getElementById("select-assigned-to");
-    if (!sel) return;
-    sel.addEventListener("change", async () => {
-      if (!currentChatId) return;
-      const assignedVal = sel.value;
-      try {
-        await apiFetch("/api/copilot/assignment", {
-          method: "POST",
-          body: {
-            account_id: currentAccountId,
-            chat_id: currentChatId,
-            assigned_to: assignedVal,
-            operator_name: operatorName
+    if (sel) {
+      sel.addEventListener("change", async () => {
+        if (!currentChatId) return;
+        const assignedVal = sel.value;
+        let handoffNote = "";
+        if (assignedVal && operatorName && assignedVal.toLowerCase() !== operatorName.toLowerCase()) {
+          const notePrompt = prompt(`¿Deseas agregar una nota de transferencia para ${assignedVal}? (opcional):`, "");
+          if (notePrompt === null) {
+            sel.value = currentAssignedTo || "";
+            return;
           }
-        });
-        showToast(assignedVal ? `Asignado a ${assignedVal}` : "Desasignado");
-      } catch (err) {
-        showToast("Error al actualizar asignación");
-      }
-    });
+          handoffNote = notePrompt.trim();
+        }
+        try {
+          await apiFetch("/api/copilot/assignment", {
+            method: "POST",
+            body: {
+              account_id: currentAccountId,
+              chat_id: currentChatId,
+              assigned_to: assignedVal,
+              operator_name: operatorName,
+              handoff_note: handoffNote
+            }
+          });
+          currentAssignedTo = assignedVal;
+          applyTeamModeUI();
+          showToast(assignedVal ? `Asignado a ${assignedVal}` : "Desasignado");
+        } catch (err) {
+          showToast("Error al actualizar asignación");
+        }
+      });
+    }
+
+    const btnTakeContact = document.getElementById("btn-take-case-contact");
+    if (btnTakeContact) {
+      btnTakeContact.addEventListener("click", async () => {
+        if (!currentChatId) return;
+        const myOp = operatorName || "Operador";
+        try {
+          await apiFetch("/api/copilot/assignment", {
+            method: "POST",
+            body: {
+              account_id: currentAccountId,
+              chat_id: currentChatId,
+              assigned_to: myOp,
+              ticket_status: "open",
+              operator_name: myOp
+            }
+          });
+          currentAssignedTo = myOp;
+          if (sel) sel.value = myOp;
+          applyTeamModeUI();
+          showToast(`¡Caso tomado! Asignado a ${myOp}`);
+          triggerRadarRefreshDebounced();
+          if (currentChatQuery) loadChatContext(currentChatQuery);
+        } catch (err) {
+          showToast("Error al tomar el caso");
+        }
+      });
+    }
   }
 
   async function sendPresenceHeartbeat() {
     if (!currentChatId) return;
+    if (!isTeamMode()) return; // Suprimir latidos innecesarios en modo Standalone
     try {
       await apiFetch("/api/presence/heartbeat", {
         method: "POST",
@@ -750,11 +844,6 @@
           source: "whatsapp_web"
         }
       });
-      const res = await apiFetch("/api/presence");
-      if (res && (res.active_presence || res.presence)) {
-        activePresenceMap = res.active_presence || res.presence;
-        updatePresenceBanner(activePresenceMap);
-      }
     } catch (e) {}
   }
 
@@ -769,6 +858,14 @@
         }).catch(() => {});
       }
     });
+  }
+
+  let radarDebounceTimer = null;
+  function triggerRadarRefreshDebounced() {
+    if (radarDebounceTimer) clearTimeout(radarDebounceTimer);
+    radarDebounceTimer = setTimeout(() => {
+      loadRadarData();
+    }, 1500);
   }
 
   function connectSidePanelSSE() {
@@ -817,14 +914,13 @@
             if (matchesCurrent && currentChatQuery) {
               loadChatContext(currentChatQuery);
             }
-            const radarPane = document.getElementById("tab-radar");
-            if (radarPane && radarPane.classList.contains("active")) {
-              loadRadarData();
-            }
+            triggerRadarRefreshDebounced();
           } else if (msg.event === "sync_update") {
-            const radarPane = document.getElementById("tab-radar");
-            if (radarPane && radarPane.classList.contains("active")) {
-              loadRadarData();
+            triggerRadarRefreshDebounced();
+          } else if (msg.event === "handoff_alert") {
+            if (msg.to_operator && operatorName && msg.to_operator.toLowerCase() === operatorName.toLowerCase()) {
+              const notePart = msg.note ? `\nNota: "${msg.note}"` : "";
+              showToast(`📢 ${msg.from_operator || 'Un compañero'} te transfirió el caso ${msg.chat_id}.${notePart}`, 7000);
             }
           } else if (msg.event === "profile_update") {
             if (!msg.account_id || msg.account_id === currentAccountId || currentAccountId === "default") {
@@ -843,6 +939,7 @@
       sseSource.addEventListener("active_operator_updated", handleEvt);
       sseSource.addEventListener("crm_update", handleEvt);
       sseSource.addEventListener("sync_update", handleEvt);
+      sseSource.addEventListener("handoff_alert", handleEvt);
       sseSource.addEventListener("profile_update", handleEvt);
       sseSource.addEventListener("focus_viewer", () => {
         chrome.runtime.sendMessage({ action: "focus_viewer_tab" }, () => {
@@ -856,12 +953,12 @@
   function updatePresenceBanner(presenceMap) {
     const banner = document.getElementById("presence-banner");
     const textEl = document.getElementById("presence-text");
-    if (!banner || !textEl || !currentChatId || !presenceMap) {
+    if (!banner || !textEl || !currentChatId || !presenceMap || !isTeamMode()) {
       if (banner) banner.style.display = "none";
       return;
     }
     const candidateIds = currentAssociatedIds.length > 0 ? currentAssociatedIds : [currentChatId];
-    const otherNames = [];
+    const otherViewers = [];
     candidateIds.forEach(cid => {
       const chatEntry = presenceMap[cid];
       if (!chatEntry) return;
@@ -873,13 +970,24 @@
           (operatorName && op && op.toLowerCase() === operatorName.toLowerCase()) ||
           (!op || op.toLowerCase() === "operador");
         if (!isMe && op) {
-          otherNames.push(op);
+          otherViewers.push({
+            operator: op,
+            source: v.source || "whatsapp_web"
+          });
         }
       });
     });
-    const uniqueOthers = [...new Set(otherNames)];
-    if (uniqueOthers.length > 0) {
-      textEl.innerHTML = `<b>${escapeHtml(uniqueOthers.join(", "))}</b> está viendo este chat ahora`;
+
+    if (otherViewers.length > 0) {
+      const webViewer = otherViewers.find(v => v.source === "whatsapp_web");
+      if (webViewer) {
+        banner.className = "presence-alert web-source";
+        textEl.innerHTML = `✍️ <b>${escapeHtml(webViewer.operator)}</b> tiene este chat abierto en WhatsApp Web`;
+      } else {
+        banner.className = "presence-alert visor-source";
+        const opNames = [...new Set(otherViewers.map(v => v.operator))].join(", ");
+        textEl.innerHTML = `👁️ <b>${escapeHtml(opNames)}</b> ve el historial en el Visor`;
+      }
       banner.style.display = "flex";
     } else {
       banner.style.display = "none";
@@ -920,6 +1028,85 @@
         }
       });
     });
+
+    document.querySelectorAll(".btn-ticket-priority").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!currentChatId) return;
+        const priority = parseInt(btn.getAttribute("data-priority"), 10) || 0;
+        document.querySelectorAll(".btn-ticket-priority").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+
+        try {
+          await apiFetch("/api/support/ticket", {
+            method: "POST",
+            body: {
+              account_id: currentAccountId,
+              chat_id: currentChatId,
+              support_priority: priority
+            }
+          });
+          const pLabels = { 0: "Normal", 1: "Alta 🟠", 2: "Urgente 🔥" };
+          showToast(`Prioridad: ${pLabels[priority] || priority} ✓`);
+        } catch (e) {
+          showToast("Error al actualizar prioridad");
+        }
+      });
+    });
+
+    const followupInput = document.getElementById("input-ticket-followup");
+    if (followupInput) {
+      followupInput.addEventListener("change", async () => {
+        if (!currentChatId) return;
+        const val = followupInput.value;
+        try {
+          await apiFetch("/api/support/ticket", {
+            method: "POST",
+            body: {
+              account_id: currentAccountId,
+              chat_id: currentChatId,
+              follow_up_date: val || ""
+            }
+          });
+          showToast(val ? `Recordatorio: ${val} ✓` : "Recordatorio eliminado");
+        } catch (e) {
+          showToast("Error al actualizar recordatorio");
+        }
+      });
+    }
+
+    const setQuickFollowup = async (days) => {
+      if (!currentChatId) return;
+      let targetDateStr = "";
+      if (days > 0) {
+        const d = new Date();
+        d.setDate(d.getDate() + days);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        targetDateStr = `${yyyy}-${mm}-${dd}`;
+      }
+      if (followupInput) followupInput.value = targetDateStr;
+      try {
+        await apiFetch("/api/support/ticket", {
+          method: "POST",
+          body: {
+            account_id: currentAccountId,
+            chat_id: currentChatId,
+            follow_up_date: targetDateStr
+          }
+        });
+        showToast(targetDateStr ? `Recordatorio: ${targetDateStr} ✓` : "Recordatorio eliminado");
+      } catch (e) {
+        showToast("Error al actualizar recordatorio");
+      }
+    };
+
+    const btnTomorrow = document.getElementById("btn-quick-followup-tomorrow");
+    if (btnTomorrow) btnTomorrow.addEventListener("click", () => setQuickFollowup(1));
+    const btn3d = document.getElementById("btn-quick-followup-3d");
+    if (btn3d) btn3d.addEventListener("click", () => setQuickFollowup(3));
+    const btnClear = document.getElementById("btn-quick-followup-clear");
+    if (btnClear) btnClear.addEventListener("click", () => setQuickFollowup(0));
   }
 
   function setupPipelineInputs() {
@@ -975,7 +1162,11 @@
   // =========================================================================
   async function loadTemplates() {
     try {
-      const data = await apiFetch(`/api/support/templates?account_id=${encodeURIComponent(currentAccountId)}`);
+      let url = `/api/support/templates?account_id=${encodeURIComponent(currentAccountId)}`;
+      if (currentProfile === "support" || currentProfile === "sales") {
+        url += `&profile_type=${encodeURIComponent(currentProfile)}`;
+      }
+      const data = await apiFetch(url);
       templatesList = Array.isArray(data) ? data : (data && data.templates ? data.templates : []);
       renderTemplates(templatesList);
     } catch (e) {
@@ -985,9 +1176,14 @@
 
   function interpolateTemplateVariables(rawBody) {
     if (!rawBody) return "";
-    const firstName = currentContactDisplayName
-      ? (String(currentContactDisplayName).trim().split(/\s+/)[0] || "Estimado/a")
-      : "Estimado/a";
+    let firstName = "Estimado/a";
+    if (currentContactDisplayName) {
+      const raw = String(currentContactDisplayName).trim();
+      const firstWord = raw.split(/\s+/)[0] || "";
+      if (firstWord && !/^\+?\d+$/.test(firstWord.replace(/[-.()]/g, ""))) {
+        firstName = firstWord;
+      }
+    }
     const now = new Date();
     const hr = now.getHours();
     const saludo = hr < 12 ? "Buen día" : (hr < 20 ? "Buenas tardes" : "Buenas noches");
@@ -1010,12 +1206,13 @@
       return;
     }
 
-    list.forEach(tpl => {
+    list.forEach((tpl, idx) => {
       const card = document.createElement("button");
       card.type = "button";
       card.className = "copilot-template-btn";
+      const hint = (idx < 5) ? `Alt+${idx + 1}` : (tpl.shortcut || "");
       card.innerHTML = `
-        <span class="tpl-btn-shortcut">${escapeHtml(tpl.shortcut || "")}</span>
+        <span class="tpl-btn-shortcut">${escapeHtml(hint)}</span>
         <span class="tpl-btn-title">${escapeHtml(tpl.title || "Plantilla")}</span>
         <span class="tpl-btn-copy">📋 Copiar</span>
       `;
@@ -1044,6 +1241,23 @@
     });
   }
 
+  function setupTemplateShortcuts() {
+    window.addEventListener("keydown", (e) => {
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        const num = parseInt(e.key, 10);
+        if (num >= 1 && num <= 5) {
+          const container = document.getElementById("templates-list");
+          if (!container) return;
+          const btns = container.querySelectorAll(".copilot-template-btn");
+          if (btns && btns[num - 1]) {
+            e.preventDefault();
+            btns[num - 1].click();
+          }
+        }
+      }
+    });
+  }
+
   // =========================================================================
   // BÚSQUEDA FTS5 EN CONVERSACIÓN (EN PESTAÑA GESTIÓN)
   // =========================================================================
@@ -1060,6 +1274,19 @@
     const resultsContainer = document.getElementById("chat-search-results");
     const navBar = document.getElementById("search-nav-bar");
     const navCount = document.getElementById("search-nav-count");
+
+    const btnToggleSearch = document.getElementById("btn-toggle-chat-search");
+    const secChatSearch = document.getElementById("sec-chat-search");
+    if (btnToggleSearch && secChatSearch) {
+      btnToggleSearch.addEventListener("click", () => {
+        const isHidden = (secChatSearch.style.display === "none");
+        secChatSearch.style.display = isHidden ? "block" : "none";
+        btnToggleSearch.classList.toggle("active", isHidden);
+        if (isHidden && input) {
+          input.focus();
+        }
+      });
+    }
 
     const clearSearch = () => {
       if (input) input.value = "";
@@ -1437,28 +1664,40 @@
   }
 
   async function loadRadarData() {
+    const radarPane = document.getElementById("tab-radar");
+    const isRadarActive = radarPane && radarPane.classList.contains("active");
     const container = document.getElementById("radar-items-container");
-    if (!container) return;
-    container.innerHTML = '<div class="empty-subtext">Cargando radar...</div>';
+    if (isRadarActive && container) {
+      container.innerHTML = '<div class="empty-subtext">Cargando radar...</div>';
+    }
 
     try {
       if (currentRadarMode === "unanswered") {
         const data = await apiFetch(`/api/support/unanswered?account_id=${encodeURIComponent(currentAccountId)}&days=7`);
         const items = Array.isArray(data) ? data : (data && (data.chats || data.unanswered) ? (data.chats || data.unanswered) : []);
 
+        let displayCount = items.length;
+        if (currentAssignFilter === "mine") {
+          displayCount = items.filter(it => it.assigned_to && it.assigned_to.toLowerCase() === (operatorName || "").toLowerCase()).length;
+        } else if (currentAssignFilter === "unassigned") {
+          displayCount = items.filter(it => !it.assigned_to).length;
+        }
+
         const countBadge = document.getElementById("count-unanswered");
         if (countBadge) countBadge.textContent = items.length;
 
         const tabBadge = document.getElementById("radar-count-badge");
         if (tabBadge) {
-          tabBadge.textContent = items.length;
-          tabBadge.style.display = items.length > 0 ? "inline-block" : "none";
+          tabBadge.textContent = displayCount;
+          tabBadge.style.display = displayCount > 0 ? "inline-block" : "none";
         }
 
         // Notificar al background para el Badge de la barra del navegador
-        chrome.runtime.sendMessage({ action: "update_unanswered_count", count: items.length }).catch(() => {});
+        chrome.runtime.sendMessage({ action: "update_unanswered_count", count: displayCount }).catch(() => {});
 
-        renderRadarUnanswered(items);
+        if (isRadarActive) {
+          renderRadarUnanswered(items);
+        }
       } else {
         const data = await apiFetch(`/api/sales/radar?account_id=${encodeURIComponent(currentAccountId)}`);
         const items = Array.isArray(data) ? data : (data && (data.leads || data.radar) ? (data.leads || data.radar) : []);
@@ -1466,10 +1705,14 @@
         const countBadge = document.getElementById("count-sales");
         if (countBadge) countBadge.textContent = items.length;
 
-        renderRadarSales(items);
+        if (isRadarActive) {
+          renderRadarSales(items);
+        }
       }
     } catch (e) {
-      container.innerHTML = '<div class="empty-subtext">Error al cargar radar.</div>';
+      if (isRadarActive && container) {
+        container.innerHTML = '<div class="empty-subtext">Error al cargar radar.</div>';
+      }
     }
   }
 
@@ -1509,8 +1752,36 @@
       const copyQuery = (isHuman && rawName) ? rawName : (phone ? String(phone).replace(/\D/g, "") : (name || item.chat_id));
       const snippet = item.last_message || item.ultimo_mensaje || "(Mensaje multimedia/vacío)";
       const waitTime = item.waiting_str || (item.minutos_espera ? `Hace ${item.minutos_espera}m` : (item.espera || ""));
-      const assignBadge = item.assigned_to ? `<span class="badge-assign" style="font-size:10px; color:#38bdf8;">👤 ${escapeHtml(item.assigned_to)}</span>` : "";
+      const assignBadge = (isTeamMode() && item.assigned_to) ? `<span class="badge-assign" style="font-size:10px; color:#38bdf8;">👤 ${escapeHtml(item.assigned_to)}</span>` : "";
       const canDismiss = canDismissRadarItem(item);
+
+      let presenceBadge = "";
+      if (isTeamMode() && activePresenceMap && item.chat_id) {
+        const pEntry = activePresenceMap[item.chat_id];
+        if (pEntry) {
+          const viewers = Array.isArray(pEntry) ? pEntry : (pEntry.viewers || [pEntry]);
+          const other = viewers.find(v => {
+            if (!v) return false;
+            const op = (v.operator || "").trim();
+            const isMe = (v.client_id && v.client_id === clientId) ||
+              (operatorName && op && op.toLowerCase() === operatorName.toLowerCase()) ||
+              (!op || op.toLowerCase() === "operador");
+            return !isMe && op;
+          });
+          if (other) {
+            const isWeb = (other.source === "whatsapp_web");
+            const icon = isWeb ? "✍️" : "👁️";
+            const cls = isWeb ? "badge-presence-active web-source" : "badge-presence-active visor-source";
+            presenceBadge = `<span class="${cls}" title="${isWeb ? 'En WhatsApp Web' : 'En Visor'}">${icon} ${escapeHtml(other.operator)}</span>`;
+          }
+        }
+      }
+
+      let takeBtnHtml = "";
+      const isAssignedToMe = Boolean(item.assigned_to && operatorName && item.assigned_to.toLowerCase() === operatorName.toLowerCase());
+      if (isTeamMode() && !isAssignedToMe) {
+        takeBtnHtml = `<button type="button" class="btn-take-case" title="Tomar este caso">🙋‍♂️ Tomar</button>`;
+      }
 
       const actionsHtml = canDismiss
         ? `
@@ -1521,10 +1792,10 @@
 
       el.innerHTML = `
         <div class="radar-item-top">
-          <span class="radar-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${assignBadge}</span>
+          <span class="radar-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${assignBadge} ${presenceBadge}</span>
           <div class="radar-item-right">
             <span class="radar-item-time">${escapeHtml(waitTime)}</span>
-            <span class="radar-item-actions">${actionsHtml}</span>
+            <span class="radar-item-actions">${takeBtnHtml} <button type="button" class="btn-radar-copy" title="Copiar dato para buscar en WhatsApp Web">📋</button> ${actionsHtml}</span>
           </div>
         </div>
         <div class="radar-item-snippet">${escapeHtml(snippet)}</div>
@@ -1540,6 +1811,38 @@
         </div>
         ` : ""}
       `;
+
+      const copyBtn = el.querySelector(".btn-radar-copy");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          copyToClipboard(copyQuery, `Contacto "${copyQuery}" copiado para buscar en WhatsApp Web`);
+        });
+      }
+
+      const takeBtn = el.querySelector(".btn-take-case");
+      if (takeBtn) {
+        takeBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const myOp = operatorName || "Operador";
+          try {
+            await apiFetch("/api/copilot/assignment", {
+              method: "POST",
+              body: {
+                account_id: currentAccountId,
+                chat_id: item.chat_id,
+                assigned_to: myOp,
+                ticket_status: "open",
+                operator_name: myOp
+              }
+            });
+            showToast(`Caso asignado a ${myOp}`);
+            loadRadarData();
+          } catch (err) {
+            showToast("Error al tomar caso");
+          }
+        });
+      }
 
       const quickBtn = el.querySelector(".btn-radar-dismiss");
       if (quickBtn) {
@@ -1590,8 +1893,9 @@
       }
 
       el.addEventListener("click", () => {
+        const tabMgmt = document.querySelector('.tab-btn[data-target="tab-management"]');
+        if (tabMgmt) tabMgmt.click();
         loadChatContext(item.chat_id || copyQuery);
-        copyToClipboard(copyQuery, `Contacto "${copyQuery}" copiado para buscar en WhatsApp Web`);
       });
 
       container.appendChild(el);
@@ -1644,8 +1948,36 @@
       const rawStage = item.sales_stage || "lead";
       const stage = stageLabels[rawStage] || rawStage;
       const value = item.estimated_value ? `$${item.estimated_value}` : "";
-      const assignBadge = item.assigned_to ? `<span class="badge-assign" style="font-size:10px; color:#38bdf8;">👤 ${escapeHtml(item.assigned_to)}</span>` : "";
+      const assignBadge = (isTeamMode() && item.assigned_to) ? `<span class="badge-assign" style="font-size:10px; color:#38bdf8;">👤 ${escapeHtml(item.assigned_to)}</span>` : "";
       const canDismiss = canDismissRadarItem(item);
+
+      let presenceBadge = "";
+      if (isTeamMode() && activePresenceMap && item.chat_id) {
+        const pEntry = activePresenceMap[item.chat_id];
+        if (pEntry) {
+          const viewers = Array.isArray(pEntry) ? pEntry : (pEntry.viewers || [pEntry]);
+          const other = viewers.find(v => {
+            if (!v) return false;
+            const op = (v.operator || "").trim();
+            const isMe = (v.client_id && v.client_id === clientId) ||
+              (operatorName && op && op.toLowerCase() === operatorName.toLowerCase()) ||
+              (!op || op.toLowerCase() === "operador");
+            return !isMe && op;
+          });
+          if (other) {
+            const isWeb = (other.source === "whatsapp_web");
+            const icon = isWeb ? "✍️" : "👁️";
+            const cls = isWeb ? "badge-presence-active web-source" : "badge-presence-active visor-source";
+            presenceBadge = `<span class="${cls}" title="${isWeb ? 'En WhatsApp Web' : 'En Visor'}">${icon} ${escapeHtml(other.operator)}</span>`;
+          }
+        }
+      }
+
+      let takeBtnHtml = "";
+      const isAssignedToMe = Boolean(item.assigned_to && operatorName && item.assigned_to.toLowerCase() === operatorName.toLowerCase());
+      if (isTeamMode() && !isAssignedToMe) {
+        takeBtnHtml = `<button type="button" class="btn-take-case" title="Tomar este caso">🙋‍♂️ Tomar</button>`;
+      }
 
       const actionsHtml = canDismiss
         ? `<button type="button" class="btn-radar-sales-act" title="Resolver o posponer seguimiento comercial">✓▾</button>`
@@ -1653,10 +1985,10 @@
 
       el.innerHTML = `
         <div class="radar-item-top">
-          <span class="radar-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${assignBadge}</span>
+          <span class="radar-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${assignBadge} ${presenceBadge}</span>
           <div class="radar-item-right">
             <span class="radar-item-time">${escapeHtml(stage)} ${escapeHtml(value)}</span>
-            <span class="radar-item-actions">${actionsHtml}</span>
+            <span class="radar-item-actions">${takeBtnHtml} <button type="button" class="btn-radar-copy" title="Copiar dato para buscar en WhatsApp Web">📋</button> ${actionsHtml}</span>
           </div>
         </div>
         <div class="radar-item-snippet">${escapeHtml(item.last_message || item.notes || "Sin notas")}</div>
@@ -1673,6 +2005,38 @@
         </div>
         ` : ""}
       `;
+
+      const copyBtn = el.querySelector(".btn-radar-copy");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          copyToClipboard(copyQuery, `Contacto "${copyQuery}" copiado para buscar en WhatsApp Web`);
+        });
+      }
+
+      const takeBtn = el.querySelector(".btn-take-case");
+      if (takeBtn) {
+        takeBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const myOp = operatorName || "Operador";
+          try {
+            await apiFetch("/api/copilot/assignment", {
+              method: "POST",
+              body: {
+                account_id: currentAccountId,
+                chat_id: item.chat_id,
+                assigned_to: myOp,
+                ticket_status: "open",
+                operator_name: myOp
+              }
+            });
+            showToast(`Caso asignado a ${myOp}`);
+            loadRadarData();
+          } catch (err) {
+            showToast("Error al tomar caso");
+          }
+        });
+      }
 
       const salesBtn = el.querySelector(".btn-radar-sales-act");
       const menuEl = el.querySelector(".radar-reason-menu");
@@ -1713,8 +2077,9 @@
       }
 
       el.addEventListener("click", () => {
+        const tabMgmt = document.querySelector('.tab-btn[data-target="tab-management"]');
+        if (tabMgmt) tabMgmt.click();
         loadChatContext(item.chat_id || copyQuery);
-        copyToClipboard(copyQuery, `Contacto "${copyQuery}" copiado para buscar en WhatsApp Web`);
       });
 
       container.appendChild(el);
@@ -2004,11 +2369,15 @@
     // Cargar operadores conocidos desde la red si es posible
     apiFetch("/api/system/network").then(netData => {
       if (netData) {
+        if (netData.network_mode) {
+          currentNetworkMode = netData.network_mode;
+        }
         if (Array.isArray(netData.known_operators)) {
           knownOperators = netData.known_operators;
           const sel = document.getElementById("select-assigned-to");
           if (sel) populateAssigneeOptions(sel, sel.value);
         }
+        applyTeamModeUI();
         const activeOp = netData.active_operator || (netData.known_operators && netData.known_operators[0]) || "";
         const isLocalHost = !netData.needs_pin && (currentServerUrl.includes("127.0.0.1") || currentServerUrl.includes("localhost"));
         if (isLocalHost && (!operatorName || operatorName === "Operador") && activeOp) {
@@ -2071,20 +2440,40 @@
     if (targetChatId) params.set("chat_id", targetChatId);
     if (targetMsgId) params.set("msg_id", targetMsgId);
     if (currentAccountId && currentAccountId !== "default") params.set("account_id", currentAccountId);
-    if (currentOfficePin) params.set("pin", currentOfficePin);
     if (operatorName && operatorName !== "Operador") params.set("operator", operatorName);
 
-    const qs = params.toString();
-    const finalUrl = `${base}/index.html${qs ? "?" + qs : ""}`;
-
-    chrome.runtime.sendMessage({
-      action: "open_viewer",
-      url: finalUrl,
-      baseUrl: base
-    }, (res) => {
-      if (chrome.runtime.lastError || !res || !res.ok) {
-        window.open(finalUrl, "_blank");
+    const executeOpen = (handoffCode = null) => {
+      if (handoffCode) {
+        params.set("handoff", handoffCode);
+        params.delete("pin");
+      } else if (currentOfficePin) {
+        params.set("pin", currentOfficePin);
       }
+      const qs = params.toString();
+      const finalUrl = `${base}/index.html${qs ? "?" + qs : ""}`;
+
+      chrome.runtime.sendMessage({
+        action: "open_viewer",
+        url: finalUrl,
+        baseUrl: base
+      }, (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          window.open(finalUrl, "_blank");
+        }
+      });
+    };
+
+    apiFetch("/api/auth/handoff", {
+      method: "POST",
+      body: { operator: operatorName || "Operador" }
+    }).then(res => {
+      if (res && res.ok && res.handoff_code) {
+        executeOpen(res.handoff_code);
+      } else {
+        executeOpen(null);
+      }
+    }).catch(() => {
+      executeOpen(null);
     });
   }
 
@@ -2142,26 +2531,8 @@
     }
 
     if (badgeProfile) {
-      badgeProfile.style.cursor = "pointer";
-      badgeProfile.title = "Clic para cambiar perfil de trabajo (o actualizar)";
-      badgeProfile.addEventListener("click", async () => {
-        try {
-          const res = await apiFetch(`/api/profile/cycle?account_id=${encodeURIComponent(currentAccountId)}`, {
-            method: "POST"
-          });
-          if (res && res.profile) {
-            currentProfile = res.profile;
-            applyProfileUI();
-            showToast(`Perfil: ${profileLabels[currentProfile] || currentProfile}`);
-          } else {
-            await loadWorkspaceProfile();
-            showToast(`Perfil: ${profileLabels[currentProfile] || currentProfile}`);
-          }
-        } catch (e) {
-          await loadWorkspaceProfile();
-          showToast(`Perfil: ${profileLabels[currentProfile] || currentProfile}`);
-        }
-      });
+      badgeProfile.style.cursor = "default";
+      badgeProfile.title = "Perfil activo (configurable desde el Panel de Control en el Visor Web)";
     }
 
     if (btnSyncRecent) {
@@ -2456,23 +2827,31 @@
   // =========================================================================
   function escapeHtml(str) {
     if (!str) return "";
-    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function highlightQuery(text, query) {
     if (!text) return "";
-    // Si el texto ya contiene marcas HTML de resaltado (<mark> de snippet FTS5), preservarlas directamente
+    // Si el texto ya contiene marcas HTML de resaltado (<mark> de snippet FTS5), escapar de forma segura
     if (text.includes("<mark>") && text.includes("</mark>")) {
-      return text;
+      const tokenStart = "___MARK_START___";
+      const tokenEnd = "___MARK_END___";
+      const tokenized = String(text).replace(/<mark>/gi, tokenStart).replace(/<\/mark>/gi, tokenEnd);
+      return escapeHtml(tokenized).replaceAll(tokenStart, "<mark>").replaceAll(tokenEnd, "</mark>");
     }
     const escaped = escapeHtml(text);
     if (!query) return escaped;
     const cleanQ = query.trim();
     if (!cleanQ) return escaped;
     // Escapar caracteres especiales de regex para evitar SyntaxError al buscar signos, precios, etc.
-    const escapedRegex = cleanQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedRegex = escapeHtml(cleanQ).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     try {
-      const reg = new RegExp(`(${escapeHtml(cleanQ)}|${escapedRegex})`, "gi");
+      const reg = new RegExp(`(${escapedRegex})`, "gi");
       return escaped.replace(reg, "<mark>$1</mark>");
     } catch (e) {
       return escaped;
@@ -2492,6 +2871,7 @@
     setupTicketButtons();
     setupPipelineInputs();
     setupTemplateFilter();
+    setupTemplateShortcuts();
     setupChatSearch();
     setupRadarTabs();
     setupRadarIgnoredBanner();
@@ -2499,6 +2879,7 @@
     setupConnectionConfig();
     setupMessageListener();
     startPresenceHeartbeat();
+    applyTeamModeUI();
 
     // Obtener último estado de sincronización conocido
     chrome.runtime.sendMessage({ action: "get_sync_status" }, (res) => {

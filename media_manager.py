@@ -3,6 +3,9 @@ import re
 import base64
 import urllib.request
 import urllib.error
+import urllib.parse
+import hashlib
+import hmac
 import mimetypes
 import threading
 import sqlite3
@@ -51,6 +54,17 @@ MIME_EXTENSIONS = {
     "text/plain": ".txt"
 }
 
+# Extensiones autorizadas seguras (lista blanca estricta anti-XSS y anti-ejecutables)
+ALLOWED_MEDIA_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".gif",
+    ".mp4", ".3gp", ".ogg", ".opus", ".mp3", ".m4a", ".wav",
+    ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".rar", ".bin"
+}
+
+# Límite máximo de descarga de un archivo multimedia para evitar DoS por memoria
+MAX_MEDIA_BYTES = 100 * 1024 * 1024  # 100 MB
+
 def ensure_media_dirs():
     """Crea los directorios para almacenar archivos multimedia."""
     ensure_data_dirs()
@@ -82,13 +96,19 @@ def derive_media_keys(media_key_bytes, media_type):
     return iv, cipher_key, mac_key
 
 def decrypt_media_buffer(enc_bytes, media_key_bytes, media_type):
-    """Descifra el buffer binario usando AES-256-CBC y remueve el padding PKCS7."""
+    """Descifra el buffer binario usando AES-256-CBC, verifica HMAC-SHA256 y remueve el padding PKCS7."""
     if len(enc_bytes) <= 10:
         raise ValueError("Buffer cifrado demasiado corto (menor o igual a 10 bytes)")
 
     # Los últimos 10 bytes corresponden al MAC de WhatsApp
     ciphertext = enc_bytes[:-10]
-    iv, cipher_key, _ = derive_media_keys(media_key_bytes, media_type)
+    received_mac = enc_bytes[-10:]
+    iv, cipher_key, mac_key = derive_media_keys(media_key_bytes, media_type)
+
+    # Verificación de integridad HMAC-SHA256 (Encrypt-then-MAC)
+    expected_mac = hmac.new(mac_key, iv + ciphertext, hashlib.sha256).digest()[:10]
+    if not hmac.compare_digest(expected_mac, received_mac):
+        raise ValueError("MAC multimedia inválido: archivo cifrado corrupto o manipulado")
 
     cipher = Cipher(algorithms.AES(cipher_key), modes.CBC(iv), backend=default_backend())
     decryptor = cipher.decryptor()
@@ -109,11 +129,25 @@ def download_and_decrypt(msg_id, media_key_b64, direct_path, media_type, mimetyp
     """
     ensure_media_dirs()
 
-    # Construir URL CDN
+    # Construir URL CDN y validar anti-SSRF
     if direct_path.startswith("http://") or direct_path.startswith("https://"):
         cdn_url = direct_path
     else:
-        cdn_url = f"https://mmg.whatsapp.net{direct_path}"
+        clean_dp = direct_path.strip()
+        if clean_dp.startswith("//") or clean_dp.startswith("/@") or "@" in clean_dp.split("?")[0]:
+            _update_status(msg_id, "error", "direct_path inválido o sospechoso", db_path)
+            return False
+        if not clean_dp.startswith("/"):
+            clean_dp = "/" + clean_dp
+        cdn_url = f"https://mmg.whatsapp.net{clean_dp}"
+
+    parsed_cdn = urllib.parse.urlparse(cdn_url)
+    cdn_host = (parsed_cdn.hostname or "").lower()
+    if parsed_cdn.scheme != "https" or parsed_cdn.username or parsed_cdn.password or not (
+        cdn_host.endswith(".whatsapp.net") or cdn_host.endswith(".fbcdn.net")
+    ):
+        _update_status(msg_id, "error", f"Dominio CDN no autorizado o URL no segura: {cdn_host}", db_path)
+        return False
 
     # Decodificar clave en bytes
     try:
@@ -127,7 +161,7 @@ def download_and_decrypt(msg_id, media_key_b64, direct_path, media_type, mimetyp
         _update_status(msg_id, "error", f"Clave base64 inválida: {e}", db_path)
         return False
 
-    # Descargar archivo cifrado
+    # Descargar archivo cifrado con control de tamaño máximo
     req = urllib.request.Request(
         cdn_url,
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -135,7 +169,18 @@ def download_and_decrypt(msg_id, media_key_b64, direct_path, media_type, mimetyp
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            enc_data = resp.read()
+            chunks = []
+            total_read = 0
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                total_read += len(chunk)
+                if total_read > MAX_MEDIA_BYTES:
+                    _update_status(msg_id, "error", f"Archivo excede el límite máximo de {MAX_MEDIA_BYTES // (1024*1024)} MB", db_path)
+                    return False
+                chunks.append(chunk)
+            enc_data = b"".join(chunks)
     except urllib.error.HTTPError as e:
         # 404 / 410 indica que el archivo expiró en los servidores de WhatsApp
         if e.code in [404, 410]:
@@ -154,15 +199,21 @@ def download_and_decrypt(msg_id, media_key_b64, direct_path, media_type, mimetyp
         _update_status(msg_id, "error", f"Fallo al descifrar: {e}", db_path)
         return False
 
-    # Determinar extensión y destino
+    # Determinar extensión segura y destino
     ext = ""
     if filename and "." in filename:
-        ext = os.path.splitext(filename)[1].lower()
+        cand_ext = os.path.splitext(filename)[1].lower()
+        if cand_ext in ALLOWED_MEDIA_EXTENSIONS:
+            ext = cand_ext
     if not ext and mimetype:
-        ext = MIME_EXTENSIONS.get(mimetype.split(";")[0].strip()) or mimetypes.guess_extension(mimetype) or ""
+        cand_ext = MIME_EXTENSIONS.get(mimetype.split(";")[0].strip()) or mimetypes.guess_extension(mimetype) or ""
+        if cand_ext.lower() in ALLOWED_MEDIA_EXTENSIONS:
+            ext = cand_ext.lower()
     if not ext:
         defaults = {"image": ".jpg", "sticker": ".webp", "audio": ".ogg", "ptt": ".ogg", "video": ".mp4", "document": ".bin"}
         ext = defaults.get(media_type, ".bin")
+    if ext not in ALLOWED_MEDIA_EXTENSIONS:
+        ext = ".bin"
 
     subfolder = config.get_media_subfolder_for_db(db_path, media_type)
     safe_id = sanitize_filename(msg_id)

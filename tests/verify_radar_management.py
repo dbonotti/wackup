@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import tempfile
@@ -7,6 +8,10 @@ import threading
 import urllib.request
 import urllib.error
 from http.server import HTTPServer
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 import db_manager
 import whatsapp_viewer

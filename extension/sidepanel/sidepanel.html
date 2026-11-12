@@ -16,7 +16,7 @@
         <span id="header-status-dot" class="status-dot ready" title="Estado: Conectando..."></span>
       </div>
       <div class="header-actions">
-        <span id="profile-badge" class="badge-profile copilot-mini-pill" title="Perfil de Espacio de Trabajo (clic para cambiar)">CRM</span>
+        <span id="profile-badge" class="badge-profile copilot-mini-pill" title="Perfil activo (configurable desde el Panel de Control en el Visor Web)" style="cursor: default;">CRM</span>
         <button id="btn-open-viewer" class="btn-icon" title="Abrir Visor Web WAckup en el navegador">🖥️</button>
         <button id="btn-update-ext" class="btn-icon btn-update" style="display:none;" title="Actualizar extensión">🔄 Actualizar</button>
         <button id="btn-sync-recent" class="btn-icon" title="Sincronizar novedades (Shift+clic: historial completo)">🔄</button>
@@ -126,12 +126,14 @@
           <button id="btn-reactivate-radar" class="btn-reactivate-radar" type="button" title="Volver a incluir este contacto en el Radar">Reactivar</button>
         </div>
 
-        <!-- Tarjeta de Contacto Activo (Diseño Compacto) -->
+        <!-- Tarjeta de Contacto Activo (Diseño Compacto con Etiquetas en Línea) -->
         <div class="contact-header-card">
           <div class="contact-row-top">
             <span id="contact-type-icon" class="contact-type-icon" title="Contacto">👤</span>
             <div id="contact-name" class="contact-title" title="Nombre del contacto">Cargando contacto...</div>
-            <button id="btn-open-viewer-chat" class="btn-res-action" type="button" title="Ver esta conversación completa en el Visor Web" style="margin-left: auto; padding: 2px 7px; font-size: 11px;">↗ Visor</button>
+            <button id="btn-take-case" class="btn-res-action btn-take-case" type="button" title="Tomar este caso para mí" style="display:none; margin-left: auto; padding: 2px 7px; font-size: 11px;">🙋‍♂️ Tomar</button>
+            <button id="btn-toggle-chat-search" class="btn-res-action" type="button" title="Buscar en este chat" style="padding: 2px 7px; font-size: 11px;">🔍</button>
+            <button id="btn-open-viewer-chat" class="btn-res-action" type="button" title="Ver esta conversación completa en el Visor Web" style="padding: 2px 7px; font-size: 11px;">↗ Visor</button>
             <span id="contact-sla" class="sla-badge" style="display:none;" title="Tiempo promedio de respuesta (SLA)">-</span>
           </div>
           <div class="contact-row-bottom">
@@ -146,47 +148,12 @@
               </select>
             </div>
           </div>
-        </div>
-
-        <!-- Búsqueda FTS5 en la Conversación -->
-        <div id="sec-chat-search" class="section-card">
-          <div class="section-title-row">
-            <span class="card-title">🔍 Buscar en este Chat</span>
-          </div>
-          <div class="search-input-group">
-            <div class="search-field-wrapper">
-              <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar mensajes en este chat...">
-              <button id="btn-search-clear" class="btn-search-clear" title="Limpiar búsqueda" type="button" style="display:none;">✕</button>
+          <div class="contact-tags-row" style="margin-top: 8px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+            <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">🏷️</span>
+            <div id="tags-list" class="tags-container" style="display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: center;">
+              <span class="empty-subtext">Sin etiquetas</span>
             </div>
-            <button id="btn-search-chat" class="btn-search-exec" title="Buscar mensajes [Enter]" type="button">
-              <span>🔍</span>
-              <span class="btn-search-exec-text">Buscar</span>
-            </button>
-          </div>
-          <div id="search-nav-bar" class="search-nav-bar" style="display: none;">
-            <div class="search-nav-info">
-              <span class="search-nav-icon">🎯</span>
-              <span id="search-nav-count" class="search-nav-count">0 de 0</span>
-            </div>
-            <div class="search-nav-actions">
-              <span id="search-nav-hint" class="search-nav-hint">Shift+Enter / Enter</span>
-              <div class="search-nav-btn-group">
-                <button id="btn-search-prev" class="btn-nav-search" title="Coincidencia anterior [Shift+Enter]" disabled type="button">▲</button>
-                <button id="btn-search-next" class="btn-nav-search" title="Coincidencia siguiente [Enter]" disabled type="button">▼</button>
-              </div>
-            </div>
-          </div>
-          <div id="chat-search-results" class="search-results-list"></div>
-        </div>
-
-        <!-- Etiquetas de Contacto -->
-        <div class="section-card">
-          <div class="section-title-row">
-            <span class="card-title">🏷️ Etiquetas</span>
-            <button id="btn-add-tag" class="btn-card-action" type="button">+ Etiqueta</button>
-          </div>
-          <div id="tags-list" class="tags-container">
-            <span class="empty-subtext">Sin etiquetas</span>
+            <button id="btn-add-tag" class="btn-res-action" type="button" style="font-size: 11px; padding: 1px 6px;">+ Etiqueta</button>
           </div>
         </div>
 
@@ -198,6 +165,19 @@
             <button class="copilot-pill-btn btn-ticket" data-status="pending" type="button">🟡 En Espera</button>
             <button class="copilot-pill-btn btn-ticket" data-status="resolved" type="button">⚪ Resuelto</button>
             <button class="copilot-pill-btn btn-ticket" data-status="none" title="Limpiar estado" type="button">✕</button>
+          </div>
+          <div style="margin-top: 8px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Prioridad de Atención</div>
+          <div class="copilot-pill-group ticket-priority-group" style="margin-top: 4px;">
+            <button class="copilot-pill-btn btn-ticket-priority" data-priority="0" type="button">Normal</button>
+            <button class="copilot-pill-btn btn-ticket-priority" data-priority="1" type="button">🟠 Alta</button>
+            <button class="copilot-pill-btn btn-ticket-priority" data-priority="2" type="button">🔥 Urgente</button>
+          </div>
+          <div style="margin-top: 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">⏰ Recordatorio de seguimiento</div>
+          <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap;">
+            <button type="button" class="copilot-mini-pill" id="btn-quick-followup-tomorrow">Mañana</button>
+            <button type="button" class="copilot-mini-pill" id="btn-quick-followup-3d">+3 días</button>
+            <button type="button" class="copilot-mini-pill" id="btn-quick-followup-clear">Limpiar</button>
+            <input type="date" id="input-ticket-followup" class="form-control" style="font-size: 11px; padding: 3px 6px; width: auto; flex: 1; min-width: 110px;">
           </div>
         </div>
 
@@ -232,8 +212,20 @@
           </div>
         </div>
 
+        <!-- Plantillas de Respuesta Rápida (Subida para visibilidad inmediata) -->
+        <div class="section-card" id="sec-quick-templates">
+          <div class="section-title-row">
+            <span class="card-title">⚡ Respuestas Rápidas</span>
+            <span class="hint-pill" title="Atajos de teclado Alt+1 a Alt+5 copian las primeras 5 plantillas">Alt+1..5</span>
+          </div>
+          <input type="text" id="input-filter-templates" class="form-control mb-2" placeholder="Filtrar plantilla o /atajo...">
+          <div id="templates-list" class="templates-list">
+            <!-- Plantillas dinámicas -->
+          </div>
+        </div>
+
         <!-- Notas Privadas y Bitácora de Equipo -->
-        <div class="section-card">
+        <div class="section-card" id="sec-contact-notes">
           <div class="section-title-row">
             <span class="card-title">🔒 Nota Fijada (Resumen)</span>
             <span id="notes-status" class="status-hint">Guardado ✓</span>
@@ -249,16 +241,36 @@
           </div>
         </div>
 
-        <!-- Plantillas de Respuesta Rápida -->
-        <div class="section-card">
+        <!-- Búsqueda FTS5 en la Conversación (Colapsable mediante botón 🔍) -->
+        <div id="sec-chat-search" class="section-card" style="display:none;">
           <div class="section-title-row">
-            <span class="card-title">⚡ Respuestas Rápidas (Portapapeles)</span>
-            <span class="hint-pill">Clic copia al portapapeles</span>
+            <span class="card-title">🔍 Buscar en este Chat</span>
+            <button type="button" class="btn-card-action" onclick="document.getElementById('sec-chat-search').style.display='none'; document.getElementById('btn-toggle-chat-search').classList.remove('active');">Cerrar</button>
           </div>
-          <input type="text" id="input-filter-templates" class="form-control mb-2" placeholder="Buscar plantilla (ej. CBU, Saludo, Horarios)...">
-          <div id="templates-list" class="templates-list">
-            <!-- Plantillas dinámicas -->
+          <div class="search-input-group">
+            <div class="search-field-wrapper">
+              <input type="text" id="input-search-chat" class="form-control" placeholder="Buscar mensajes en este chat...">
+              <button id="btn-search-clear" class="btn-search-clear" title="Limpiar búsqueda" type="button" style="display:none;">✕</button>
+            </div>
+            <button id="btn-search-chat" class="btn-search-exec" title="Buscar mensajes [Enter]" type="button">
+              <span>🔍</span>
+              <span class="btn-search-exec-text">Buscar</span>
+            </button>
           </div>
+          <div id="search-nav-bar" class="search-nav-bar" style="display: none;">
+            <div class="search-nav-info">
+              <span class="search-nav-icon">🎯</span>
+              <span id="search-nav-count" class="search-nav-count">0 de 0</span>
+            </div>
+            <div class="search-nav-actions">
+              <span id="search-nav-hint" class="search-nav-hint">Shift+Enter / Enter</span>
+              <div class="search-nav-btn-group">
+                <button id="btn-search-prev" class="btn-nav-search" title="Coincidencia anterior [Shift+Enter]" disabled type="button">▲</button>
+                <button id="btn-search-next" class="btn-nav-search" title="Coincidencia siguiente [Enter]" disabled type="button">▼</button>
+              </div>
+            </div>
+          </div>
+          <div id="chat-search-results" class="search-results-list"></div>
         </div>
       </section>
 

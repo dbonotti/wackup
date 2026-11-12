@@ -210,9 +210,9 @@
       return;
     }
 
-    // 3. Solicitud de recarga de extensión
+    // 3. Solicitud de recarga de extensión (desactivada por seguridad desde páginas externas)
     if (event.data.type === "BACKUPWA_RELOAD_EXT") {
-      safeRuntimeSendMessage({ action: "reload_extension", reloadWhatsAppTabs: true });
+      console.warn("[WAckup Bridge] Ignorando BACKUPWA_RELOAD_EXT no autorizado");
       return;
     }
 

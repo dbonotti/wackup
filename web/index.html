@@ -209,8 +209,11 @@
                 </div>
 
                 <!-- Responsable Asignado -->
-                <div class="copilot-card">
-                  <div class="copilot-card-title">👤 Responsable Asignado</div>
+                <div class="copilot-card" id="copilotSecAssigned">
+                  <div class="copilot-card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>👤 Responsable Asignado</span>
+                    <button type="button" class="btn-card-action" id="btnCopilotTakeCase" onclick="takeCurrentCase()" style="display: none; padding: 2px 8px; font-size: 11px;">🙋‍♂️ Tomar</button>
+                  </div>
                   <select id="copilotAssignedSelect" class="search-box" onchange="saveCopilotAssignment()" style="width: 100%;">
                     <option value="">Sin asignar</option>
                   </select>
@@ -224,6 +227,19 @@
                     <button type="button" class="copilot-pill-btn" id="btnTicket-pending" onclick="setCopilotTicket('pending')">🟡 En Espera</button>
                     <button type="button" class="copilot-pill-btn" id="btnTicket-resolved" onclick="setCopilotTicket('resolved')">⚪ Resuelto</button>
                     <button type="button" class="copilot-pill-btn" id="btnTicket-none" onclick="setCopilotTicket('none')" title="Limpiar estado">✕</button>
+                  </div>
+                  <div style="margin-top: 8px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Prioridad de Atención</div>
+                  <div class="copilot-pill-group" style="margin-top: 4px;">
+                    <button type="button" class="copilot-pill-btn" id="btnTicketPriority-0" onclick="setCopilotPriority(0)">Normal</button>
+                    <button type="button" class="copilot-pill-btn" id="btnTicketPriority-1" onclick="setCopilotPriority(1)">🟠 Alta</button>
+                    <button type="button" class="copilot-pill-btn" id="btnTicketPriority-2" onclick="setCopilotPriority(2)">🔥 Urgente</button>
+                  </div>
+                  <div style="margin-top: 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">⏰ Recordatorio de seguimiento</div>
+                  <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap;">
+                    <button type="button" class="copilot-mini-pill" onclick="setCopilotFollowupQuick(1)">Mañana</button>
+                    <button type="button" class="copilot-mini-pill" onclick="setCopilotFollowupQuick(3)">+3 días</button>
+                    <button type="button" class="copilot-mini-pill" onclick="setCopilotFollowupQuick(0)">Limpiar</button>
+                    <input type="date" id="copilotTicketFollowupInput" class="form-control" style="font-size: 11px; padding: 3px 6px; width: auto; flex: 1; min-width: 110px;" onchange="saveCopilotTicketFollowup(this.value)">
                   </div>
                 </div>
 
@@ -346,7 +362,7 @@
                 <button class="kanban-type-btn active" id="btnKanbanSales" onclick="setKanbanType('sales')">💼 Embudo Comercial (Ventas)</button>
                 <button class="kanban-type-btn" id="btnKanbanSupport" onclick="setKanbanType('support')">🎧 Tickets de Atención (Soporte)</button>
               </div>
-              <div class="kanban-filter-assigned">
+              <div class="kanban-filter-assigned" id="kanbanAssignFiltersGroup">
                 <button class="kanban-filter-btn active" id="btnKanbanAssign-all" onclick="setKanbanAssignedFilter('all')">Todos</button>
                 <button class="kanban-filter-btn" id="btnKanbanAssign-mine" onclick="setKanbanAssignedFilter('mine')">Mis chats</button>
                 <button class="kanban-filter-btn" id="btnKanbanAssign-unassigned" onclick="setKanbanAssignedFilter('unassigned')">Sin asignar</button>
@@ -585,65 +601,75 @@
             </div>
           </div>
 
-          <!-- Tarjeta Gestión de Operadores y Equipo -->
-          <div class="workspace-card system-card" id="cardTeamOperators">
-            <div class="card-header-flex">
-              <div>
-                <h3 class="card-title">👥 Operadores y Equipo de Trabajo</h3>
-                <p class="card-subtitle">Administra los usuarios autorizados. Los operadores dados de alta aquí podrán asignarse en el Copiloto y seleccionarse al ingresar desde otra PC en red local.</p>
-              </div>
-              <div style="display: flex; gap: 8px;">
-                <button type="button" class="btn-primary" onclick="openAddOperatorDialog()">+ Nuevo Operador</button>
-              </div>
-            </div>
-
-            <div class="table-responsive" style="margin-top: 14px;">
-              <table class="crm-table">
-                <thead>
-                  <tr>
-                    <th style="width: 40px;"></th>
-                    <th>Nombre / Alias</th>
-                    <th style="width: 140px;">Presencia</th>
-                    <th style="width: 170px;">En esta PC</th>
-                    <th style="width: 130px; text-align: right;">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody id="teamOperatorsTableBody">
-                  <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 18px;">Cargando operadores...</td></tr>
-                </tbody>
-              </table>
-            </div>
+          <!-- Botón de apertura para Trabajo en Equipo / Red Local -->
+          <div style="grid-column: 1 / -1; margin: 4px 0;">
+            <button type="button" id="btnToggleTeamCollapse" class="btn-secondary" onclick="toggleTeamSectionCollapse()" style="display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 16px; font-weight: 600; font-size: 13px;">
+              <span>👥 Configurar trabajo en equipo (Modo Red Local)</span>
+              <span id="teamCollapseArrow">▾</span>
+            </button>
           </div>
 
-          <!-- Tarjeta Red Local y Modo Equipo -->
-          <div class="workspace-card system-card">
-            <div class="card-header-flex">
-              <div>
-                <h3 class="card-title">🌐 Red Local y Modo Equipo</h3>
-                <p class="card-subtitle">Permite que compañeros de la oficina se conecten al visor y al copiloto desde otras PCs.</p>
+          <div id="teamSectionCollapsible" style="display: none; grid-column: 1 / -1; display: none; flex-direction: column; gap: 16px;">
+            <!-- Tarjeta Gestión de Operadores y Equipo -->
+            <div class="workspace-card system-card" id="cardTeamOperators">
+              <div class="card-header-flex">
+                <div>
+                  <h3 class="card-title">👥 Operadores y Equipo de Trabajo</h3>
+                  <p class="card-subtitle">Administra los usuarios autorizados. Los operadores dados de alta aquí podrán asignarse en el Copiloto y seleccionarse al ingresar desde otra PC en red local.</p>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button type="button" class="btn-primary" onclick="openAddOperatorDialog()">+ Nuevo Operador</button>
+                </div>
               </div>
-              <div style="display: flex; gap: 8px;">
-                <button class="btn-card-action" onclick="toggleNetworkMode()" id="btnToggleNetMode">Cambiar a Modo LAN</button>
+
+              <div class="table-responsive" style="margin-top: 14px;">
+                <table class="crm-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 40px;"></th>
+                      <th>Nombre / Alias</th>
+                      <th style="width: 140px;">Presencia</th>
+                      <th style="width: 170px;">En esta PC</th>
+                      <th style="width: 130px; text-align: right;">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody id="teamOperatorsTableBody">
+                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 18px;">Cargando operadores...</td></tr>
+                  </tbody>
+                </table>
               </div>
             </div>
-            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 12px;">
-              <div class="stat-box">
-                <div class="stat-val" id="netModeStatus">Local (127.0.0.1)</div>
-                <div class="stat-lbl">Modo de Red</div>
+
+            <!-- Tarjeta Red Local y Modo Equipo -->
+            <div class="workspace-card system-card" id="cardNetworkLAN">
+              <div class="card-header-flex">
+                <div>
+                  <h3 class="card-title">🌐 Red Local y Modo Equipo</h3>
+                  <p class="card-subtitle">Permite que compañeros de la oficina se conecten al visor y al copiloto desde otras PCs.</p>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn-card-action" onclick="toggleNetworkMode()" id="btnToggleNetMode">Cambiar a Modo LAN</button>
+                </div>
               </div>
-              <div class="stat-box">
-                <div class="stat-val" id="netPinDisplay" style="font-family: monospace; letter-spacing: 2px;">------</div>
-                <div class="stat-lbl">PIN de Oficina (<a href="#" onclick="promptEditPin(); return false;">Editar</a>)</div>
+              <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 12px;">
+                <div class="stat-box">
+                  <div class="stat-val" id="netModeStatus">Local (127.0.0.1)</div>
+                  <div class="stat-lbl">Modo de Red</div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-val" id="netPinDisplay" style="font-family: monospace; letter-spacing: 2px;">------</div>
+                  <div class="stat-lbl">PIN de Oficina (<a href="#" onclick="promptEditPin(); return false;">Editar</a>)</div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-val" id="myOperatorNameDisplay" style="font-size: 14px;">Operador</div>
+                  <div class="stat-lbl">Mi Nombre (<a href="#" onclick="promptSetMyOperator(); return false;">Seleccionar</a>)</div>
+                </div>
               </div>
-              <div class="stat-box">
-                <div class="stat-val" id="myOperatorNameDisplay" style="font-size: 14px;">Operador</div>
-                <div class="stat-lbl">Mi Nombre (<a href="#" onclick="promptSetMyOperator(); return false;">Seleccionar</a>)</div>
-              </div>
-            </div>
-            <div style="margin-top: 14px;">
-              <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary);">Direcciones para que tus compañeros ingresen desde su PC:</label>
-              <div id="lanHostIpsList" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
-                <span style="font-size: 12px; color: var(--text-muted);">Consultando interfaces de red...</span>
+              <div style="margin-top: 14px;">
+                <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary);">Direcciones para que tus compañeros ingresen desde su PC:</label>
+                <div id="lanHostIpsList" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                  <span style="font-size: 12px; color: var(--text-muted);">Consultando interfaces de red...</span>
+                </div>
               </div>
             </div>
           </div>
@@ -843,10 +869,10 @@
                 <span>Copia pasiva de chats, visor histórico y multimedia offline.</span>
               </div>
             </div>
-            <div class="ob-profile-card" data-profile="support" onclick="selectOnboardingProfile('support')">
+            <div class="ob-profile-card selected" data-profile="support" onclick="selectOnboardingProfile('support')">
               <div class="ob-profile-icon">🎧</div>
               <div class="ob-profile-info">
-                <strong>Atención y Soporte</strong>
+                <strong>Atención y Soporte (Recomendado)</strong>
                 <span>Bandeja de no respondidos, SLA, radar de atención y plantillas.</span>
               </div>
             </div>
@@ -857,10 +883,10 @@
                 <span>Embudo comercial Kanban, notas colaborativas y reactivación RFM.</span>
               </div>
             </div>
-            <div class="ob-profile-card selected" data-profile="full" onclick="selectOnboardingProfile('full')">
+            <div class="ob-profile-card" data-profile="full" onclick="selectOnboardingProfile('full')">
               <div class="ob-profile-icon">🚀</div>
               <div class="ob-profile-info">
-                <strong>Suite Completa (Recomendado)</strong>
+                <strong>Suite Completa</strong>
                 <span>Todas las herramientas de soporte, ventas y analítica unificadas.</span>
               </div>
             </div>

@@ -11,7 +11,7 @@
         chrome.runtime.sendMessage({ action: "focus_my_tab" }, (res) => {
           void chrome.runtime.lastError;
           if (res && res.ok) {
-            window.postMessage({ source: "wackup-viewer-ext", action: "tab_focused_ok" }, "*");
+            window.postMessage({ source: "wackup-viewer-ext", action: "tab_focused_ok" }, window.location.origin);
           }
         });
       } catch (e) {}

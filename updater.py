@@ -254,6 +254,10 @@ def is_path_safe_to_update(rel_path: str) -> bool:
     return False
 
 
+MAX_UPDATE_ZIP_BYTES = 60 * 1024 * 1024       # 60 MB máximo de paquete zip
+MAX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024    # 150 MB máximo descomprimido (anti zip-bomb)
+
+
 def apply_update(
     download_url: Optional[str] = None,
     zip_path: Optional[str] = None,
@@ -306,13 +310,35 @@ def apply_update(
                     }
                 download_url = check["download_url"]
 
+            # Validación de seguridad estricta del origen de descarga
+            parsed = urllib.parse.urlparse(download_url)
+            allowed_hosts = {"github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com"}
+            if parsed.scheme != "https" or (parsed.hostname or "").lower() not in allowed_hosts:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": f"Origen de actualización no seguro o no autorizado: {download_url}"
+                }
+
             local_zip_path = os.path.join(temp_work_dir, "update_package.zip")
             req = urllib.request.Request(
                 download_url,
                 headers={"User-Agent": f"WAckup-Updater/{get_current_version()}"}
             )
             with urllib.request.urlopen(req, timeout=30) as resp, open(local_zip_path, "wb") as out_f:
-                shutil.copyfileobj(resp, out_f)
+                downloaded_size = 0
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    downloaded_size += len(chunk)
+                    if downloaded_size > MAX_UPDATE_ZIP_BYTES:
+                        return {
+                            "ok": False,
+                            "status": "error",
+                            "error": f"El paquete de actualización supera el límite máximo de {MAX_UPDATE_ZIP_BYTES // (1024 * 1024)} MB."
+                        }
+                    out_f.write(chunk)
 
         # Validar integridad del ZIP
         if not os.path.isfile(local_zip_path) or not zipfile.is_zipfile(local_zip_path):
@@ -329,6 +355,14 @@ def apply_update(
                     "ok": False,
                     "status": "error",
                     "error": f"Archivo ZIP corrupto (falla en {bad_file})."
+                }
+
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": f"El contenido descomprimido ({total_uncompressed} bytes) excede el límite de seguridad anti-bomba de {MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MB."
                 }
 
             # Determinar prefijo común si el zip empaqueta en una subcarpeta (ej. wackup-main/ o wackup-3.0.1/)

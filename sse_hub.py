@@ -118,6 +118,14 @@ class SSEHub:
 
         presence_changed = False
         with self._presence_lock:
+            # Limpieza inmediata de presencia al cambiar de chat (0ms ghosting)
+            for other_chat, clients in list(self._presence.items()):
+                if other_chat != clean_chat and c_id in clients:
+                    del clients[c_id]
+                    if not clients:
+                        del self._presence[other_chat]
+                    presence_changed = True
+
             if clean_chat not in self._presence:
                 self._presence[clean_chat] = {}
 

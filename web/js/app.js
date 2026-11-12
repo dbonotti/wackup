@@ -52,6 +52,53 @@
     let currentKanbanAssignedFilter = 'all';
     let knownOperatorsList = [];
     let isLanPinModalVisible = false;
+    let currentNetworkMode = 'local';
+
+    function isTeamMode() {
+      return currentNetworkMode === 'lan' || (Array.isArray(knownOperatorsList) && knownOperatorsList.length > 1);
+    }
+
+    function applyTeamModeUI() {
+      const team = isTeamMode();
+
+      // 1. Selector de responsable en Copilot Drawer
+      const secAssigned = document.getElementById('copilotSecAssigned');
+      if (secAssigned) {
+        secAssigned.style.display = team ? 'block' : 'none';
+      }
+
+      // 2. Filtros de asignación en Tablero Kanban
+      const kanbanAssignGroup = document.getElementById('kanbanAssignFiltersGroup');
+      if (kanbanAssignGroup) {
+        kanbanAssignGroup.style.display = team ? 'inline-flex' : 'none';
+      }
+      if (!team) {
+        currentKanbanAssignedFilter = 'all';
+        ['all', 'mine', 'unassigned'].forEach(f => {
+          const btn = document.getElementById('btnKanbanAssign-' + f);
+          if (btn) btn.classList.toggle('active', f === 'all');
+        });
+      }
+
+      // 3. Sistema: colapsar sección de equipo si es modo standalone
+      const teamSec = document.getElementById('teamSectionCollapsible');
+      const arrow = document.getElementById('teamCollapseArrow');
+      if (teamSec && teamSec.dataset.userToggled !== 'true') {
+        teamSec.style.display = team ? 'flex' : 'none';
+        if (arrow) arrow.textContent = team ? '▴' : '▾';
+      }
+    }
+
+    function toggleTeamSectionCollapse() {
+      const sec = document.getElementById('teamSectionCollapsible');
+      const arrow = document.getElementById('teamCollapseArrow');
+      if (!sec) return;
+      sec.dataset.userToggled = 'true';
+      const isHidden = (sec.style.display === 'none');
+      sec.style.display = isHidden ? 'flex' : 'none';
+      if (arrow) arrow.textContent = isHidden ? '▴' : '▾';
+    }
+    window.toggleTeamSectionCollapse = toggleTeamSectionCollapse;
 
     const _origFetch = window.fetch.bind(window);
     async function authFetch(resource, init = {}) {
@@ -281,9 +328,6 @@
       if (key === 'R') {
         e.preventDefault();
         promptRestartSystem();
-      } else if (key === 'P') {
-        e.preventDefault();
-        cycleWorkspaceProfileUI();
       } else if (key === 'U') {
         e.preventDefault();
         checkSystemUpdates();
@@ -330,7 +374,7 @@
       const displayLabel = label || currentProfile || 'Suite Completa';
       const menuLabel = document.getElementById('menuProfileLabel');
       if (menuLabel) {
-        menuLabel.textContent = `Cambiar perfil: ${displayLabel} (P)`;
+        menuLabel.textContent = `Perfil de Espacio de Trabajo: ${displayLabel}`;
       }
       const crmPill = document.getElementById('crmProfilePill');
       if (crmPill) {
@@ -356,6 +400,35 @@
         if (typeof isChatCopilotOpen !== 'undefined' && isChatCopilotOpen) {
           toggleChatCopilot(false);
         }
+      }
+
+      // Elementos específicos de Ventas y Soporte en CRM Kanban y métricas
+      const btnKanbanSales = document.getElementById('btnKanbanSales');
+      const btnKanbanSupport = document.getElementById('btnKanbanSupport');
+      const crmTabRfm = document.getElementById('crmTabBtn-rfm');
+      const crmTabDemand = document.getElementById('crmTabBtn-demand');
+
+      if (currentProfile === 'support') {
+        if (btnKanbanSales) btnKanbanSales.style.display = 'none';
+        if (btnKanbanSupport) btnKanbanSupport.style.display = 'inline-flex';
+        if (crmTabRfm) crmTabRfm.style.display = 'none';
+        if (crmTabDemand) crmTabDemand.style.display = 'none';
+        activeKanbanType = 'support';
+        if (btnKanbanSupport) btnKanbanSupport.classList.add('active');
+        if (btnKanbanSales) btnKanbanSales.classList.remove('active');
+      } else if (currentProfile === 'sales') {
+        if (btnKanbanSupport) btnKanbanSupport.style.display = 'none';
+        if (btnKanbanSales) btnKanbanSales.style.display = 'inline-flex';
+        if (crmTabRfm) crmTabRfm.style.display = 'inline-flex';
+        if (crmTabDemand) crmTabDemand.style.display = 'inline-flex';
+        activeKanbanType = 'sales';
+        if (btnKanbanSales) btnKanbanSales.classList.add('active');
+        if (btnKanbanSupport) btnKanbanSupport.classList.remove('active');
+      } else {
+        if (btnKanbanSupport) btnKanbanSupport.style.display = 'inline-flex';
+        if (btnKanbanSales) btnKanbanSales.style.display = 'inline-flex';
+        if (crmTabRfm) crmTabRfm.style.display = 'inline-flex';
+        if (crmTabDemand) crmTabDemand.style.display = 'inline-flex';
       }
 
       // Actualizar estado activo de tarjetas de perfil en vista Sistema
@@ -910,9 +983,13 @@
         });
         const netData = await netRes.json();
         if (netData) {
+          if (netData.network_mode) {
+            currentNetworkMode = netData.network_mode;
+          }
           if (Array.isArray(netData.known_operators)) {
             knownOperatorsList = netData.known_operators;
           }
+          applyTeamModeUI();
           if (netData.needs_pin) {
             showLanPinModal();
             return;
@@ -950,7 +1027,7 @@
       }
     }
 
-    let selectedOnboardingProfile = 'full';
+    let selectedOnboardingProfile = 'support';
     let obExtPollingInterval = null;
     let cachedSystemInfo = null;
 
@@ -1497,11 +1574,33 @@
 
         li.title = itemTooltip;
 
+        let presenceBadgeHtml = '';
+        if (isTeamMode() && activePresenceMap && chat.chat_id) {
+          const entry = activePresenceMap[chat.chat_id];
+          if (entry) {
+            const viewers = Array.isArray(entry) ? entry : (Array.isArray(entry.viewers) ? entry.viewers : [entry]);
+            const other = viewers.find(o => {
+              if (!o) return false;
+              const op = (o.operator || '').trim();
+              const isMe = (o.client_id && o.client_id === myClientId) ||
+                (myOperatorName && myOperatorName.toLowerCase() !== 'operador' && op.toLowerCase() === myOperatorName.toLowerCase()) ||
+                (!op || op.toLowerCase() === 'operador');
+              return !isMe && op;
+            });
+            if (other) {
+              const isWeb = other.source === 'whatsapp_web';
+              const icon = isWeb ? '✍️' : '👁️';
+              const cls = isWeb ? 'badge-presence-active web-source' : 'badge-presence-active visor-source';
+              presenceBadgeHtml = `<span class="${cls}" title="${isWeb ? 'En WhatsApp Web' : 'En Visor'}">${icon} ${escapeHtml(other.operator)}</span>`;
+            }
+          }
+        }
+
         li.innerHTML = `
           <div class="chat-avatar" style="background-color: ${avatarBg};">${initial}</div>
           <div class="chat-info">
             <div class="chat-header-row">
-              <span class="chat-name">${escapeHtml(friendlyTitle)}${pushNameHint}</span>
+              <span class="chat-name">${escapeHtml(friendlyTitle)}${pushNameHint} ${presenceBadgeHtml}</span>
               <span class="chat-time">${timeStr}</span>
             </div>
             <div class="chat-preview">${escapeHtml(previewText)}</div>
@@ -1929,6 +2028,8 @@
       }
     }
 
+    const SAFE_THUMBNAIL_REGEX = /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$/;
+
     function renderMessages(messages, scrollToMsgId = null, preserveScroll = false) {
       const container = document.getElementById('messages-container');
       container.innerHTML = '';
@@ -1958,7 +2059,7 @@
           return;
         }
         const cleanBody = cleanText(m.contenido);
-        const hasMedia = Boolean(m.archivo_local || m.estado_multimedia === 'expirado' || (m.thumbnail && m.thumbnail.startsWith('data:image')));
+        const hasMedia = Boolean(m.archivo_local || m.estado_multimedia === 'expirado' || (m.thumbnail && SAFE_THUMBNAIL_REGEX.test(String(m.thumbnail).trim())));
         if (!cleanBody && !hasMedia && !m.quoted_body) {
           // Si es un mensaje cuyo contenido era un JID o basura cifrada aún pendiente de re-sincronizar
           return;
@@ -2032,7 +2133,7 @@
           }
         } else if (m.estado_multimedia === 'expirado') {
           mediaHtml = `<div class="media-expired"><span>⚠️</span><span>[Archivo multimedia expirado en servidores de WhatsApp]</span></div>`;
-        } else if (m.thumbnail && m.thumbnail.startsWith('data:image')) {
+        } else if (m.thumbnail && SAFE_THUMBNAIL_REGEX.test(String(m.thumbnail).trim())) {
           mediaHtml = `<div class="media-container"><img class="media-img" src="${m.thumbnail}" onclick="openModal(this.src)"></div>`;
         }
 
@@ -2300,9 +2401,12 @@
 
     function escapeHtml(text) {
       if (!text) return '';
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     init();
@@ -2418,6 +2522,17 @@
           if (btn) btn.classList.toggle('active', copilotCurrentTicket === st);
         });
 
+        // 3b. Prioridad de soporte
+        copilotCurrentPriority = parseInt(crm.support_priority || 0, 10);
+        [0, 1, 2].forEach(p => {
+          const btn = document.getElementById(`btnTicketPriority-${p}`);
+          if (btn) btn.classList.toggle('active', copilotCurrentPriority === p);
+        });
+
+        // 3c. Recordatorio de ticket
+        const ticketFollowInput = document.getElementById('copilotTicketFollowupInput');
+        if (ticketFollowInput) ticketFollowInput.value = crm.follow_up_date || '';
+
         // 4. Sales stage
         copilotCurrentStage = crm.sales_stage || 'none';
         ['lead', 'quoted', 'won', 'lost', 'none'].forEach(st => {
@@ -2437,8 +2552,16 @@
         if (assignedSel) {
           assignedSel.value = crm.assigned_to || '';
         }
+        const btnTake = document.getElementById('btnCopilotTakeCase');
+        if (btnTake) {
+          const isAssignedToMe = Boolean(crm.assigned_to && myOperatorName && crm.assigned_to.toLowerCase() === myOperatorName.toLowerCase());
+          btnTake.style.display = (isTeamMode() && !isAssignedToMe) ? 'inline-block' : 'none';
+        }
 
-        // 5c. Bitácora de notas de equipo
+        // 5c. Etiquetas personalizadas (soluciona carga congelada)
+        renderCopilotTags(crm.tags || []);
+
+        // 5d. Bitácora de notas de equipo
         renderCopilotNotesLog(crm.notes_log || []);
 
         // 6. Plantillas rápidas
@@ -2459,7 +2582,7 @@
 
       container.innerHTML = templates.map(t => {
         return `
-          <button type="button" class="copilot-template-btn" onclick="copyCopilotTemplate('${escapeHtml(t.body)}')">
+          <button type="button" class="copilot-template-btn" data-template-id="${escapeHtml(t.id)}" onclick="copyCopilotTemplateById('${escapeHtml(t.id)}')">
             <span style="font-weight: 700; color: #38bdf8; font-family: monospace;">${escapeHtml(t.shortcut)}</span>
             <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(t.title)}</span>
             <span style="font-size: 11px; color: var(--text-muted);">📋 Copiar</span>
@@ -2468,9 +2591,26 @@
       }).join('');
     }
 
+    function copyCopilotTemplateById(templateId) {
+      const t = currentTemplates.find(x => String(x.id) === String(templateId));
+      if (t) {
+        copyCopilotTemplate(t.body);
+      }
+    }
+    window.copyCopilotTemplateById = copyCopilotTemplateById;
+
     function copyCopilotTemplate(templateBody) {
       const chat = allChats.find(c => c.chat_id === selectedChatId);
-      const name = chat ? (chat.display_name.split(' ')[0] || 'Estimado/a') : 'Estimado/a';
+      let name = 'Estimado/a';
+      if (chat) {
+        const rawDisp = (chat.display_name || '').trim();
+        const firstWord = rawDisp.split(/\s+/)[0] || '';
+        if (firstWord && !/^\+?\d+$/.test(firstWord.replace(/[-.()]/g, ''))) {
+          name = firstWord;
+        } else if (chat.push_name && !/^\+?\d+$/.test(chat.push_name.trim().replace(/[-.()]/g, ''))) {
+          name = chat.push_name.trim().split(/\s+/)[0];
+        }
+      }
 
       const hr = new Date().getHours();
       let saludo = 'Buen día';
@@ -2587,6 +2727,77 @@
         showToast('Error al actualizar ticket');
       }
     }
+
+    let copilotCurrentPriority = 0;
+    async function setCopilotPriority(priority) {
+      if (!selectedChatId) return;
+      copilotCurrentPriority = priority;
+      [0, 1, 2].forEach(p => {
+        const btn = document.getElementById(`btnTicketPriority-${p}`);
+        if (btn) btn.classList.toggle('active', priority === p);
+      });
+      try {
+        const res = await fetch('/api/support/ticket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            chat_id: selectedChatId,
+            support_priority: priority
+          })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          flashCopilotSaveIndicator();
+          const pLabels = { 0: 'Normal', 1: 'Alta 🟠', 2: 'Urgente 🔥' };
+          showToast(`Prioridad: ${pLabels[priority] || priority} ✓`);
+        }
+      } catch (e) {
+        showToast('Error al actualizar prioridad');
+      }
+    }
+    window.setCopilotPriority = setCopilotPriority;
+
+    async function saveCopilotTicketFollowup(val) {
+      if (!selectedChatId) return;
+      try {
+        const res = await fetch('/api/support/ticket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            chat_id: selectedChatId,
+            follow_up_date: val || ''
+          })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          flashCopilotSaveIndicator();
+          showToast(val ? `Recordatorio: ${val} ✓` : 'Recordatorio eliminado');
+          const followInput = document.getElementById('copilotFollowInput');
+          if (followInput) followInput.value = val || '';
+        }
+      } catch (e) {
+        showToast('Error al actualizar recordatorio');
+      }
+    }
+    window.saveCopilotTicketFollowup = saveCopilotTicketFollowup;
+
+    function setCopilotFollowupQuick(days) {
+      let targetDateStr = '';
+      if (days > 0) {
+        const d = new Date();
+        d.setDate(d.getDate() + days);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        targetDateStr = `${yyyy}-${mm}-${dd}`;
+      }
+      const ticketFollowInput = document.getElementById('copilotTicketFollowupInput');
+      if (ticketFollowInput) ticketFollowInput.value = targetDateStr;
+      saveCopilotTicketFollowup(targetDateStr);
+    }
+    window.setCopilotFollowupQuick = setCopilotFollowupQuick;
 
     function setCopilotStage(stage) {
       copilotCurrentStage = stage;
@@ -2739,7 +2950,38 @@
           const cardsHtml = (cards && cards.length > 0) ? cards.map(card => {
             const valStr = (card.estimated_value && card.estimated_value > 0) ? `<span class="kanban-card-val">$ ${card.estimated_value.toLocaleString()}</span>` : '';
             const followStr = card.follow_up_date ? `<span>📅 ${escapeHtml(card.follow_up_date)}</span>` : '';
-            const assignBadge = card.assigned_to ? `<span class="badge-operator" title="Responsable: ${escapeHtml(card.assigned_to)}" style="font-size:11px; background:var(--bg-tag); color:var(--text-tag); padding:2px 6px; border-radius:4px;">👤 ${escapeHtml(card.assigned_to)}</span>` : '';
+            const assignBadge = (isTeamMode() && card.assigned_to) ? `<span class="badge-operator" title="Responsable: ${escapeHtml(card.assigned_to)}" style="font-size:11px; background:var(--bg-tag); color:var(--text-tag); padding:2px 6px; border-radius:4px;">👤 ${escapeHtml(card.assigned_to)}</span>` : '';
+            const priorityBadge = (type === 'support' && card.support_priority == 2) ? '<span class="status-badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; font-weight:700; font-size:10.5px;">🔥 Urgente</span>' :
+                                  (type === 'support' && card.support_priority == 1) ? '<span class="status-badge" style="background: rgba(245, 158, 11, 0.15); color: #d97706; font-weight:700; font-size:10.5px;">🟠 Alta</span>' : '';
+
+            let presenceBadge = '';
+            if (isTeamMode() && activePresenceMap && card.chat_id) {
+              const entry = activePresenceMap[card.chat_id];
+              if (entry) {
+                const viewers = Array.isArray(entry) ? entry : (Array.isArray(entry.viewers) ? entry.viewers : [entry]);
+                const other = viewers.find(o => {
+                  if (!o) return false;
+                  const op = (o.operator || '').trim();
+                  const isMe = (o.client_id && o.client_id === myClientId) ||
+                    (myOperatorName && myOperatorName.toLowerCase() !== 'operador' && op.toLowerCase() === myOperatorName.toLowerCase()) ||
+                    (!op || op.toLowerCase() === 'operador');
+                  return !isMe && op;
+                });
+                if (other) {
+                  const isWeb = other.source === 'whatsapp_web';
+                  const icon = isWeb ? '✍️' : '👁️';
+                  const cls = isWeb ? 'badge-presence-active web-source' : 'badge-presence-active visor-source';
+                  presenceBadge = `<span class="${cls}" title="${isWeb ? 'En WhatsApp Web' : 'En Visor'}">${icon} ${escapeHtml(other.operator)}</span>`;
+                }
+              }
+            }
+
+            let takeCaseBtn = '';
+            const isAssignedToMe = Boolean(card.assigned_to && myOperatorName && card.assigned_to.toLowerCase() === myOperatorName.toLowerCase());
+            if (isTeamMode() && !isAssignedToMe) {
+              takeCaseBtn = `<button type="button" class="btn-card-action btn-card-take" onclick="takeKanbanCase('${escapeHtml(card.chat_id)}')">🙋‍♂️ Tomar</button>`;
+            }
+
             const stageBtns = (type === 'sales') ? `
               <select class="btn-card-action" onchange="moveKanbanCard('${escapeHtml(card.chat_id)}', this.value, null)" title="Cambiar etapa">
                 <option value="lead" ${card.sales_stage === 'lead' ? 'selected' : ''}>🎯 Lead</option>
@@ -2760,6 +3002,8 @@
                 <div class="kanban-card-top">
                   <span class="kanban-card-name" title="${escapeHtml(card.display_name)}">${escapeHtml(card.display_name)}</span>
                   ${valStr}
+                  ${presenceBadge}
+                  ${priorityBadge}
                 </div>
                 <div class="kanban-card-msg">${escapeHtml(card.last_message || 'Sin mensajes')}</div>
                 <div class="kanban-card-meta">
@@ -2768,6 +3012,7 @@
                   ${followStr}
                 </div>
                 <div class="kanban-card-actions">
+                  ${takeCaseBtn}
                   ${stageBtns}
                   <button class="btn-card-action btn-card-chat" onclick="openChatFromCrm('${escapeHtml(card.chat_id)}')">💬 Ver Chat</button>
                 </div>
@@ -3254,12 +3499,17 @@
     function renderTemplatesWorkspaceTable(templates) {
       const tbody = document.getElementById('crmTemplatesTableBody');
       if (!tbody) return;
-      if (!templates || templates.length === 0) {
+      const visibleTemplates = (templates || []).filter(tpl => {
+        if (currentProfile === 'support') return tpl.profile_type !== 'sales';
+        if (currentProfile === 'sales') return tpl.profile_type !== 'support';
+        return true;
+      });
+      if (!visibleTemplates || visibleTemplates.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">No hay plantillas creadas. Haz clic en "+ Nueva Plantilla".</td></tr>';
         return;
       }
 
-      tbody.innerHTML = templates.map(tpl => {
+      tbody.innerHTML = visibleTemplates.map(tpl => {
         const pBadge = tpl.profile_type === 'support' ? '<span class="status-badge" style="background: rgba(56,189,248,0.15); color: #0284c7;">Atención</span>' :
                        tpl.profile_type === 'sales' ? '<span class="status-badge" style="background: rgba(16,185,129,0.15); color: #059669;">Ventas</span>' :
                        '<span class="status-badge">Ambos</span>';
@@ -3276,7 +3526,7 @@
             <td>${pBadge}</td>
             <td style="max-width: 380px; font-size: 12px; line-height: 1.4;">${formattedBody}</td>
             <td style="text-align: right; white-space: nowrap;">
-              <button class="copilot-copy-btn" onclick="copyTemplateDirect('${escapeHtml(tpl.body || '').replace(/'/g, "\'")}')" title="Copiar al portapapeles">📋</button>
+              <button class="copilot-copy-btn" data-template-id="${escapeHtml(tpl.id)}" onclick="copyTemplateDirectById('${escapeHtml(tpl.id)}')" title="Copiar al portapapeles">📋</button>
               <button class="copilot-copy-btn" onclick="openEditTemplateDialog(${tpl.id})" title="Editar plantilla">✏️</button>
               <button class="copilot-copy-btn" onclick="deleteTemplate(${tpl.id})" title="Eliminar plantilla" style="color: #ef4444;">🗑️</button>
             </td>
@@ -3284,6 +3534,14 @@
         `;
       }).join('');
     }
+
+    function copyTemplateDirectById(templateId) {
+      const t = currentTemplates.find(x => String(x.id) === String(templateId));
+      if (t) {
+        copyTemplateDirect(t.body || '');
+      }
+    }
+    window.copyTemplateDirectById = copyTemplateDirectById;
 
     function filterTemplatesView(filterType, btnEl) {
       document.querySelectorAll('.templates-filter-pills .filter-pill').forEach(b => b.classList.remove('active'));
@@ -3574,13 +3832,14 @@
       }
       container.innerHTML = logItems.map(item => {
         const author = escapeHtml(item.author || 'Operador');
+        const authorBadge = isTeamMode() ? `<span class="note-log-author">👤 ${author}</span>` : '';
         const timeStr = item.created_at ? (formatLocalDate(item.created_at) + ' ' + formatLocalTime(item.created_at)) : '';
         const content = escapeHtml(item.content || '');
         const noteId = item.id;
         return `
           <div class="note-log-item" id="note-item-${noteId}">
             <div class="note-log-header">
-              <span class="note-log-author">👤 ${author}</span>
+              ${authorBadge}
               <span class="note-log-time">${timeStr}</span>
               <button type="button" class="btn-note-delete" onclick="deleteCopilotNoteLog(${noteId})" title="Eliminar nota">×</button>
             </div>
@@ -3661,6 +3920,16 @@
       if (!sel || !selectedChatId) return;
       const assignedTo = sel.value;
 
+      let handoffNote = '';
+      if (assignedTo && myOperatorName && assignedTo.toLowerCase() !== myOperatorName.toLowerCase()) {
+        const notePrompt = prompt(`¿Deseas agregar una nota de transferencia para ${assignedTo}? (opcional):`, '');
+        if (notePrompt === null) {
+          sel.value = currentCopilotMeta ? (currentCopilotMeta.assigned_to || '') : '';
+          return;
+        }
+        handoffNote = notePrompt.trim();
+      }
+
       try {
         const res = await fetch('/api/copilot/assignment', {
           method: 'POST',
@@ -3669,21 +3938,76 @@
             account_id: currentAccountId,
             chat_id: selectedChatId,
             assigned_to: assignedTo,
-            updated_by: myOperatorName
+            updated_by: myOperatorName,
+            handoff_note: handoffNote
           })
         });
         const data = await res.json();
         if (data && data.ok) {
           showToast('✓ Responsable asignado: ' + (assignedTo || 'Sin asignar'));
+          loadChatCopilotContext(selectedChatId);
         }
       } catch (err) {
         console.error('Error asignando responsable:', err);
       }
     }
 
+    async function takeCurrentCase() {
+      if (!selectedChatId) return;
+      const myOp = myOperatorName || 'Operador';
+      try {
+        const res = await fetch('/api/copilot/assignment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            chat_id: selectedChatId,
+            assigned_to: myOp,
+            ticket_status: 'open',
+            updated_by: myOp
+          })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          showToast(`✓ Caso tomado por ti (${myOp})`);
+          loadChatCopilotContext(selectedChatId);
+        }
+      } catch (err) {
+        showToast('Error al tomar el caso');
+      }
+    }
+    window.takeCurrentCase = takeCurrentCase;
+
+    async function takeKanbanCase(chatId) {
+      if (!chatId) return;
+      const myOp = myOperatorName || 'Operador';
+      try {
+        const res = await fetch('/api/copilot/assignment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            chat_id: chatId,
+            assigned_to: myOp,
+            ticket_status: 'open',
+            updated_by: myOp
+          })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          showToast(`✓ Caso tomado por ${myOp}`);
+          loadKanbanBoard(activeKanbanType);
+        }
+      } catch (err) {
+        showToast('Error al tomar el caso');
+      }
+    }
+    window.takeKanbanCase = takeKanbanCase;
+
     // Semáforo Anti-Colisión y Presencia
     async function sendPresenceHeartbeat(chatId) {
       if (!chatId) return;
+      if (!isTeamMode()) return; // Suprimir latidos en modo Standalone
       try {
         await _origFetch('/api/presence/heartbeat', {
           method: 'POST',
@@ -3740,7 +4064,7 @@
       const chatUserSpan = document.getElementById('chatPresenceUser');
       const drawerUserSpan = document.getElementById('drawerPresenceUser');
 
-      if (!selectedChatId || !activePresenceMap) {
+      if (!selectedChatId || !activePresenceMap || !isTeamMode()) {
         if (chatBanner) chatBanner.style.display = 'none';
         if (drawerBanner) drawerBanner.style.display = 'none';
         return;
@@ -3750,7 +4074,7 @@
         ? selectedChatAssociatedIds
         : [selectedChatId];
 
-      const otherOperators = [];
+      const otherViewers = [];
       candidateIds.forEach(cid => {
         const entry = activePresenceMap[cid];
         if (!entry) return;
@@ -3764,19 +4088,36 @@
             (myOperatorName && myOperatorName.toLowerCase() !== 'operador' && opName.toLowerCase() === myOperatorName.toLowerCase()) ||
             (!opName || opName.toLowerCase() === 'operador');
           if (!isMe && opName) {
-            otherOperators.push(opName);
+            otherViewers.push({
+              operator: opName,
+              source: o.source || 'visor'
+            });
           }
         });
       });
 
-      const uniqueOperators = [...new Set(otherOperators)];
-
-      if (uniqueOperators.length > 0) {
-        const text = uniqueOperators.join(', ');
-        if (chatUserSpan) chatUserSpan.textContent = text;
-        if (drawerUserSpan) drawerUserSpan.textContent = text;
-        if (chatBanner) chatBanner.style.display = 'flex';
-        if (drawerBanner) drawerBanner.style.display = 'flex';
+      if (otherViewers.length > 0) {
+        const webViewer = otherViewers.find(v => v.source === 'whatsapp_web');
+        let bannerText = '';
+        let bannerClass = 'presence-alert-banner';
+        if (webViewer) {
+          bannerClass += ' web-source';
+          bannerText = `✍️ ${webViewer.operator} tiene este chat abierto en WhatsApp Web`;
+        } else {
+          bannerClass += ' visor-source';
+          const opNames = [...new Set(otherViewers.map(v => v.operator))].join(', ');
+          bannerText = `👁️ ${opNames} ve el historial en el Visor`;
+        }
+        if (chatBanner) {
+          chatBanner.className = bannerClass;
+          chatBanner.innerHTML = `<span>${escapeHtml(bannerText)}</span>`;
+          chatBanner.style.display = 'flex';
+        }
+        if (drawerBanner) {
+          drawerBanner.className = bannerClass;
+          drawerBanner.innerHTML = `<span>${escapeHtml(bannerText)}</span>`;
+          drawerBanner.style.display = 'flex';
+        }
       } else {
         if (chatBanner) chatBanner.style.display = 'none';
         if (drawerBanner) drawerBanner.style.display = 'none';
@@ -3817,6 +4158,7 @@
         sseEventSource.addEventListener('active_operator_updated', onEvent);
         sseEventSource.addEventListener('crm_update', onEvent);
         sseEventSource.addEventListener('sync_update', onEvent);
+        sseEventSource.addEventListener('handoff_alert', onEvent);
         sseEventSource.addEventListener('profile_update', onEvent);
         sseEventSource.addEventListener('focus_viewer', () => {
           try { window.focus(); } catch (e) {}
@@ -3916,6 +4258,16 @@
           activePresenceMap = msg.active_presence || msg.presence || {};
           updatePresenceBanners();
           renderTeamOperatorsList();
+          if (allChats && currentWorkspaceView === 'conversations') {
+            renderChats(allChats);
+          }
+          break;
+
+        case 'handoff_alert':
+          if (msg.to_operator && myOperatorName && msg.to_operator.toLowerCase() === myOperatorName.toLowerCase()) {
+            const noteText = msg.note ? `<br><b>Nota:</b> "${escapeHtml(msg.note)}"` : '';
+            showToast(`📢 <b>${escapeHtml(msg.from_operator || 'Un compañero')}</b> te transfirió el caso ${escapeHtml(msg.chat_id)}.${noteText}`, 7000);
+          }
           break;
 
         case 'active_operator_updated':
@@ -4008,6 +4360,12 @@
         const data = await res.json();
         if (!data) return;
 
+        window.isLocalClient = (data.is_local !== false);
+        const railBtnSystem = document.getElementById('railBtnSystem');
+        if (railBtnSystem && window.isLocalClient === false) {
+          railBtnSystem.style.display = 'none';
+        }
+
         const isLan = data.network_mode === 'lan';
         const statusEl = document.getElementById('netModeStatus');
         const btnToggle = document.getElementById('btnToggleNetMode');
@@ -4045,6 +4403,8 @@
         }
 
         knownOperatorsList = data.known_operators || [];
+        currentNetworkMode = data.network_mode || 'local';
+        applyTeamModeUI();
         const savedOp = localStorage.getItem('wackup_operator_name');
         const defaultOp = data.active_operator || (knownOperatorsList.length > 0 ? knownOperatorsList[0] : 'Operador');
         if ((!savedOp || savedOp === 'Operador' || myOperatorName === 'Operador') && defaultOp !== 'Operador') {
@@ -4286,11 +4646,13 @@
       updateCopilotOperatorOptions();
       if (notify) showToast(`✓ Operador activo en esta PC: ${myOperatorName}`);
       if (selectedChatId) sendPresenceHeartbeat(selectedChatId);
-      authFetch('/api/system/operator/active', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operator: opName })
-      }).catch(() => {});
+      if (window.isLocalClient !== false) {
+        authFetch('/api/system/operator/active', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operator: opName })
+        }).catch(() => {});
+      }
     }
 
     function updateCopilotOperatorOptions() {
@@ -4506,21 +4868,63 @@
       const pin = pinInput ? pinInput.value.trim() : '';
       const op = opSelect ? opSelect.value.trim() : '';
 
-      if (!op) {
-        if (errEl) {
-          errEl.textContent = 'Por favor selecciona tu nombre de operador de la lista.';
-          errEl.style.display = 'block';
-        }
-        if (opSelect) opSelect.focus();
-        return;
-      }
-
       if (!pin) {
         if (errEl) {
           errEl.textContent = 'Por favor ingresa el PIN de oficina.';
           errEl.style.display = 'block';
         }
         if (pinInput) pinInput.focus();
+        return;
+      }
+
+      if (!op) {
+        // Si aún no seleccionó operador (o no estaban cargados los operadores), validar primero el PIN
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Verificando PIN...';
+        }
+        try {
+          const res = await _origFetch('/api/auth/verify_pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: pin })
+          });
+          const data = await res.json();
+          if (data && data.ok) {
+            knownOperatorsList = Array.isArray(data.known_operators) ? data.known_operators : [];
+            if (opSelect) {
+              opSelect.innerHTML = '<option value="">-- Selecciona tu nombre --</option>' +
+                knownOperatorsList.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('');
+              opSelect.focus();
+            }
+            if (errEl) {
+              errEl.textContent = '✓ PIN verificado. Por favor selecciona tu nombre de operador.';
+              errEl.style.color = '#10b981';
+              errEl.style.display = 'block';
+            }
+          } else {
+            if (errEl) {
+              errEl.textContent = data.error || 'PIN incorrecto. Consulta el PIN en la PC principal.';
+              errEl.style.color = '#ef4444';
+              errEl.style.display = 'block';
+            }
+            if (pinInput) {
+              pinInput.focus();
+              pinInput.select();
+            }
+          }
+        } catch (err) {
+          if (errEl) {
+            errEl.textContent = 'Error de conexión con el servidor.';
+            errEl.style.color = '#ef4444';
+            errEl.style.display = 'block';
+          }
+        } finally {
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Conectar';
+          }
+        }
         return;
       }
 
