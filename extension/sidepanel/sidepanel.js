@@ -685,13 +685,18 @@
         delBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           try {
-            await apiFetch("/api/copilot/notes/log/delete", {
+            const res = await apiFetch("/api/copilot/notes/log/delete", {
               method: "POST",
-              body: { id: n.id, note_id: n.id, chat_id: currentChatId, author: operatorName, account_id: currentAccountId }
+              body: { id: n.id, note_id: n.id, chat_id: currentChatId, account_id: currentAccountId }
             });
+            if (res && res.deleted === false) {
+              showToast(`No se pudo eliminar: solo ${n.author || "el autor"} puede borrar esta nota`);
+              return;
+            }
+            showToast("Entrada eliminada de la bitácora");
             loadChatContext(currentChatQuery);
           } catch (err) {
-            showToast("Error al eliminar nota");
+            showToast((err && err.message) ? err.message : "Error al eliminar nota");
           }
         });
       }

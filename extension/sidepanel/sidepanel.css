@@ -1624,6 +1624,9 @@ select option,
 .log-del {
   cursor: pointer;
   color: var(--text-muted);
+  display: inline-block;
+  padding: 2px 4px;
+  border-radius: 4px;
 }
 .log-del:hover {
   color: var(--danger);
