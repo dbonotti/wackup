@@ -975,8 +975,315 @@
       return raw || 'Desconocido';
     }
 
+    function isVCardText(text) {
+      if (!text || typeof text !== 'string') return false;
+      return /^\s*BEGIN:VCARD\b/i.test(text) || (/BEGIN:VCARD/i.test(text) && /END:VCARD/i.test(text));
+    }
+
+    function decodeQuotedPrintableUtf8(str) {
+      if (!str || str.indexOf('=') === -1) return str || '';
+      const bytes = [];
+      for (let i = 0; i < str.length; i++) {
+        if (str[i] === '=' && i + 2 < str.length && /^[0-9A-Fa-f]{2}$/.test(str.slice(i + 1, i + 3))) {
+          bytes.push(parseInt(str.slice(i + 1, i + 3), 16));
+          i += 2;
+        } else {
+          const chBytes = new TextEncoder().encode(str[i]);
+          for (const b of chBytes) bytes.push(b);
+        }
+      }
+      try {
+        return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
+      } catch (e) {
+        return str;
+      }
+    }
+
+    function unescapeVCardValue(val) {
+      return String(val || '')
+        .replace(/\\n/gi, '\n')
+        .replace(/\\,/g, ',')
+        .replace(/\\;/g, ';')
+        .replace(/\\\\/g, '\\')
+        .trim();
+    }
+
+    function formatVCardLabel(rawLabel) {
+      const lbl = String(rawLabel || '').trim();
+      if (!lbl) return '';
+      const map = {
+        CELL: 'Móvil',
+        MOBILE: 'Móvil',
+        IPHONE: 'Móvil',
+        HOME: 'Casa',
+        WORK: 'Trabajo',
+        MAIN: 'Principal',
+        VOICE: 'Voz',
+        FAX: 'Fax',
+        OTHER: 'Otro',
+        INTERNET: ''
+      };
+      const upper = lbl.toUpperCase();
+      if (Object.prototype.hasOwnProperty.call(map, upper)) return map[upper];
+      return lbl;
+    }
+
+    function parseVCards(rawText) {
+      if (!rawText || typeof rawText !== 'string') return [];
+      const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const blocks = normalized.match(/BEGIN:VCARD[\s\S]*?(?:END:VCARD|$)/gi) || [];
+      const cards = [];
+
+      for (const block of blocks) {
+        // Unfold Quoted-Printable soft breaks and RFC 2426/6350 folded lines
+        const unfolded = block
+          .replace(/=\n/g, '')
+          .replace(/\n[ \t]/g, '');
+        const lines = unfolded.split('\n');
+
+        let fn = '';
+        let nName = '';
+        let org = '';
+        let title = '';
+        let bizName = '';
+        let bizDesc = '';
+        const itemLabels = {};
+        const phones = [];
+        const emails = [];
+        const urls = [];
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line || /^BEGIN:VCARD$/i.test(line) || /^END:VCARD$/i.test(line) || /^VERSION:/i.test(line)) continue;
+          const colonIdx = line.indexOf(':');
+          if (colonIdx === -1) continue;
+
+          const left = line.slice(0, colonIdx);
+          let val = line.slice(colonIdx + 1);
+          const parts = left.split(';');
+          const propFull = parts[0].trim();
+          const params = parts.slice(1);
+
+          let itemPrefix = '';
+          let propName = propFull.toUpperCase();
+          const dotIdx = propFull.indexOf('.');
+          if (dotIdx !== -1) {
+            itemPrefix = propFull.slice(0, dotIdx).toLowerCase();
+            propName = propFull.slice(dotIdx + 1).toUpperCase();
+          }
+
+          let isQP = false;
+          let waid = '';
+          let typeLabel = '';
+          for (const p of params) {
+            const eqIdx = p.indexOf('=');
+            if (eqIdx === -1) {
+              const cand = formatVCardLabel(p);
+              if (cand && !typeLabel) typeLabel = cand;
+              continue;
+            }
+            const k = p.slice(0, eqIdx).trim().toUpperCase();
+            const v = p.slice(eqIdx + 1).trim();
+            if (k === 'ENCODING' && v.toUpperCase() === 'QUOTED-PRINTABLE') isQP = true;
+            else if (k === 'WAID') waid = v.replace(/\D/g, '');
+            else if (k === 'TYPE') {
+              for (const t of v.split(',')) {
+                const cand = formatVCardLabel(t);
+                if (cand && !typeLabel) typeLabel = cand;
+              }
+            }
+          }
+
+          if (isQP) val = decodeQuotedPrintableUtf8(val);
+
+          if (propName === 'X-ABLABEL' && itemPrefix) {
+            itemLabels[itemPrefix] = unescapeVCardValue(val);
+            continue;
+          }
+          if (propName === 'FN') {
+            fn = unescapeVCardValue(val);
+          } else if (propName === 'N' && !nName) {
+            const nParts = val.split(';').map(unescapeVCardValue);
+            // N: Last;First;Middle;Prefix;Suffix
+            const ordered = [nParts[3], nParts[1], nParts[2], nParts[0], nParts[4]].filter(Boolean);
+            nName = ordered.join(' ').trim();
+          } else if (propName === 'ORG') {
+            org = val.split(';').map(unescapeVCardValue).filter(Boolean).join(' · ');
+          } else if (propName === 'TITLE') {
+            title = unescapeVCardValue(val);
+          } else if (propName === 'X-WA-BIZ-NAME') {
+            bizName = unescapeVCardValue(val);
+          } else if (propName === 'X-WA-BIZ-DESCRIPTION') {
+            bizDesc = unescapeVCardValue(val);
+          } else if (propName === 'TEL') {
+            const number = unescapeVCardValue(val);
+            if (number) {
+              phones.push({ number, waid, itemPrefix, label: typeLabel });
+            }
+          } else if (propName === 'EMAIL') {
+            const email = unescapeVCardValue(val);
+            if (email) {
+              emails.push({ email, itemPrefix, label: typeLabel });
+            }
+          } else if (propName === 'URL') {
+            const u = unescapeVCardValue(val);
+            if (u && /^https?:\/\//i.test(u)) {
+              urls.push({ url: u, itemPrefix, label: typeLabel });
+            }
+          }
+        }
+
+        // Resolve Apple/WhatsApp itemN.X-ABLabel overrides
+        for (const ph of phones) {
+          if (ph.itemPrefix && itemLabels[ph.itemPrefix]) ph.label = itemLabels[ph.itemPrefix];
+        }
+        for (const em of emails) {
+          if (em.itemPrefix && itemLabels[em.itemPrefix]) em.label = itemLabels[em.itemPrefix];
+        }
+        for (const ur of urls) {
+          if (ur.itemPrefix && itemLabels[ur.itemPrefix]) ur.label = itemLabels[ur.itemPrefix];
+        }
+
+        const displayName = fn || nName || bizName || org || (phones[0] ? phones[0].number : '') || 'Contacto';
+        const subtitle = [bizDesc, title, org].find(v => v && v !== displayName) || '';
+        const words = displayName.replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+        const initials = words.length >= 2
+          ? (words[0][0] + words[1][0]).toUpperCase()
+          : (displayName.slice(0, 2).toUpperCase() || '👤');
+
+        const rawVcf = /END:VCARD\s*$/i.test(block.trim())
+          ? block.trim()
+          : (block.trim() + '\nEND:VCARD');
+
+        cards.push({
+          displayName,
+          subtitle,
+          initials,
+          phones,
+          emails,
+          urls,
+          rawVcf
+        });
+      }
+
+      return cards;
+    }
+
+    function formatVCardSummary(rawText) {
+      const cards = parseVCards(rawText);
+      if (!cards.length) return '👤 Contacto';
+      if (cards.length === 1) return `👤 ${cards[0].displayName}`;
+      return `👥 ${cards[0].displayName} (+${cards.length - 1})`;
+    }
+
+    function copyVCardValue(btn) {
+      const val = btn && btn.dataset ? btn.dataset.copyVal : '';
+      if (!val) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(() => showToast(`📋 Copiado: ${val}`)).catch(() => showToast('No se pudo copiar'));
+      }
+    }
+
+    function downloadVCard(btn) {
+      const cardEl = btn ? btn.closest('.vcard-card') : null;
+      const raw = cardEl && cardEl.dataset ? cardEl.dataset.rawVcf : '';
+      const name = (cardEl && cardEl.dataset ? cardEl.dataset.contactName : '') || 'contacto';
+      if (!raw) return;
+      const safeName = name.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'contacto';
+      const blob = new Blob([raw], { type: 'text/vcard;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeName}.vcf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast(`💾 Contacto guardado: ${safeName}.vcf`);
+    }
+
+    function openVCardChat(btn) {
+      const digits = (btn && btn.dataset ? btn.dataset.waDigits : '').replace(/\D/g, '');
+      if (!digits) return;
+      if (Array.isArray(allChats) && allChats.length > 0) {
+        const match = allChats.find(c => {
+          const cidDigits = String(c.chat_id || '').split('@')[0].replace(/\D/g, '');
+          const numDigits = String(c.numero || '').replace(/\D/g, '');
+          return (cidDigits && (cidDigits === digits || cidDigits.endsWith(digits) || digits.endsWith(cidDigits)))
+            || (numDigits && (numDigits === digits || numDigits.endsWith(digits) || digits.endsWith(numDigits)));
+        });
+        if (match) {
+          selectChat(match);
+          return;
+        }
+      }
+      window.open(`https://wa.me/${encodeURIComponent(digits)}`, '_blank', 'noopener,noreferrer');
+    }
+
+    function renderVCardHtml(rawText) {
+      const cards = parseVCards(rawText);
+      if (!cards.length) {
+        return `<div class="msg-text">${escapeHtml(rawText)}</div>`;
+      }
+      return `<div class="vcard-list">${cards.map(c => {
+        const primaryDigits = (c.phones[0] && (c.phones[0].waid || c.phones[0].number.replace(/\D/g, ''))) || '';
+        const primaryCopy = (c.phones[0] && c.phones[0].number) || (c.emails[0] && c.emails[0].email) || c.displayName;
+
+        const phonesHtml = c.phones.map(p => `
+          <div class="vcard-row">
+            <span class="vcard-row-icon">📞</span>
+            <div class="vcard-row-content">
+              <span class="vcard-row-val">${escapeHtml(p.number)}</span>
+              ${p.label ? `<span class="vcard-row-label">${escapeHtml(p.label)}</span>` : ''}
+            </div>
+            <button type="button" class="vcard-mini-btn" data-copy-val="${escapeHtml(p.number)}" onclick="copyVCardValue(this)" title="Copiar número">📋</button>
+          </div>
+        `).join('');
+
+        const emailsHtml = c.emails.map(em => `
+          <div class="vcard-row">
+            <span class="vcard-row-icon">✉️</span>
+            <div class="vcard-row-content">
+              <span class="vcard-row-val">${escapeHtml(em.email)}</span>
+              ${em.label ? `<span class="vcard-row-label">${escapeHtml(em.label)}</span>` : ''}
+            </div>
+            <button type="button" class="vcard-mini-btn" data-copy-val="${escapeHtml(em.email)}" onclick="copyVCardValue(this)" title="Copiar email">📋</button>
+          </div>
+        `).join('');
+
+        const urlsHtml = c.urls.map(u => `
+          <div class="vcard-row">
+            <span class="vcard-row-icon">🌐</span>
+            <div class="vcard-row-content">
+              <a class="vcard-row-link" href="${escapeHtml(u.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(u.url)}</a>
+              ${u.label ? `<span class="vcard-row-label">${escapeHtml(u.label)}</span>` : ''}
+            </div>
+          </div>
+        `).join('');
+
+        return `
+          <div class="vcard-card" data-raw-vcf="${escapeHtml(c.rawVcf)}" data-contact-name="${escapeHtml(c.displayName)}">
+            <div class="vcard-header">
+              <div class="vcard-avatar">${escapeHtml(c.initials)}</div>
+              <div class="vcard-title-wrap">
+                <div class="vcard-name">${escapeHtml(c.displayName)}</div>
+                ${c.subtitle ? `<div class="vcard-subtitle">${escapeHtml(c.subtitle)}</div>` : ''}
+              </div>
+            </div>
+            ${(phonesHtml || emailsHtml || urlsHtml) ? `<div class="vcard-details">${phonesHtml}${emailsHtml}${urlsHtml}</div>` : ''}
+            <div class="vcard-actions">
+              ${primaryDigits ? `<button type="button" class="vcard-action-btn" data-wa-digits="${escapeHtml(primaryDigits)}" onclick="openVCardChat(this)">💬 Mensaje</button>` : ''}
+              <button type="button" class="vcard-action-btn" data-copy-val="${escapeHtml(primaryCopy)}" onclick="copyVCardValue(this)">📋 Copiar</button>
+              <button type="button" class="vcard-action-btn" onclick="downloadVCard(this)">💾 Guardar .vcf</button>
+            </div>
+          </div>
+        `;
+      }).join('')}</div>`;
+    }
+
     function formatPreview(lastMsg, lastTipo) {
       const clean = cleanText(lastMsg);
+      if (isVCardText(clean)) return formatVCardSummary(clean);
       if (clean) return clean;
       if (lastTipo === 'image') return '📷 Foto';
       if (lastTipo === 'video') return '🎬 Video';
@@ -988,6 +1295,7 @@
       if (lastTipo === 'revoked') return '🚫 Este mensaje fue eliminado';
       if (lastTipo === 'location') return '📍 Ubicación';
       if (lastTipo === 'vcard') return '👤 Contacto';
+      if (lastTipo === 'multi_vcard') return '👥 Contactos';
       if (lastTipo === 'poll_creation') return '📊 Encuesta';
       if (lastTipo === 'interactive' || lastTipo === 'list' || lastTipo === 'rich_response') return '💬 Mensaje interactivo';
       if (lastTipo === 'groups_v4_invite') return '👥 Invitación de grupo';
@@ -2218,7 +2526,8 @@
         let quoteHtml = '';
         if (m.quoted_body || m.quoted_msg_id) {
           const qAuthor = m.quoted_author ? formatFriendlyName(m.quoted_author, m.quoted_author) : 'Mensaje citado';
-          const qText = cleanText(m.quoted_body) || '📎 Archivo / Mensaje citado';
+          const qRaw = cleanText(m.quoted_body);
+          const qText = isVCardText(qRaw) ? formatVCardSummary(qRaw) : (qRaw || '📎 Archivo / Mensaje citado');
           const clickAttr = m.quoted_msg_id ? `onclick="scrollToMessage(this.dataset.quotedId)" data-quoted-id="${escapeHtml(m.quoted_msg_id)}" title="Ir al mensaje citado"` : '';
           quoteHtml = `
             <div class="msg-quote" ${clickAttr}>
@@ -2251,9 +2560,13 @@
 
         let textHtml = '';
         if (cleanBody) {
-          const isStrikethrough = isDeleted && m.tipo !== 'revoked';
-          const textClass = `msg-text${isStrikethrough ? ' msg-text-deleted' : ''}${m.tipo === 'revoked' ? ' msg-revoked-text' : ''}`;
-          textHtml = `<div class="${textClass}">${escapeHtml(cleanBody)}</div>`;
+          if ((m.tipo === 'vcard' || m.tipo === 'multi_vcard' || isVCardText(cleanBody)) && !isDeleted) {
+            textHtml = renderVCardHtml(cleanBody);
+          } else {
+            const isStrikethrough = isDeleted && m.tipo !== 'revoked';
+            const textClass = `msg-text${isStrikethrough ? ' msg-text-deleted' : ''}${m.tipo === 'revoked' ? ' msg-revoked-text' : ''}`;
+            textHtml = `<div class="${textClass}">${escapeHtml(cleanBody)}</div>`;
+          }
         }
 
         const timeStr = formatLocalTime(m.timestamp, m.fecha_utc);
