@@ -1,6 +1,6 @@
 # 📖 Manual de Usuario y Guía Operativa Oficial — WAckup 3.1
 
-> **Versión del Manual:** 3.1.0  
+> **Versión del Manual:** 3.1.1  
 > **Audiencia:** Usuarios finales, Operadores de atención, Supervisores y Administradores de IT.  
 > **Objetivo:** Documentar de forma integral, pedagógica y exhaustiva el funcionamiento, características, flujos de trabajo y procedimientos de WAckup 3.1.
 
@@ -125,7 +125,7 @@ flowchart LR
 Es el equipo que actuará como centro de datos de la oficina.
 
 #### Opción Recomendada: Paquete Portable (Sin instalación de software)
-1. Descargue `WAckup_Portable_v3.1.0.zip` y descomprímalo en una carpeta fija (por ejemplo, `C:\WAckup`).
+1. Descargue `WAckup_Portable_v3.1.1.zip` y descomprímalo en una carpeta fija (por ejemplo, `C:\WAckup`).
 2. Haga doble clic en **`iniciar_visor.bat`**.
 3. El sistema se iniciará en silencio, se alojará en la **Bandeja del Sistema (System Tray)** junto al reloj de Windows y abrirá automáticamente el Visor Web en su navegador predeterminado (`http://127.0.0.1:5000`).
 

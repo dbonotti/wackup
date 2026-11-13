@@ -801,7 +801,7 @@
           } else if (data.status === 'dev_branch') {
             showToast(`⚙️ Modo desarrollo (${data.branch || 'rama'}). Actualizaciones pausadas.`);
           } else {
-            showToast(`✓ WAckup está actualizado (${data.current_version || 'v3.1.0'}).`);
+            showToast(`✓ WAckup está actualizado (${data.current_version || 'v3.1.1'}).`);
           }
         } else {
           showToast(`⚠️ ${data.message || 'No se pudo conectar con GitHub'}`);
@@ -815,9 +815,9 @@
       const modal = document.getElementById('updateModal');
       if (!modal) return;
       const curEl = document.getElementById('updateCurrentVer');
-      if (curEl) curEl.textContent = `v${info.current_version || '3.1.0'}`;
+      if (curEl) curEl.textContent = `v${info.current_version || '3.1.1'}`;
       const latEl = document.getElementById('updateLatestVer');
-      if (latEl) latEl.textContent = `v${info.latest_version || '3.1.0'}`;
+      if (latEl) latEl.textContent = `v${info.latest_version || '3.1.1'}`;
       const notesEl = document.getElementById('updateNotesContainer');
       if (notesEl) notesEl.textContent = info.release_notes || "Mejoras de rendimiento, estabilidad y nuevas funciones.";
       const prog = document.getElementById('updateProgressBox');
@@ -827,7 +827,7 @@
       const btn = document.getElementById('btnApplyUpdate');
       if (btn) {
         btn.disabled = false;
-        btn.textContent = `⬇️ Actualizar a v${info.latest_version || '3.1.0'}`;
+        btn.textContent = `⬇️ Actualizar a v${info.latest_version || '3.1.1'}`;
       }
       modal.style.display = 'flex';
     }
@@ -1391,7 +1391,7 @@
         if (data && data.ok) {
           cachedSystemInfo = data;
           const verEl = document.getElementById('systemAppVersion');
-          if (verEl) verEl.textContent = `v${data.version || '3.1.0'}`;
+          if (verEl) verEl.textContent = `v${data.version || '3.1.1'}`;
 
           const extInp = document.getElementById('extPathInput');
           if (extInp && data.extension_path) extInp.value = data.extension_path;
@@ -1886,6 +1886,12 @@
       }
     }
 
+    let radarConfig = {
+      autoHideCourtesy: true,
+      maxAgeDays: 7,
+      ignoredTags: []
+    };
+
     function isChatUnanswered(c) {
       if (!c) return false;
       const cid = String(c.chat_id || '');
@@ -1896,6 +1902,15 @@
       if (c.ticket_status === 'pending' || c.ticket_status === 'resolved') return false;
       if (c.radar_ignored) return false;
       if ((c.last_ts || 0) <= (c.radar_dismissed_at || 0)) return false;
+      if (radarConfig.autoHideCourtesy && c.is_courtesy_closing && c.ticket_status !== 'open') return false;
+      if (Array.isArray(radarConfig.ignoredTags) && radarConfig.ignoredTags.length > 0 && Array.isArray(c.tags)) {
+        const lowerIgnored = radarConfig.ignoredTags.map(t => String(t).toLowerCase());
+        if (c.tags.some(t => lowerIgnored.includes(String(t).toLowerCase()))) return false;
+      }
+      if (c.ticket_status !== 'open' && radarConfig.maxAgeDays > 0 && c.last_ts) {
+        const minTs = Math.floor(Date.now() / 1000) - (radarConfig.maxAgeDays * 86400);
+        if (c.last_ts < minTs) return false;
+      }
       return true;
     }
 
@@ -3544,6 +3559,12 @@
             }
 
             const isRadarCol = (col.id === 'radar' || card.is_radar);
+            const isAssignedOther = Boolean(isTeamMode() && card.assigned_to && (!myOperatorName || card.assigned_to.toLowerCase() !== myOperatorName.toLowerCase()));
+            const radarDismissBtn = isRadarCol
+              ? (isAssignedOther
+                  ? `<span class="btn-card-action" style="opacity:0.6; cursor:not-allowed;" title="Asignado a ${escapeHtml(card.assigned_to)}: solo su responsable puede descartarlo">🔒</span>`
+                  : `<button type="button" class="btn-card-action" onclick="dismissKanbanRadarCard('${escapeHtml(card.chat_id)}')" title="No requiere respuesta (quitar del Radar)">✓ No req.</button>`)
+              : '';
             const stageBtns = (type === 'sales') ? `
               <select class="btn-card-action" onchange="moveKanbanCard('${escapeHtml(card.chat_id)}', this.value, null)" title="Cambiar etapa">
                 <option value="lead" ${card.sales_stage === 'lead' ? 'selected' : ''}>🎯 Lead</option>
@@ -3577,12 +3598,18 @@
                 </div>
                 <div class="kanban-card-actions">
                   ${takeCaseBtn}
+                  ${radarDismissBtn}
                   ${stageBtns}
                   <button class="btn-card-action btn-card-chat" onclick="openChatFromCrm('${escapeHtml(card.chat_id)}')">💬 Ver Chat</button>
                 </div>
               </div>
             `;
           }).join('') : `<div style="font-size: 11.5px; color: var(--text-muted); text-align: center; padding: 24px 0;">Sin contactos en esta etapa.</div>`;
+
+          const isRadarHeader = (col.id === 'radar' && cards.length > 0);
+          const radarBulkHeaderBtn = isRadarHeader
+            ? `<button type="button" class="btn-card-action" style="padding:2px 7px; font-size:11px;" onclick="dismissKanbanRadarBulk()" title="Marcar pendientes propios/sin asignar como al día">✓ Todo al día</button>`
+            : '';
 
           return `
             <div class="kanban-col" ondragover="handleKanbanDragOver(event)" ondragleave="handleKanbanDragLeave(event)" ondrop="handleKanbanDrop(event, '${escapeHtml(col.id)}')">
@@ -3591,6 +3618,7 @@
                   <span>${escapeHtml(col.title)}</span>
                   <span class="kanban-col-badge">${cards.length}</span>
                 </div>
+                ${radarBulkHeaderBtn}
                 ${sumStr}
               </div>
               <div class="kanban-card-list">
@@ -5025,6 +5053,20 @@
 
         knownOperatorsList = data.known_operators || [];
         currentNetworkMode = data.network_mode || 'local';
+
+        radarConfig = {
+          autoHideCourtesy: data.radar_auto_hide_courtesy !== false,
+          maxAgeDays: parseInt(data.radar_max_age_days || 7, 10) || 7,
+          ignoredTags: Array.isArray(data.radar_ignored_tags) ? data.radar_ignored_tags : []
+        };
+        const courtesyCb = document.getElementById('settingRadarAutoCourtesy');
+        const maxAgeSel = document.getElementById('settingRadarMaxAge');
+        const ignoredTagsInp = document.getElementById('settingRadarIgnoredTags');
+        if (courtesyCb) courtesyCb.checked = radarConfig.autoHideCourtesy;
+        if (maxAgeSel) maxAgeSel.value = String(radarConfig.maxAgeDays);
+        if (ignoredTagsInp) ignoredTagsInp.value = radarConfig.ignoredTags.join(', ');
+        if (Array.isArray(allChats) && allChats.length > 0) renderChats(allChats);
+
         applyTeamModeUI();
         const savedOp = localStorage.getItem('wackup_operator_name');
         const defaultOp = data.active_operator || (knownOperatorsList.length > 0 ? knownOperatorsList[0] : 'Operador');
@@ -5618,3 +5660,94 @@
     }
 
     window.addEventListener('beforeunload', stopPresenceHeartbeat);
+
+    async function dismissKanbanRadarCard(chatId) {
+      if (!chatId) return;
+      try {
+        const res = await fetch('/api/radar/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            chat_id: chatId,
+            mode: 'unanswered',
+            reason: 'no_reply_needed',
+            operator_name: myOperatorName || 'Operador'
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          showToast(data.error || 'No se pudo descartar del Radar');
+          return;
+        }
+        showToast('✓ Quitada alerta del Radar');
+        loadCrmBoard('support');
+        loadChats(true);
+      } catch (e) {
+        showToast('Error al descartar del Radar');
+      }
+    }
+    window.dismissKanbanRadarCard = dismissKanbanRadarCard;
+
+    async function dismissKanbanRadarBulk() {
+      try {
+        const res = await fetch('/api/radar/dismiss_bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            min_age_hours: 0,
+            reason_label: 'Todo al día (Kanban)',
+            operator_name: myOperatorName || 'Operador'
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          showToast(data.error || 'Error en limpieza masiva');
+          return;
+        }
+        const done = data.dismissed_count || 0;
+        const skipped = data.skipped_assigned_count || 0;
+        showToast(skipped > 0
+          ? `✓ ${done} limpiados (${skipped} de otros operadores omitidos)`
+          : `✓ ${done} chat(s) marcados al día`);
+        loadCrmBoard('support');
+        loadChats(true);
+      } catch (e) {
+        showToast('Error al limpiar Radar');
+      }
+    }
+    window.dismissKanbanRadarBulk = dismissKanbanRadarBulk;
+
+    async function saveRadarSettings() {
+      const courtesyCb = document.getElementById('settingRadarAutoCourtesy');
+      const maxAgeSel = document.getElementById('settingRadarMaxAge');
+      const ignoredTagsInp = document.getElementById('settingRadarIgnoredTags');
+      const autoHide = courtesyCb ? Boolean(courtesyCb.checked) : true;
+      const maxAge = maxAgeSel ? (parseInt(maxAgeSel.value, 10) || 7) : 7;
+      const rawTags = ignoredTagsInp ? ignoredTagsInp.value : '';
+      const ignoredTags = rawTags.split(',').map(t => t.trim()).filter(Boolean);
+
+      try {
+        const res = await fetch('/api/system/network', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            radar_auto_hide_courtesy: autoHide,
+            radar_max_age_days: maxAge,
+            radar_ignored_tags: ignoredTags
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          showToast(data.error || 'No se pudo guardar configuración del Radar');
+          return;
+        }
+        radarConfig = { autoHideCourtesy: autoHide, maxAgeDays: maxAge, ignoredTags };
+        renderChats(allChats);
+        showToast('✓ Preferencias del Radar guardadas');
+      } catch (e) {
+        showToast('Error al guardar preferencias del Radar');
+      }
+    }
+    window.saveRadarSettings = saveRadarSettings;

@@ -61,7 +61,7 @@ flowchart LR
 ## 🚀 Inicio Rápido en 3 Pasos
 
 ### 1. Iniciar el Servidor (PC Principal)
-* Descarga el paquete portable `WAckup_Portable_v3.1.0.zip` y descomprímelo.
+* Descarga el paquete portable `WAckup_Portable_v3.1.1.zip` y descomprímelo.
 * Haz doble clic en **`iniciar_visor.bat`** (se ejecuta en segundo plano alojándose en la bandeja del sistema junto al reloj).
 * Se abrirá automáticamente el Visor Web en `http://localhost:5000`.
 

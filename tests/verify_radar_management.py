@@ -86,10 +86,9 @@ class TestRadarManagement(unittest.TestCase):
         pending = db_manager.get_unanswered_chats(db_path=self.db_path)
         self.assertEqual(len(pending), 0)
 
-        # Verificar entrada automática en bitácora
+        # Descarte rápido no agrega ruido en bitácora
         ctx = db_manager.get_copilot_context("cliente1@c.us", db_path=self.db_path)
-        self.assertEqual(len(ctx["notes_log"]), 1)
-        self.assertIn("No requiere respuesta", ctx["notes_log"][0]["content"])
+        self.assertEqual(len(ctx["notes_log"]), 0)
 
         # Probar Deshacer (Undo): restaura estado previo y limpia la nota automática
         undo_res = db_manager.undo_radar_dismiss(
@@ -333,6 +332,54 @@ class TestRadarManagement(unittest.TestCase):
         self.assertEqual(ctx["display_name"], "+54 9 291 508-0263")
         self.assertEqual(ctx["push_name"], "Juliana")
         self.assertFalse(ctx["is_saved"])
+
+    def test_06_courtesy_filter_ignored_tags_and_bulk_dismiss(self):
+        import config
+        self.assertTrue(db_manager.is_courtesy_closing_message("Gracias!", "chat"))
+        self.assertTrue(db_manager.is_courtesy_closing_message("Ok", "chat"))
+        self.assertTrue(db_manager.is_courtesy_closing_message("👍🙏", "chat"))
+        self.assertFalse(db_manager.is_courtesy_closing_message("Gracias, ¿a qué hora pasan?", "chat"))
+        self.assertFalse(db_manager.is_courtesy_closing_message("Mi pedido es 12345", "chat"))
+        self.assertFalse(db_manager.is_courtesy_closing_message("Gracias", "image"))
+
+        now = int(time.time())
+        with db_manager.db_connection(self.db_path, write=True) as conn:
+            cur = conn.cursor()
+            cur.executemany(
+                "INSERT INTO chats (chat_id, nombre, ultimo_timestamp, ultimo_mensaje, ultimo_tipo, ultimo_es_mio) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    ("cortesia@c.us", "Cortesia", now - 60, "Muchas gracias!", "chat", 0),
+                    ("consulta@c.us", "Consulta Real", now - 120, "¿Cuánto sale?", "chat", 0),
+                    ("etiquetado@c.us", "Personal", now - 180, "Nos vemos hoy", "chat", 0),
+                    ("ajeno_bulk@c.us", "De Otro", now - 240, "Necesito soporte", "chat", 0),
+                ]
+            )
+            cur.execute("INSERT INTO crm_chat_tags (chat_id, tag, category) VALUES ('etiquetado@c.us', 'Personal', 'general')")
+
+        db_manager.upsert_contact_meta("ajeno_bulk@c.us", assigned_to="Ana", db_path=self.db_path)
+
+        orig_settings = config.get_system_settings()
+        try:
+            config.update_system_settings(radar_auto_hide_courtesy=True, radar_ignored_tags=["Personal"])
+            pending = db_manager.get_unanswered_chats(db_path=self.db_path)
+            ids = {c["chat_id"] for c in pending}
+            self.assertNotIn("cortesia@c.us", ids)
+            self.assertNotIn("etiquetado@c.us", ids)
+            self.assertIn("consulta@c.us", ids)
+            self.assertIn("ajeno_bulk@c.us", ids)
+
+            # Descarte masivo por Dario: limpia consulta@c.us, omite ajeno_bulk@c.us (de Ana) y deja nota en bitácora
+            bulk_res = db_manager.dismiss_radar_bulk(
+                operator_name="Dario", reason_label="Todo al día", db_path=self.db_path
+            )
+            self.assertTrue(bulk_res["ok"])
+            self.assertIn("consulta@c.us", bulk_res["dismissed_chat_ids"])
+            self.assertIn("ajeno_bulk@c.us", bulk_res["skipped_assigned_ids"])
+            ctx_consulta = db_manager.get_copilot_context("consulta@c.us", db_path=self.db_path)
+            self.assertEqual(len(ctx_consulta["notes_log"]), 1)
+            self.assertIn("Descarte masivo", ctx_consulta["notes_log"][0]["content"])
+        finally:
+            config.save_system_settings(orig_settings)
 
 
 if __name__ == "__main__":

@@ -1848,15 +1848,72 @@ def get_chat_sla(chat_ids, db_path=None):
         hours = round(sec / 3600, 1)
         return f"~{hours} h"
 
-def get_unanswered_chats(limit=80, max_age_days=7, db_path=None):
+_COURTESY_CLOSINGS = {
+    "ok", "oki", "okis", "oka", "okay", "kk", "k",
+    "dale", "dalee", "listo", "perfecto", "genial", "barbaro", "bárbaro",
+    "joya", "buenisimo", "buenísimo", "excelente", "de una", "de acuerdo",
+    "entendido", "recibido", "recibida", "bueno", "si", "sí",
+    "gracias", "muchas gracias", "mil gracias", "graciass", "gracias a vos",
+    "a vos", "de nada", "por nada", "thx", "thanks", "ty", "np",
+    "saludos", "igualmente", "nos vemos", "chau", "hasta luego",
+    "buen dia", "buen día", "buenas tardes", "buenas noches",
+    "👍", "👌", "🙏", "❤️", "❤", "👏", "🤝", "✅", "😊", "🙌", "💯", "🎉", "👋", "+1"
+}
+
+
+def is_courtesy_closing_message(contenido, tipo_mensaje=None):
+    """
+    Detecta mensajes breves de cortesía o cierre (ej. 'Gracias', 'Ok', 'Dale', '👍')
+    que no contienen preguntas ni datos numéricos relevantes y no requieren respuesta.
+    """
+    tipo = (tipo_mensaje or "").strip().lower()
+    if tipo and tipo not in ("chat", "text", "extended_text"):
+        return False
+
+    raw = (contenido or "").strip()
+    if not raw or len(raw) > 45:
+        return False
+    if "?" in raw or "¿" in raw:
+        return False
+    # No ocultar si contiene secuencias numéricas (teléfonos, pedidos, montos, DNI)
+    if re.search(r"\d{4,}", raw):
+        return False
+
+    # Normalizar quitando puntuación repetida y espacios extra
+    norm = re.sub(r"[!¡.,:;~]+", " ", raw.lower()).strip()
+    norm = re.sub(r"\s+", " ", norm)
+    if norm in _COURTESY_CLOSINGS:
+        return True
+
+    # Mensajes compuestos únicamente por emojis comunes de confirmación/cierre
+    stripped_emojis = re.sub(r"[\s👍👌🙏❤️❤👏🤝✅😊🙌💯🎉👋]+", "", raw)
+    if stripped_emojis == "":
+        return True
+
+    return False
+
+
+def get_unanswered_chats(limit=80, max_age_days=None, db_path=None):
     """
     Radar de chats sin responder: devuelve conversaciones individuales donde el último mensaje
-    es del cliente (es_mio = 0) dentro de la ventana de antigüedad (por defecto últimos 7 días)
-    o cuyo ticket_status es 'open', excluyendo contactos ignorados o mensajes ya descartados.
-    Aprovecha las columnas desnormalizadas en chats para respuesta ultrarrápida sin escaneo de mensajes.
+    es del cliente (es_mio = 0) dentro de la ventana de antigüedad configurada (por defecto 7 días)
+    o cuyo ticket_status es 'open', excluyendo contactos ignorados, etiquetas excluidas,
+    cierres breves de cortesía (si está activado) y mensajes ya descartados.
     """
+    sys_settings = {}
+    try:
+        sys_settings = config.get_system_settings() or {}
+    except Exception:
+        sys_settings = {}
+
+    if max_age_days is None:
+        max_age_days = sys_settings.get("radar_max_age_days", 7)
+    auto_hide_courtesy = bool(sys_settings.get("radar_auto_hide_courtesy", True))
+    ignored_tags = {str(t).strip().lower() for t in (sys_settings.get("radar_ignored_tags") or []) if str(t).strip()}
+
     now_ts = int(time.time())
     min_ts = (now_ts - int(max_age_days * 86400)) if (max_age_days and max_age_days > 0) else 0
+    fetch_limit = max(int(limit or 80) * 3, 200)
 
     with db_connection(db_path, write=False) as conn:
         cur = conn.cursor()
@@ -1866,6 +1923,7 @@ def get_unanswered_chats(limit=80, max_age_days=7, db_path=None):
                 ca.canonical_id,
                 ch.ultimo_es_mio as es_mio,
                 ch.ultimo_mensaje as contenido,
+                ch.ultimo_tipo as tipo_mensaje,
                 ch.ultimo_timestamp as timestamp,
                 c.custom_name,
                 ch.nombre as chat_nombre,
@@ -1892,6 +1950,7 @@ def get_unanswered_chats(limit=80, max_age_days=7, db_path=None):
               AND ch.chat_id != 'status@broadcast'
               AND ch.ultimo_timestamp IS NOT NULL
               AND coalesce(c.radar_ignored, 0) = 0
+              AND coalesce(c.ticket_status, 'none') != 'pending'
               AND ch.ultimo_es_mio = 0
               AND ch.ultimo_timestamp > coalesce(c.radar_dismissed_at, 0)
               AND (
@@ -1901,11 +1960,30 @@ def get_unanswered_chats(limit=80, max_age_days=7, db_path=None):
             GROUP BY coalesce(ca.canonical_id, ch.chat_id)
             ORDER BY coalesce(c.support_priority, 0) DESC, ch.ultimo_timestamp ASC
             LIMIT ?
-        """, (min_ts, limit))
+        """, (min_ts, fetch_limit))
         rows = cur.fetchall()
+
+        ignored_chat_ids = set()
+        if ignored_tags and rows:
+            cand_ids = list({r["canonical_id"] or r["chat_id"] for r in rows} | {r["chat_id"] for r in rows})
+            placeholders = ",".join(["?"] * len(cand_ids))
+            tag_placeholders = ",".join(["?"] * len(ignored_tags))
+            cur.execute(
+                f"SELECT DISTINCT chat_id FROM crm_chat_tags WHERE chat_id IN ({placeholders}) AND LOWER(tag) IN ({tag_placeholders})",
+                cand_ids + list(ignored_tags)
+            )
+            ignored_chat_ids = {tr["chat_id"] for tr in cur.fetchall()}
 
     result = []
     for r in rows:
+        canon_id = r["canonical_id"] or r["chat_id"]
+        if ignored_chat_ids and (r["chat_id"] in ignored_chat_ids or canon_id in ignored_chat_ids):
+            continue
+        if auto_hide_courtesy and r["ticket_status"] != "open":
+            if is_courtesy_closing_message(r["contenido"], r["tipo_mensaje"]):
+                continue
+        if len(result) >= int(limit or 80):
+            break
         diff = max(0, now_ts - (r["timestamp"] or now_ts))
         if diff < 60:
             time_str = "hace un momento"
@@ -2392,12 +2470,15 @@ def dismiss_radar_chat(chat_id, mode="unanswered", reason="no_reply_needed", ope
             new_dismissed_at, new_ignored
         ))
 
-        cur.execute("""
-            INSERT INTO crm_contact_notes_log (chat_id, author, content, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (canonical_id, author, log_msg, now_sec))
-        note_id = cur.lastrowid
-        prev_state["note_id"] = note_id
+        if reason != "no_reply_needed":
+            cur.execute("""
+                INSERT INTO crm_contact_notes_log (chat_id, author, content, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (canonical_id, author, log_msg, now_sec))
+            note_id = cur.lastrowid
+            prev_state["note_id"] = note_id
+        else:
+            prev_state["note_id"] = None
 
     if operator_name and operator_name.strip():
         try:
@@ -2472,6 +2553,123 @@ def undo_radar_dismiss(chat_id, prev_state, operator_name="", db_path=None):
         "ok": True,
         "chat_id": canonical_id,
         "meta": meta
+    }
+
+
+def dismiss_radar_bulk(chat_ids=None, min_age_hours=0, operator_name="", reason_label="Todo al día", db_path=None):
+    """
+    Descarta múltiples chats pendientes del Radar en una sola operación.
+    Respeta estrictamente la asignación en modo equipo: omite chats asignados a otro operador.
+    Registra una entrada auditable en la bitácora de cada contacto descartado.
+    """
+    now_sec = int(time.time())
+    now_ms = now_sec * 1000
+    author = (operator_name or "Operador").strip() or "Operador"
+    label = (reason_label or "Todo al día").strip()
+    log_msg = f"🔕 [Radar] Descarte masivo: {label}"
+
+    candidates = []
+    if chat_ids and isinstance(chat_ids, list):
+        candidates = [str(cid).strip() for cid in chat_ids if str(cid).strip()]
+    else:
+        unanswered = get_unanswered_chats(limit=500, db_path=db_path)
+        min_age_sec = max(0, int(min_age_hours or 0)) * 3600
+        for item in unanswered:
+            if min_age_sec > 0 and (now_sec - int(item.get("timestamp") or now_sec)) < min_age_sec:
+                continue
+            candidates.append(item["chat_id"])
+
+    dismissed_ids = []
+    skipped_assigned = []
+    undo_items = []
+
+    if not candidates:
+        return {
+            "ok": True,
+            "dismissed_count": 0,
+            "skipped_assigned_count": 0,
+            "dismissed_chat_ids": [],
+            "skipped_assigned_ids": [],
+            "undo_items": []
+        }
+
+    with db_connection(db_path, write=True) as conn:
+        cur = conn.cursor()
+        seen_canon = set()
+        for raw_cid in candidates:
+            canonical_id = resolve_canonical_chat_id(cur, raw_cid)
+            if not canonical_id or canonical_id in seen_canon:
+                continue
+            seen_canon.add(canonical_id)
+
+            cur.execute("""
+                SELECT ticket_status, sales_stage, follow_up_date, assigned_to, radar_dismissed_at, radar_ignored
+                FROM crm_contact_meta
+                WHERE chat_id = ?
+            """, (canonical_id,))
+            row = cur.fetchone()
+            cur_ticket = row["ticket_status"] if row and row["ticket_status"] else "none"
+            cur_stage = row["sales_stage"] if row and row["sales_stage"] else "none"
+            cur_followup = row["follow_up_date"] if row and row["follow_up_date"] else ""
+            cur_assigned = row["assigned_to"] if row and row["assigned_to"] else ""
+            cur_dismissed_at = int(row["radar_dismissed_at"] or 0) if row else 0
+            cur_ignored = int(row["radar_ignored"] or 0) if row else 0
+
+            if not can_operator_dismiss_chat(cur_assigned, operator_name):
+                skipped_assigned.append(canonical_id)
+                continue
+
+            cur.execute("""
+                SELECT MAX(ultimo_timestamp) as max_ts
+                FROM chats
+                WHERE chat_id = ? OR chat_id = ?
+                   OR chat_id IN (SELECT alias_id FROM contact_aliases WHERE canonical_id = ?)
+            """, (raw_cid, canonical_id, canonical_id))
+            ts_row = cur.fetchone()
+            max_ultimo_ts = int(ts_row["max_ts"]) if (ts_row and ts_row["max_ts"]) else now_sec
+
+            new_ticket = "resolved" if cur_ticket == "open" else cur_ticket
+            cur.execute("""
+                INSERT INTO crm_contact_meta (
+                    chat_id, ticket_status, sales_stage, follow_up_date,
+                    updated_by, radar_dismissed_at, radar_ignored, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    ticket_status = excluded.ticket_status,
+                    updated_by = excluded.updated_by,
+                    radar_dismissed_at = excluded.radar_dismissed_at,
+                    updated_at = excluded.updated_at
+            """, (
+                canonical_id, new_ticket, cur_stage, cur_followup,
+                (operator_name or "").strip(), max_ultimo_ts, cur_ignored, now_ms
+            ))
+
+            cur.execute("""
+                INSERT INTO crm_contact_notes_log (chat_id, author, content, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (canonical_id, author, log_msg, now_sec))
+            note_id = cur.lastrowid
+
+            dismissed_ids.append(canonical_id)
+            undo_items.append({
+                "chat_id": canonical_id,
+                "prev_state": {
+                    "ticket_status": cur_ticket,
+                    "sales_stage": cur_stage,
+                    "follow_up_date": cur_followup,
+                    "radar_dismissed_at": cur_dismissed_at,
+                    "radar_ignored": cur_ignored,
+                    "note_id": note_id
+                }
+            })
+
+    return {
+        "ok": True,
+        "dismissed_count": len(dismissed_ids),
+        "skipped_assigned_count": len(skipped_assigned),
+        "dismissed_chat_ids": dismissed_ids,
+        "skipped_assigned_ids": skipped_assigned,
+        "undo_items": undo_items
     }
 
 def add_contact_note_log(chat_id, author, content, db_path=None):

@@ -62,6 +62,39 @@
       const isAssignedToMe = Boolean(currentAssignedTo && operatorName && currentAssignedTo.toLowerCase() === operatorName.toLowerCase());
       btnTake.style.display = (team && currentChatId && !isAssignedToMe) ? "inline-flex" : "none";
     }
+
+    // 4. Acciones rápidas de Radar en Ficha (bloqueadas en modo equipo si pertenece a otro operador)
+    const fichaRadarBox = document.getElementById("ficha-radar-actions");
+    const btnFichaDismiss = document.getElementById("btn-ficha-radar-dismiss");
+    const btnFichaIgnore = document.getElementById("btn-ficha-radar-ignore");
+    const fichaLocked = document.getElementById("ficha-radar-locked");
+    if (fichaRadarBox) {
+      if (!currentChatId || currentIsRadarIgnored) {
+        fichaRadarBox.style.display = "none";
+      } else {
+        fichaRadarBox.style.display = "flex";
+        const isAssignedToOther = isAssignedToAnotherOperator();
+        if (btnFichaDismiss) btnFichaDismiss.style.display = isAssignedToOther ? "none" : "inline-flex";
+        if (btnFichaIgnore) btnFichaIgnore.style.display = isAssignedToOther ? "none" : "inline-flex";
+        if (fichaLocked) {
+          fichaLocked.style.display = isAssignedToOther ? "inline-block" : "none";
+          if (isAssignedToOther) {
+            fichaLocked.textContent = `🔒 Asignado a ${currentAssignedTo} (no descartable)`;
+          }
+        }
+      }
+    }
+  }
+
+  let currentIsRadarIgnored = false;
+  let lastRadarUnansweredItems = [];
+
+  function isAssignedToAnotherOperator(assignedVal = currentAssignedTo) {
+    if (!isTeamMode()) return false;
+    const assigned = String(assignedVal || "").trim();
+    if (!assigned) return false;
+    const me = String(operatorName || "").trim();
+    return !me || assigned.toLowerCase() !== me.toLowerCase();
   }
 
   let notesDebounceTimer = null;
@@ -473,6 +506,7 @@
       // Banner si el contacto fue excluido permanentemente del Radar
       const ignoredBanner = document.getElementById("radar-ignored-banner");
       const isRadarIgnored = Boolean(Number(crmMeta.radar_ignored || data.radar_ignored || 0));
+      currentIsRadarIgnored = isRadarIgnored;
       if (ignoredBanner) {
         ignoredBanner.style.display = isRadarIgnored ? "flex" : "none";
       }
@@ -1670,6 +1704,121 @@
       });
     }
 
+    // Acciones rápidas de Radar desde la Ficha del contacto
+    const btnFichaDismiss = document.getElementById("btn-ficha-radar-dismiss");
+    if (btnFichaDismiss) {
+      btnFichaDismiss.addEventListener("click", async () => {
+        if (!currentChatId) return;
+        if (isAssignedToAnotherOperator()) {
+          showToast(`🔒 Asignado a ${currentAssignedTo}: no podés descartarlo`);
+          return;
+        }
+        try {
+          await apiFetch("/api/radar/dismiss", {
+            method: "POST",
+            body: {
+              account_id: currentAccountId,
+              chat_id: currentChatId,
+              mode: "unanswered",
+              reason: "no_reply_needed",
+              operator_name: operatorName || "Operador"
+            }
+          });
+          showToast("✓ Quitada alerta del Radar");
+          loadRadarData();
+          loadChatContext(currentChatQuery);
+        } catch (err) {
+          showToast((err && err.message) ? err.message : "Error al descartar del Radar");
+        }
+      });
+    }
+
+    const btnFichaIgnore = document.getElementById("btn-ficha-radar-ignore");
+    if (btnFichaIgnore) {
+      btnFichaIgnore.addEventListener("click", async () => {
+        if (!currentChatId) return;
+        if (isAssignedToAnotherOperator()) {
+          showToast(`🔒 Asignado a ${currentAssignedTo}: no podés silenciarlo`);
+          return;
+        }
+        try {
+          await apiFetch("/api/radar/dismiss", {
+            method: "POST",
+            body: {
+              account_id: currentAccountId,
+              chat_id: currentChatId,
+              mode: "unanswered",
+              reason: "ignore_personal",
+              operator_name: operatorName || "Operador"
+            }
+          });
+          showToast("🔕 Contacto silenciado del Radar");
+          loadRadarData();
+          loadChatContext(currentChatQuery);
+        } catch (err) {
+          showToast((err && err.message) ? err.message : "Error al silenciar contacto");
+        }
+      });
+    }
+
+    // Limpieza masiva del Radar (>24h / Todo al día)
+    const runBulkDismiss = async (minAgeHours, reasonLabel) => {
+      const visibleItems = (lastRadarUnansweredItems || []).filter(it => {
+        if (currentAssignFilter === "mine") {
+          return it.assigned_to && it.assigned_to.toLowerCase() === (operatorName || "").toLowerCase();
+        }
+        if (currentAssignFilter === "unassigned") {
+          return !it.assigned_to;
+        }
+        return true;
+      });
+      const nowSec = Math.floor(Date.now() / 1000);
+      const eligibleIds = [];
+      let skippedOther = 0;
+      for (const it of visibleItems) {
+        if (minAgeHours > 0 && it.timestamp && (nowSec - it.timestamp) < minAgeHours * 3600) {
+          continue;
+        }
+        if (isAssignedToAnotherOperator(it.assigned_to)) {
+          skippedOther++;
+          continue;
+        }
+        eligibleIds.push(it.chat_id);
+      }
+      if (eligibleIds.length === 0) {
+        showToast(skippedOther > 0
+          ? `🔒 ${skippedOther} chat(s) asignados a otros operadores (omitidos)`
+          : "No hay pendientes para limpiar en este filtro");
+        return;
+      }
+      try {
+        const res = await apiFetch("/api/radar/dismiss_bulk", {
+          method: "POST",
+          body: {
+            account_id: currentAccountId,
+            chat_ids: eligibleIds,
+            min_age_hours: minAgeHours,
+            reason_label: reasonLabel,
+            operator_name: operatorName || "Operador"
+          }
+        });
+        const done = (res && res.dismissed_count) || 0;
+        const skippedBackend = (res && res.skipped_assigned_count) || 0;
+        const totalSkipped = skippedOther + skippedBackend;
+        showToast(totalSkipped > 0
+          ? `✓ ${done} limpiados (${totalSkipped} de otros operadores omitidos)`
+          : `✓ ${done} chat(s) marcados al día`);
+        loadRadarData();
+      } catch (err) {
+        showToast("Error en limpieza masiva del Radar");
+      }
+    };
+
+    const btnBulk24h = document.getElementById("btn-radar-bulk-24h");
+    if (btnBulk24h) btnBulk24h.addEventListener("click", () => runBulkDismiss(24, "Más de 24h"));
+    const btnBulkAll = document.getElementById("btn-radar-bulk-all");
+    if (btnBulkAll) btnBulkAll.addEventListener("click", () => runBulkDismiss(0, "Todo al día"));
+
     // Cerrar menús de motivos de descarte al hacer clic fuera o presionar Escape
     document.addEventListener("click", (e) => {
       if (!e.target.closest(".radar-item")) {
@@ -1693,8 +1842,15 @@
 
     try {
       if (currentRadarMode === "unanswered") {
-        const data = await apiFetch(`/api/support/unanswered?account_id=${encodeURIComponent(currentAccountId)}&days=7`);
+        const data = await apiFetch(`/api/support/unanswered?account_id=${encodeURIComponent(currentAccountId)}`);
         const items = Array.isArray(data) ? data : (data && (data.chats || data.unanswered) ? (data.chats || data.unanswered) : []);
+        lastRadarUnansweredItems = items;
+
+        const bulkBar = document.getElementById("radar-bulk-bar");
+        if (bulkBar) {
+          const hasEligible = items.some(it => !isAssignedToAnotherOperator(it.assigned_to));
+          bulkBar.style.display = hasEligible ? "flex" : "none";
+        }
 
         let displayCount = items.length;
         if (currentAssignFilter === "mine") {
@@ -1719,6 +1875,8 @@
           renderRadarUnanswered(items);
         }
       } else {
+        const bulkBar = document.getElementById("radar-bulk-bar");
+        if (bulkBar) bulkBar.style.display = "none";
         const data = await apiFetch(`/api/sales/radar?account_id=${encodeURIComponent(currentAccountId)}`);
         const items = Array.isArray(data) ? data : (data && (data.leads || data.radar) ? (data.leads || data.radar) : []);
         

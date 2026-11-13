@@ -129,6 +129,17 @@ for (const txt of trickyTexts) {
   assertEq(res.thumbnail, 'data:image/jpeg;base64,' + fakeJpegB64, 'Miniatura rescatada de MsgOpaqueData');
 }
 
+// 4b. Imagen con pie de foto (caption) en campo 3 de MsgOpaqueData
+{
+  const fakeJpegB64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/' + 'C'.repeat(120);
+  const caption = 'Confirmar presencia antes del 20/11 por favor';
+  const currentMsg = Buffer.concat([pbBytes(1, fakeJpegB64), pbBytes(3, caption)]);
+  const opaqueRow = pbBytes(1, currentMsg);
+  const { currentMsgBytes } = dec.unpackMsgRowOpaqueData(opaqueRow);
+  const res = dec.extractFromMsgOpaqueData(currentMsgBytes, 'image', true);
+  assertEq(res.text, caption, 'Caption de imagen en campo 3 recuperado');
+}
+
 // 5. Imagen sin caption (solo miniatura en campo 1) -> texto vacío, nunca basura
 {
   const fakeJpegB64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/' + 'B'.repeat(120);

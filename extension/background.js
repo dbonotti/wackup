@@ -159,6 +159,7 @@ const ALLOWED_ENDPOINTS = [
   { method: "POST", pattern: /^\/api\/auth\/verify_pin\/?$/ },
   { method: "POST", pattern: /^\/api\/auth\/handoff\/?$/ },
   { method: "POST", pattern: /^\/api\/auth\/redeem_handoff\/?$/ },
+  { method: "POST", pattern: /^\/api\/radar\/dismiss_bulk\/?$/ },
   { method: "GET", pattern: /^\/api\/system\/info(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/system\/onboarding(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/system\/onboarding\/?$/ },

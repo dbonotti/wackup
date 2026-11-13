@@ -1631,6 +1631,74 @@ select option,
 .log-del:hover {
   color: var(--danger);
 }
+.ficha-radar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.btn-ficha-radar {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 168, 132, 0.45);
+  background: rgba(0, 168, 132, 0.12);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.btn-ficha-radar:hover {
+  background: rgba(0, 168, 132, 0.22);
+}
+.btn-ficha-radar.subtle {
+  border-color: var(--border);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+.btn-ficha-radar.subtle:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+.ficha-radar-locked {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.radar-bulk-bar {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+.btn-radar-bulk {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.btn-radar-bulk:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+.btn-radar-bulk.primary {
+  border-color: rgba(0, 168, 132, 0.4);
+  background: rgba(0, 168, 132, 0.12);
+  color: var(--accent);
+}
+.btn-radar-bulk.primary:hover {
+  background: rgba(0, 168, 132, 0.24);
+}
 .radar-assign-filter {
   display: flex;
   gap: 4px;

@@ -112,6 +112,19 @@ def get_system_settings():
                             data["onboarding_completed"] = False
                         if "workspace_profile" not in data or data["workspace_profile"] not in VALID_WORKSPACE_PROFILES:
                             data["workspace_profile"] = DEFAULT_WORKSPACE_PROFILE
+                        if "radar_auto_hide_courtesy" not in data:
+                            data["radar_auto_hide_courtesy"] = True
+                        else:
+                            data["radar_auto_hide_courtesy"] = bool(data["radar_auto_hide_courtesy"])
+                        try:
+                            age_days = int(data.get("radar_max_age_days", 7))
+                        except (TypeError, ValueError):
+                            age_days = 7
+                        data["radar_max_age_days"] = max(1, min(30, age_days))
+                        if "radar_ignored_tags" not in data or not isinstance(data.get("radar_ignored_tags"), list):
+                            data["radar_ignored_tags"] = []
+                        else:
+                            data["radar_ignored_tags"] = [str(t).strip() for t in data["radar_ignored_tags"] if str(t).strip()]
                         return data
             except Exception:
                 pass
@@ -123,7 +136,10 @@ def get_system_settings():
             "known_operators": [],
             "active_operator": "",
             "onboarding_completed": False,
-            "workspace_profile": DEFAULT_WORKSPACE_PROFILE
+            "workspace_profile": DEFAULT_WORKSPACE_PROFILE,
+            "radar_auto_hide_courtesy": True,
+            "radar_max_age_days": 7,
+            "radar_ignored_tags": []
         }
         try:
             with open(SYSTEM_SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -147,7 +163,7 @@ def save_system_settings(settings):
             return False
 
 
-def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, rename_operator=None, onboarding_completed=None, workspace_profile=None, active_operator=None):
+def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, remove_operator=None, rename_operator=None, onboarding_completed=None, workspace_profile=None, active_operator=None, radar_auto_hide_courtesy=None, radar_max_age_days=None, radar_ignored_tags=None):
     """Actualiza campos específicos de la configuración global de forma thread-safe."""
     settings = get_system_settings()
     changed = False
@@ -220,6 +236,33 @@ def update_system_settings(network_mode=None, lan_pin=None, add_operator=None, r
         val = bool(onboarding_completed)
         if settings.get("onboarding_completed") != val:
             settings["onboarding_completed"] = val
+            changed = True
+
+    if radar_auto_hide_courtesy is not None:
+        val = bool(radar_auto_hide_courtesy)
+        if settings.get("radar_auto_hide_courtesy") != val:
+            settings["radar_auto_hide_courtesy"] = val
+            changed = True
+
+    if radar_max_age_days is not None:
+        try:
+            days_val = max(1, min(30, int(radar_max_age_days)))
+            if settings.get("radar_max_age_days") != days_val:
+                settings["radar_max_age_days"] = days_val
+                changed = True
+        except (TypeError, ValueError):
+            pass
+
+    if radar_ignored_tags is not None and isinstance(radar_ignored_tags, list):
+        cleaned_tags = []
+        seen_tags = set()
+        for t in radar_ignored_tags:
+            ts = str(t).strip()
+            if ts and ts.lower() not in seen_tags:
+                seen_tags.add(ts.lower())
+                cleaned_tags.append(ts)
+        if settings.get("radar_ignored_tags") != cleaned_tags:
+            settings["radar_ignored_tags"] = cleaned_tags
             changed = True
 
     if changed:

@@ -40,7 +40,7 @@
           <span class="rail-icon" id="themeMenuIcon">🌙</span>
           <span class="rail-tooltip" id="themeMenuText">Modo oscuro</span>
         </button>
-        <div class="rail-version" title="WAckup versión 3.1.0">v3.1.0</div>
+        <div class="rail-version" title="WAckup versión 3.1.1">v3.1.1</div>
       </div>
     </nav>
 
@@ -553,7 +553,7 @@
             <span class="sub-label">Administración integral del servidor local, backups, multimedia y diagnóstico</span>
           </div>
           <div class="view-header-actions">
-            <span class="system-version-tag" id="systemAppVersion">v3.1.0</span>
+            <span class="system-version-tag" id="systemAppVersion">v3.1.1</span>
             <button class="btn-secondary" onclick="openOnboardingModal(1)" title="Asistente de primer uso">🚀 Asistente de Inicio</button>
             <button class="btn-secondary" onclick="checkSystemUpdates()" title="Atajo: U">🔄 Comprobar Actualizaciones</button>
             <button class="btn-primary" onclick="promptRestartSystem()" title="Atajo: R">⚡ Reiniciar Servidor</button>
@@ -702,6 +702,40 @@
                 <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary);">Direcciones para que tus compañeros ingresen desde su PC:</label>
                 <div id="lanHostIpsList" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
                   <span style="font-size: 12px; color: var(--text-muted);">Consultando interfaces de red...</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tarjeta Radar de Pendientes -->
+            <div class="workspace-card system-card" id="cardRadarSettings">
+              <div class="card-header-flex">
+                <div>
+                  <h3 class="card-title">📥 Radar de Pendientes</h3>
+                  <p class="card-subtitle">Controla qué mensajes entran al Radar y cómo evitar acumulación innecesaria.</p>
+                </div>
+                <button class="btn-card-action" type="button" onclick="saveRadarSettings()">Guardar Radar</button>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="settingRadarAutoCourtesy" checked>
+                  <span>Ocultar automáticamente cierres breves de cortesía (<i>"Gracias", "Ok", "Dale", "👍"</i> sin signo <code>?</code>)</span>
+                </label>
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
+                  <label style="font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+                    <span>Ventana máxima en Radar:</span>
+                    <select id="settingRadarMaxAge" class="search-box" style="width: auto; padding: 4px 8px; font-size: 12.5px;">
+                      <option value="1">1 día (24h)</option>
+                      <option value="2">2 días (48h)</option>
+                      <option value="3">3 días</option>
+                      <option value="7" selected>7 días (predeterminado)</option>
+                      <option value="14">14 días</option>
+                      <option value="30">30 días</option>
+                    </select>
+                  </label>
+                  <label style="font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; flex: 1; min-width: 220px;">
+                    <span>Etiquetas excluidas:</span>
+                    <input type="text" id="settingRadarIgnoredTags" class="search-box" style="flex: 1; padding: 4px 8px; font-size: 12.5px;" placeholder="Ej: Personal, Familia, Proveedor">
+                  </label>
                 </div>
               </div>
             </div>
@@ -1001,8 +1035,8 @@
       </div>
       <div style="padding: 16px 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; background: var(--bg-hover); padding: 8px 12px; border-radius: 6px;">
-          <span style="font-size: 13px;">Versión instalada: <b id="updateCurrentVer">v3.1.0</b></span>
-          <span style="font-size: 13px; color: var(--accent);">Nueva versión: <b id="updateLatestVer">v3.1.0</b></span>
+          <span style="font-size: 13px;">Versión instalada: <b id="updateCurrentVer">v3.1.1</b></span>
+          <span style="font-size: 13px; color: var(--accent);">Nueva versión: <b id="updateLatestVer">v3.1.1</b></span>
         </div>
         <label style="font-size: 11.5px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Novedades y Cambios:</label>
         <div id="updateNotesContainer" style="margin-top: 6px; padding: 10px 12px; background: var(--bg-app); border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;">

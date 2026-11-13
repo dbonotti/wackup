@@ -1629,7 +1629,10 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 "active_operator": active_op,
                 "online_operators": sse_hub.get_sse_hub().get_online_operators(),
                 "is_local": is_local,
-                "needs_pin": False
+                "needs_pin": False,
+                "radar_auto_hide_courtesy": bool(settings.get("radar_auto_hide_courtesy", True)),
+                "radar_max_age_days": int(settings.get("radar_max_age_days", 7)),
+                "radar_ignored_tags": settings.get("radar_ignored_tags", [])
             }
             if is_local:
                 resp_data["lan_pin"] = settings.get("lan_pin", "")
@@ -1822,7 +1825,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             params = parse_qs(url.query)
             account_id, db_path, _ = self._resolve_account_params(params)
             limit = int(params.get("limit", ["80"])[0])
-            days = int(params.get("days", ["7"])[0])
+            days_param = params.get("days", [None])[0]
+            days = int(days_param) if (days_param is not None and str(days_param).isdigit()) else None
             chats = db_manager.get_unanswered_chats(limit=limit, max_age_days=days, db_path=db_path)
             self.send_json(200, {
                 "ok": True,
@@ -2021,6 +2025,7 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     "follow_up_date": row_d.get("follow_up_date"),
                     "radar_ignored": row_d.get("radar_ignored", 0),
                     "radar_dismissed_at": row_d.get("radar_dismissed_at", 0),
+                    "is_courtesy_closing": db_manager.is_courtesy_closing_message(row_d.get("last_msg"), row_d.get("last_tipo")),
                     "last_msg": db_manager.resolve_mentions_in_text(row_d["last_msg"], contact_map) if row_d.get("last_msg") else row_d.get("last_msg"),
                     "last_tipo": row_d.get("last_tipo"),
                     "last_ts": row_d.get("last_ts")
@@ -2467,6 +2472,9 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 add_op = payload.get("operator_name") or payload.get("add_operator")
                 remove_op = payload.get("remove_operator")
                 rename_op = payload.get("rename_operator") or payload.get("update_operator")
+                radar_auto_hide_courtesy = payload.get("radar_auto_hide_courtesy")
+                radar_max_age_days = payload.get("radar_max_age_days")
+                radar_ignored_tags = payload.get("radar_ignored_tags")
 
                 if lan_pin is not None:
                     revoke_operator_sessions()
@@ -2476,7 +2484,10 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     lan_pin=lan_pin,
                     add_operator=add_op,
                     remove_operator=remove_op,
-                    rename_operator=rename_op
+                    rename_operator=rename_op,
+                    radar_auto_hide_courtesy=radar_auto_hide_courtesy,
+                    radar_max_age_days=radar_max_age_days,
+                    radar_ignored_tags=radar_ignored_tags
                 )
                 ips = config.get_local_ip_addresses()
                 self.send_json(200, {
@@ -3024,6 +3035,33 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                     "reason": reason,
                     "updated_by": operator_name
                 })
+                self.send_json(200, res)
+                return
+
+            elif url.path == "/api/radar/dismiss_bulk":
+                payload = self._read_json_body(allow_empty=True)
+                if payload is None:
+                    return
+
+                account_id, db_path, _ = self._resolve_account_params(payload, parse_qs(url.query))
+                chat_ids = payload.get("chat_ids")
+                min_age_hours = payload.get("min_age_hours", 0)
+                reason_label = payload.get("reason_label") or ("Más de 24h" if min_age_hours else "Todo al día")
+                operator_name = self.get_current_operator(payload) or ""
+
+                res = db_manager.dismiss_radar_bulk(
+                    chat_ids=chat_ids,
+                    min_age_hours=min_age_hours,
+                    operator_name=operator_name,
+                    reason_label=reason_label,
+                    db_path=db_path
+                )
+                if res.get("dismissed_count", 0) > 0:
+                    sse_hub.get_sse_hub().broadcast("crm_update", {
+                        "type": "radar_dismissed_bulk",
+                        "count": res["dismissed_count"],
+                        "updated_by": operator_name
+                    })
                 self.send_json(200, res)
                 return
 

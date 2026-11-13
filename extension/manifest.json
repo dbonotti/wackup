@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WAckup - Copiloto CRM y Respaldo Local para WhatsApp Web",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "WAckup 3.1: Copiloto nativo sidePanel, CRM comercial, atención y respaldo pasivo local para WhatsApp Web",
   "permissions": [
     "sidePanel",

@@ -766,12 +766,26 @@
 
     // 2. Multimedia con posible pie de texto (image, video, document)
     if (isMedia) {
-      const caption = decodeProtoStringLeaf(getProtoBytes(fields, 2));
+      const caption = decodeProtoStringLeaf(getProtoBytes(fields, 2)) ||
+                      decodeProtoStringLeaf(getProtoBytes(fields, 3));
       if (caption) return { text: caption, thumbnail, futureproofBytes };
 
       if (futureproofBytes) {
         const fpCap = extractTextFromWAProtoMessage(futureproofBytes, true);
         if (fpCap) return { text: fpCap, thumbnail, futureproofBytes };
+      }
+
+      // Buscar en posibles campos alternativos de futureproof/WAProto dentro de MsgOpaqueData
+      for (const [fNum, list] of fields.entries()) {
+        if (fNum === 1 || fNum === 2 || fNum === 14) continue;
+        for (const item of list) {
+          if (item.wireType !== 2 || !item.value || item.value.length < 2) continue;
+          const subProto = parseProtobufFields(item.value);
+          if (subProto) {
+            const subCap = extractTextFromWAProtoMessage(item.value, true);
+            if (subCap) return { text: subCap, thumbnail, futureproofBytes };
+          }
+        }
       }
 
       const bodyFallback = decodeProtoStringLeaf(rawField1Bytes, true);

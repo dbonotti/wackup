@@ -155,6 +155,11 @@
             </div>
             <button id="btn-add-tag" class="btn-res-action" type="button" style="font-size: 11px; padding: 1px 6px;">+ Etiqueta</button>
           </div>
+          <div id="ficha-radar-actions" class="ficha-radar-actions" style="display: none;">
+            <button id="btn-ficha-radar-dismiss" class="btn-ficha-radar" type="button" title="Quitar del Radar (No requiere respuesta)">✓ No req. resp.</button>
+            <button id="btn-ficha-radar-ignore" class="btn-ficha-radar subtle" type="button" title="Excluir permanentemente este contacto del Radar (Personal / Proveedor)">🔕 Silenciar Radar</button>
+            <span id="ficha-radar-locked" class="ficha-radar-locked" style="display: none;">🔒 Asignado a otro operador</span>
+          </div>
         </div>
 
         <!-- Módulo de Soporte / Tickets (condicional) -->
@@ -292,6 +297,11 @@
           <button class="btn-assign-filter active" data-assign="all">Todos</button>
           <button class="btn-assign-filter" data-assign="mine">Mis chats</button>
           <button class="btn-assign-filter" data-assign="unassigned">Sin asignar</button>
+        </div>
+
+        <div id="radar-bulk-bar" class="radar-bulk-bar" style="display:none;">
+          <button id="btn-radar-bulk-24h" class="btn-radar-bulk" type="button" title="Descartar pendientes con más de 24h (omite chats de otros operadores)">✓ Limpiar &gt;24h</button>
+          <button id="btn-radar-bulk-all" class="btn-radar-bulk primary" type="button" title="Marcar todos los pendientes visibles como al día (omite chats de otros operadores)">✓ Todo al día</button>
         </div>
 
         <!-- Lista de Contactos de Radar -->
