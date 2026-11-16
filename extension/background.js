@@ -47,6 +47,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   try {
     const parsed = new URL(currentUrl);
     if (parsed.hostname === "web.whatsapp.com") {
+      if (changeInfo.status === "loading") {
+        lastActiveChat = {
+          chatQuery: null,
+          accountId: null,
+          accountPhone: null,
+          accountName: null,
+          updatedAt: Date.now()
+        };
+      }
       await chrome.sidePanel.setOptions({
         tabId: tabId,
         path: "sidepanel/sidepanel.html",
@@ -232,8 +241,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Consulta del chat activo actual (desde sidepanel.js)
   if (request.action === "get_active_chat") {
-    sendResponse(lastActiveChat);
-    return;
+    chrome.tabs.query({ url: ["https://web.whatsapp.com/*", "http://web.whatsapp.com/*"] }, (tabs) => {
+      const targetTab = (Array.isArray(tabs) && (tabs.find(t => t.active) || tabs[0])) || null;
+      if (!targetTab || !targetTab.id) {
+        sendResponse({ ...lastActiveChat, chatQuery: null });
+        return;
+      }
+      chrome.tabs.sendMessage(targetTab.id, { action: "get_active_chat" }, (tabRes) => {
+        if (chrome.runtime.lastError || !tabRes) {
+          sendResponse(lastActiveChat);
+          return;
+        }
+        lastActiveChat = {
+          chatQuery: tabRes.chatQuery || null,
+          accountId: tabRes.accountId || (tabRes.accountInfo && tabRes.accountInfo.id) || lastActiveChat.accountId,
+          accountPhone: tabRes.accountPhone || (tabRes.accountInfo && tabRes.accountInfo.phone) || lastActiveChat.accountPhone,
+          accountName: tabRes.accountName || (tabRes.accountInfo && tabRes.accountInfo.name) || lastActiveChat.accountName,
+          updatedAt: Date.now()
+        };
+        sendResponse(lastActiveChat);
+      });
+    });
+    return true;
   }
 
   // Notificación de estado de sincronización (desde bridge.js o sidepanel.js)

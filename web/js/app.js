@@ -290,6 +290,8 @@
 
       document.getElementById('chat-header').style.display = 'none';
       document.getElementById('chat-filter-bar').style.display = 'none';
+      const chatBodyAreaEl = document.getElementById('chat-body-area');
+      if (chatBodyAreaEl) chatBodyAreaEl.style.display = 'none';
       document.getElementById('messages-container').style.display = 'none';
       const copilotDrawerEl = document.getElementById('chat-copilot-drawer');
       if (copilotDrawerEl) copilotDrawerEl.style.display = 'none';
@@ -2318,6 +2320,8 @@
       document.getElementById('empty-state').style.display = 'none';
       document.getElementById('chat-header').style.display = 'flex';
       document.getElementById('chat-filter-bar').style.display = 'none';
+      const chatBodyAreaEl = document.getElementById('chat-body-area');
+      if (chatBodyAreaEl) chatBodyAreaEl.style.display = 'flex';
       document.getElementById('messages-container').style.display = 'flex';
 
       // Sincronizar estado del Copiloto en el Visor

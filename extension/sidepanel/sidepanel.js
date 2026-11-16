@@ -372,11 +372,22 @@
   // CARGA DE CONTEXTO DEL CHAT ACTIVO
   // =========================================================================
   async function loadChatContext(chatQuery) {
+    const noChatEl = document.getElementById("no-chat-notice");
+    const chatContentEl = document.getElementById("management-chat-content");
     if (!chatQuery) {
-      document.getElementById("no-chat-notice").style.display = "block";
+      currentChatQuery = null;
+      currentChatId = null;
+      currentAssociatedIds = [];
+      currentContactDisplayName = "";
+      currentAssignedTo = "";
+      currentIsRadarIgnored = false;
+      currentSlaMinutes = null;
+      if (noChatEl) noChatEl.style.display = "flex";
+      if (chatContentEl) chatContentEl.style.display = "none";
       return;
     }
-    document.getElementById("no-chat-notice").style.display = "none";
+    if (noChatEl) noChatEl.style.display = "none";
+    if (chatContentEl) chatContentEl.style.display = "flex";
     currentChatQuery = chatQuery;
 
     try {
@@ -3162,9 +3173,7 @@
             name: request.accountName
           });
         }
-        if (request.chatQuery) {
-          loadChatContext(request.chatQuery);
-        }
+        loadChatContext(request.chatQuery || null);
         sendResponse({ ok: true });
         return;
       }
@@ -3267,16 +3276,14 @@
 
     // Obtener chat activo inicial si ya está abierto en la pestaña
     chrome.runtime.sendMessage({ action: "get_active_chat" }, (res) => {
-      if (res && res.chatQuery) {
-        if (res.accountId) {
-          updateAccountUI({
-            id: res.accountId,
-            phone: res.accountPhone,
-            name: res.accountName
-          });
-        }
-        loadChatContext(res.chatQuery);
+      if (res && res.accountId) {
+        updateAccountUI({
+          id: res.accountId,
+          phone: res.accountPhone,
+          name: res.accountName
+        });
       }
+      loadChatContext((res && res.chatQuery) ? res.chatQuery : null);
     });
 
     // Cargar radar inicial

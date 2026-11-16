@@ -130,16 +130,17 @@
     const chatTitle = detectActiveChatTitle();
     const accountInfo = getActiveAccountInfo();
 
-    const chatChanged = chatTitle && chatTitle !== lastDetectedChatQuery;
+    const normalizedTitle = chatTitle || null;
+    const chatChanged = normalizedTitle !== lastDetectedChatQuery;
     const accountChanged = accountInfo.id && accountInfo.id !== lastDetectedAccountId;
 
     if (chatChanged || accountChanged || force) {
-      if (chatTitle) lastDetectedChatQuery = chatTitle;
+      lastDetectedChatQuery = normalizedTitle;
       if (accountInfo.id) lastDetectedAccountId = accountInfo.id;
 
       safeRuntimeSendMessage({
         action: "active_chat_changed",
-        chatQuery: chatTitle || lastDetectedChatQuery,
+        chatQuery: lastDetectedChatQuery,
         accountId: accountInfo.id,
         accountPhone: accountInfo.phone,
         accountName: accountInfo.name
@@ -157,7 +158,15 @@
           const t = (s.getAttribute("title") || s.textContent || "").trim();
           if (isCleanChatTitle(t)) {
             lastDetectedChatQuery = t;
-            notifyActiveChatChanged(true);
+            const accountInfo = getActiveAccountInfo();
+            if (accountInfo.id) lastDetectedAccountId = accountInfo.id;
+            safeRuntimeSendMessage({
+              action: "active_chat_changed",
+              chatQuery: t,
+              accountId: accountInfo.id,
+              accountPhone: accountInfo.phone,
+              accountName: accountInfo.name
+            });
             break;
           }
         }
@@ -280,10 +289,14 @@
     }
 
     if (request.action === "get_active_chat") {
-      const chatTitle = detectActiveChatTitle() || lastDetectedChatQuery;
+      const chatTitle = detectActiveChatTitle();
       const accountInfo = getActiveAccountInfo();
+      lastDetectedChatQuery = chatTitle || null;
       sendResponse({
-        chatQuery: chatTitle,
+        chatQuery: lastDetectedChatQuery,
+        accountId: accountInfo.id,
+        accountPhone: accountInfo.phone,
+        accountName: accountInfo.name,
         accountInfo: accountInfo
       });
       return false;

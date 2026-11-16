@@ -98,23 +98,24 @@
       </button>
     </nav>
 
-    <!-- AVISO DE CHAT NO SELECCIONADO -->
-    <div id="no-chat-notice" class="empty-notice" style="display:none;">
-      <div class="notice-icon">💬</div>
-      <div class="notice-title">Ningún chat seleccionado</div>
-      <div class="notice-desc">Haz clic en cualquier conversación en WhatsApp Web para cargar su ficha y herramientas.</div>
-      <div style="margin-top: 12px;">
-        <button type="button" id="btn-open-viewer-empty" class="btn-secondary" style="font-size: 12px; padding: 6px 14px;">
-          🖥️ Abrir Visor Web
-        </button>
-      </div>
-    </div>
-
     <!-- CONTENEDOR DE PESTAÑAS -->
     <div id="tabs-container" class="tabs-content">
       
       <!-- PESTAÑA 1: GESTIÓN -->
       <section id="tab-management" class="tab-pane active">
+        <!-- AVISO DE CHAT NO SELECCIONADO -->
+        <div id="no-chat-notice" class="empty-notice" style="display:flex;">
+          <div class="notice-icon">💬</div>
+          <div class="notice-title">Ningún chat seleccionado</div>
+          <div class="notice-desc">Haz clic en cualquier conversación en WhatsApp Web para cargar su ficha, etiquetas, notas y herramientas.</div>
+          <div style="margin-top: 14px;">
+            <button type="button" id="btn-open-viewer-empty" class="btn-secondary" style="font-size: 12px; padding: 7px 14px;">
+              🖥️ Abrir Visor Web
+            </button>
+          </div>
+        </div>
+
+        <div id="management-chat-content" class="management-chat-content" style="display:none;">
         <!-- Alerta de Semáforo Anti-Colisión -->
         <div id="presence-banner" class="presence-alert" style="display:none;">
           <span>👁️</span> <span id="presence-text"><b>Ana</b> está viendo este chat ahora</span>
@@ -276,6 +277,7 @@
             </div>
           </div>
           <div id="chat-search-results" class="search-results-list"></div>
+        </div>
         </div>
       </section>
 
