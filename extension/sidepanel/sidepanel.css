@@ -1013,12 +1013,37 @@ label {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
   transition: all 0.15s;
 }
 .btn-filter.active {
   background: var(--accent);
   border-color: var(--accent);
   color: #ffffff;
+}
+
+.btn-radar-sort {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.btn-radar-sort:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-card-hover);
+}
+.btn-radar-sort.active {
+  background: rgba(0, 168, 132, 0.16);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .radar-list {
@@ -1030,6 +1055,7 @@ label {
   overflow-y: auto;
   margin-top: 4px;
   padding-right: 2px;
+  padding-bottom: 10px;
 }
 
 .radar-item {
@@ -1475,12 +1501,11 @@ button:disabled,
 .backup-card h3 { font-size: 15px; color: var(--accent); margin-bottom: 8px; }
 .backup-card p { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.4; }
 
-/* Toast */
+/* Toast (docked en footer flex para no tapar mensajes de la lista) */
 .toast-popup {
-  position: fixed;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  flex-shrink: 0;
+  align-self: center;
+  margin: 4px 10px 8px;
   background: var(--bg-header);
   border: 1px solid var(--accent);
   color: var(--text-primary);
@@ -1489,8 +1514,7 @@ button:disabled,
   font-size: 11px;
   font-weight: 600;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-  z-index: 9999;
-  max-width: 94vw;
+  max-width: calc(100vw - 20px);
   animation: fadeInOut 2.5s forwards;
 }
 
@@ -1525,15 +1549,15 @@ button:disabled,
 }
 
 @keyframes toastSlideIn {
-  from { opacity: 0; transform: translate(-50%, 10px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes fadeInOut {
-  0% { opacity: 0; transform: translate(-50%, 10px); }
-  15% { opacity: 1; transform: translate(-50%, 0); }
-  85% { opacity: 1; transform: translate(-50%, 0); }
-  100% { opacity: 0; transform: translate(-50%, -10px); }
+  0% { opacity: 0; transform: translateY(6px); }
+  15% { opacity: 1; transform: translateY(0); }
+  85% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(4px); }
 }
 
 /* =========================================================================

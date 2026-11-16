@@ -88,6 +88,15 @@
 
   let currentIsRadarIgnored = false;
   let lastRadarUnansweredItems = [];
+  let lastRadarSalesItems = [];
+  const RADAR_SORT_STORAGE_KEY = "wackup_radar_sort_order";
+  let radarSortOrder = "oldest"; // "oldest" | "newest"
+  try {
+    const savedRadarSort = localStorage.getItem(RADAR_SORT_STORAGE_KEY);
+    if (savedRadarSort === "newest" || savedRadarSort === "oldest") {
+      radarSortOrder = savedRadarSort;
+    }
+  } catch (_) {}
 
   function isAssignedToAnotherOperator(assignedVal = currentAssignedTo) {
     if (!isTeamMode()) return false;
@@ -1682,16 +1691,56 @@
     });
   }
 
+  function sortRadarItems(items) {
+    const list = Array.isArray(items) ? [...items] : [];
+    if (radarSortOrder === "newest") {
+      list.sort((a, b) => (Number(b && b.timestamp) || 0) - (Number(a && a.timestamp) || 0));
+    }
+    return list;
+  }
+
+  function updateRadarSortButton() {
+    const btnSort = document.getElementById("btn-radar-sort");
+    if (!btnSort) return;
+    const isNewest = radarSortOrder === "newest";
+    btnSort.classList.toggle("active", isNewest);
+    btnSort.textContent = isNewest ? "⬇️ Recientes" : "⬆️ Antiguos";
+    btnSort.title = isNewest
+      ? "Orden: más recientes arriba (clic para ver más antiguos primero)"
+      : "Orden: más antiguos primero (clic para ver más recientes arriba)";
+  }
+
   function setupRadarTabs() {
     const btnUnanswered = document.getElementById("btn-radar-unanswered");
     const btnSales = document.getElementById("btn-radar-sales");
+    const btnSort = document.getElementById("btn-radar-sort");
+
+    updateRadarSortButton();
+
+    if (btnSort) {
+      btnSort.addEventListener("click", () => {
+        radarSortOrder = radarSortOrder === "newest" ? "oldest" : "newest";
+        try {
+          localStorage.setItem(RADAR_SORT_STORAGE_KEY, radarSortOrder);
+        } catch (_) {}
+        updateRadarSortButton();
+
+        const container = document.getElementById("radar-items-container");
+        if (currentRadarMode === "unanswered") {
+          renderRadarUnanswered(lastRadarUnansweredItems);
+        } else {
+          renderRadarSales(lastRadarSalesItems);
+        }
+        if (container) container.scrollTop = 0;
+      });
+    }
 
     if (btnUnanswered) {
       btnUnanswered.addEventListener("click", () => {
         currentRadarMode = "unanswered";
         btnUnanswered.classList.add("active");
         if (btnSales) btnSales.classList.remove("active");
-        loadRadarData();
+        loadRadarData({ resetScroll: true });
       });
     }
 
@@ -1700,7 +1749,7 @@
         currentRadarMode = "sales";
         btnSales.classList.add("active");
         if (btnUnanswered) btnUnanswered.classList.remove("active");
-        loadRadarData();
+        loadRadarData({ resetScroll: true });
       });
     }
 
@@ -1832,11 +1881,12 @@
     });
   }
 
-  async function loadRadarData() {
+  async function loadRadarData(options = {}) {
     const radarPane = document.getElementById("tab-radar");
     const isRadarActive = radarPane && radarPane.classList.contains("active");
     const container = document.getElementById("radar-items-container");
-    if (isRadarActive && container) {
+    const prevScrollTop = (!options.resetScroll && container) ? container.scrollTop : 0;
+    if (isRadarActive && container && !container.querySelector(".radar-item")) {
       container.innerHTML = '<div class="empty-subtext">Cargando radar...</div>';
     }
 
@@ -1873,18 +1923,21 @@
 
         if (isRadarActive) {
           renderRadarUnanswered(items);
+          if (container) container.scrollTop = options.resetScroll ? 0 : prevScrollTop;
         }
       } else {
         const bulkBar = document.getElementById("radar-bulk-bar");
         if (bulkBar) bulkBar.style.display = "none";
         const data = await apiFetch(`/api/sales/radar?account_id=${encodeURIComponent(currentAccountId)}`);
         const items = Array.isArray(data) ? data : (data && (data.leads || data.radar) ? (data.leads || data.radar) : []);
+        lastRadarSalesItems = items;
         
         const countBadge = document.getElementById("count-sales");
         if (countBadge) countBadge.textContent = items.length;
 
         if (isRadarActive) {
           renderRadarSales(items);
+          if (container) container.scrollTop = options.resetScroll ? 0 : prevScrollTop;
         }
       }
     } catch (e) {
@@ -1919,6 +1972,8 @@
       container.innerHTML = '<div class="empty-subtext">🎉 ¡Excelente! No tienes mensajes pendientes de respuesta (últimos 7 días).</div>';
       return;
     }
+
+    filtered = sortRadarItems(filtered);
 
     filtered.forEach(item => {
       const el = document.createElement("div");
@@ -2105,6 +2160,8 @@
       container.innerHTML = '<div class="empty-subtext">No hay seguimientos de ventas pendientes hoy.</div>';
       return;
     }
+
+    filtered = sortRadarItems(filtered);
 
     const stageLabels = {
       lead: "Lead",
