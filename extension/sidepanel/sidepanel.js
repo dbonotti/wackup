@@ -586,10 +586,15 @@
   // =========================================================================
   // GESTIÓN DE ETIQUETAS
   // =========================================================================
+  let currentChatTags = [];
+
   function renderTags(tags) {
     const container = document.getElementById("tags-list");
     if (!container) return;
     container.innerHTML = "";
+    currentChatTags = Array.isArray(tags)
+      ? tags.map(t => (t && typeof t === "object") ? (t.tag || "") : String(t || "")).filter(Boolean)
+      : [];
 
     if (!Array.isArray(tags) || tags.length === 0) {
       container.innerHTML = '<span class="empty-subtext">Sin etiquetas</span>';
@@ -2822,16 +2827,7 @@
 
     if (btnAddTag) {
       btnAddTag.addEventListener("click", async () => {
-        const tag = await showSidePanelPrompt({
-          title: "Nueva Etiqueta",
-          message: "Ingresa el nombre de la etiqueta para este contacto:",
-          placeholder: "ej: cliente, vip, proveedor...",
-          confirmText: "Agregar",
-          validator: (val) => {
-            if (!val || !val.trim()) return "El nombre de la etiqueta no puede estar vacío.";
-            return null;
-          }
-        });
+        const tag = await showTagPickerModal();
         if (tag && tag.trim()) addTag(tag.trim());
       });
     }
@@ -2842,9 +2838,17 @@
   // =========================================================================
   let spModalResolver = null;
   let spModalValidator = null;
+  let spModalInputFilterHandler = null;
 
   function closeSidePanelModal(result = null) {
     const overlay = document.getElementById("sp-modal-overlay");
+    const tagPicker = document.getElementById("sp-modal-tag-picker");
+    const inputEl = document.getElementById("sp-modal-input");
+    if (tagPicker) tagPicker.style.display = "none";
+    if (inputEl && spModalInputFilterHandler) {
+      inputEl.removeEventListener("input", spModalInputFilterHandler);
+      spModalInputFilterHandler = null;
+    }
     if (overlay) overlay.style.display = "none";
     if (spModalResolver) {
       const resolve = spModalResolver;
@@ -2937,6 +2941,7 @@
       const titleEl = document.getElementById("sp-modal-title");
       const msgEl = document.getElementById("sp-modal-message");
       const inputGroup = document.getElementById("sp-modal-input-group");
+      const tagPicker = document.getElementById("sp-modal-tag-picker");
       const errorEl = document.getElementById("sp-modal-error");
       const btnCancel = document.getElementById("sp-modal-cancel");
       const btnConfirm = document.getElementById("sp-modal-confirm");
@@ -2944,6 +2949,7 @@
       if (titleEl) titleEl.textContent = title;
       if (msgEl) msgEl.innerHTML = message;
       if (inputGroup) inputGroup.style.display = "none";
+      if (tagPicker) tagPicker.style.display = "none";
       if (errorEl) { errorEl.textContent = ""; errorEl.style.display = "none"; }
 
       if (btnCancel) {
@@ -2972,6 +2978,7 @@
       const titleEl = document.getElementById("sp-modal-title");
       const msgEl = document.getElementById("sp-modal-message");
       const inputGroup = document.getElementById("sp-modal-input-group");
+      const tagPicker = document.getElementById("sp-modal-tag-picker");
       const inputEl = document.getElementById("sp-modal-input");
       const errorEl = document.getElementById("sp-modal-error");
       const btnCancel = document.getElementById("sp-modal-cancel");
@@ -2980,6 +2987,7 @@
       if (titleEl) titleEl.textContent = title;
       if (msgEl) msgEl.innerHTML = message;
       if (inputGroup) inputGroup.style.display = "block";
+      if (tagPicker) tagPicker.style.display = "none";
       if (inputEl) {
         inputEl.placeholder = placeholder;
         inputEl.value = defaultValue || "";
@@ -3004,6 +3012,137 @@
           }
         }, 50);
       }
+    });
+  }
+
+  async function showTagPickerModal() {
+    setupSidePanelModalListeners();
+    return new Promise((resolve) => {
+      spModalResolver = resolve;
+      spModalValidator = (val) => {
+        if (!val || !val.trim()) return "El nombre de la etiqueta no puede estar vacío.";
+        return null;
+      };
+
+      const overlay = document.getElementById("sp-modal-overlay");
+      const titleEl = document.getElementById("sp-modal-title");
+      const msgEl = document.getElementById("sp-modal-message");
+      const inputGroup = document.getElementById("sp-modal-input-group");
+      const inputEl = document.getElementById("sp-modal-input");
+      const tagPicker = document.getElementById("sp-modal-tag-picker");
+      const tagListEl = document.getElementById("sp-modal-tag-list");
+      const createBtn = document.getElementById("sp-modal-tag-create");
+      const errorEl = document.getElementById("sp-modal-error");
+      const btnCancel = document.getElementById("sp-modal-cancel");
+      const btnConfirm = document.getElementById("sp-modal-confirm");
+
+      if (titleEl) titleEl.textContent = "Agregar Etiqueta";
+      if (msgEl) msgEl.textContent = "Elige una etiqueta creada o escribe para buscar / crear una nueva:";
+      if (inputGroup) inputGroup.style.display = "block";
+      if (inputEl) {
+        inputEl.placeholder = "Buscar o crear nueva etiqueta...";
+        inputEl.value = "";
+      }
+      if (tagPicker) tagPicker.style.display = "flex";
+      if (tagListEl) tagListEl.innerHTML = '<span class="empty-subtext">Cargando etiquetas...</span>';
+      if (createBtn) createBtn.style.display = "none";
+      if (errorEl) { errorEl.textContent = ""; errorEl.style.display = "none"; }
+
+      if (btnCancel) {
+        btnCancel.style.display = "inline-flex";
+        btnCancel.textContent = "Cancelar";
+      }
+      if (btnConfirm) {
+        btnConfirm.textContent = "Crear / Agregar";
+        btnConfirm.className = "btn-primary";
+      }
+
+      const assignedSet = new Set(currentChatTags.map(t => t.toLowerCase()));
+      let allTags = [];
+
+      const renderTagOptions = () => {
+        if (!tagListEl) return;
+        const query = (inputEl ? inputEl.value : "").trim();
+        const qLower = query.toLowerCase();
+        const filtered = qLower
+          ? allTags.filter(item => item.tag.toLowerCase().includes(qLower))
+          : allTags;
+
+        tagListEl.innerHTML = "";
+        if (filtered.length === 0) {
+          const emptyMsg = allTags.length === 0
+            ? "No hay etiquetas creadas aún. Escribe arriba para crear la primera."
+            : "Ninguna etiqueta existente coincide con la búsqueda.";
+          tagListEl.innerHTML = `<span class="empty-subtext">${escapeHtml(emptyMsg)}</span>`;
+        } else {
+          filtered.forEach(item => {
+            const isAssigned = assignedSet.has(item.tag.toLowerCase());
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = isAssigned ? "sp-tag-option assigned" : "sp-tag-option";
+            btn.disabled = isAssigned;
+            btn.title = isAssigned ? "Ya asignada a este contacto" : `Asignar etiqueta "${item.tag}"`;
+            const countHtml = item.count ? `<span class="sp-tag-count">(${item.count})</span>` : "";
+            const checkHtml = isAssigned ? "✓ " : "";
+            btn.innerHTML = `<span>${checkHtml}${escapeHtml(item.tag)}</span>${countHtml}`;
+            if (!isAssigned) {
+              btn.addEventListener("click", () => closeSidePanelModal(item.tag));
+            }
+            tagListEl.appendChild(btn);
+          });
+        }
+
+        if (createBtn) {
+          const exactMatch = allTags.some(item => item.tag.toLowerCase() === qLower);
+          if (query && !exactMatch) {
+            createBtn.textContent = `+ Crear nueva etiqueta "${query}"`;
+            createBtn.style.display = "inline-flex";
+          } else {
+            createBtn.style.display = "none";
+          }
+        }
+      };
+
+      if (createBtn) {
+        createBtn.onclick = () => {
+          const val = (inputEl ? inputEl.value : "").trim();
+          if (val) closeSidePanelModal(val);
+        };
+      }
+
+      if (inputEl) {
+        if (spModalInputFilterHandler) {
+          inputEl.removeEventListener("input", spModalInputFilterHandler);
+        }
+        spModalInputFilterHandler = () => renderTagOptions();
+        inputEl.addEventListener("input", spModalInputFilterHandler);
+      }
+
+      if (overlay) {
+        overlay.style.display = "flex";
+        setTimeout(() => {
+          if (inputEl) inputEl.focus();
+        }, 50);
+      }
+
+      apiFetch(`/api/copilot/tags/all?account_id=${encodeURIComponent(currentAccountId)}`)
+        .then(data => {
+          const raw = (data && Array.isArray(data.tags)) ? data.tags : [];
+          allTags = raw
+            .map(r => ({
+              tag: (r && typeof r === "object") ? String(r.tag || "").trim() : String(r || "").trim(),
+              count: (r && typeof r === "object" && r.count) ? Number(r.count) : 0
+            }))
+            .filter(r => r.tag);
+          renderTagOptions();
+        })
+        .catch((err) => {
+          allTags = [];
+          if (tagListEl) {
+            const msg = (err && err.message) ? err.message : "Error al cargar etiquetas.";
+            tagListEl.innerHTML = `<span class="empty-subtext">${escapeHtml(msg)}</span>`;
+          }
+        });
     });
   }
 

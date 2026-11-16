@@ -132,6 +132,7 @@ const ALLOWED_ENDPOINTS = [
   { method: "POST", pattern: /^\/api\/profile\/cycle(\?.*)?$/ },
   { method: "GET", pattern: /^\/api\/copilot\/context(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/copilot\/notes\/?$/ },
+  { method: "GET", pattern: /^\/api\/copilot\/tags\/all(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/copilot\/tags\/?$/ },
   { method: "GET", pattern: /^\/api\/support\/unanswered(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/support\/ticket\/?$/ },

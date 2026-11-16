@@ -2116,6 +2116,8 @@
 
       const chatList = document.getElementById('chat-list');
       const unifiedResults = document.getElementById('unified-search-results');
+      const contactsGroup = document.getElementById('unifiedContactsGroup');
+      const messagesGroup = document.getElementById('unifiedMessagesGroup');
       const contactsList = document.getElementById('unified-contacts-list');
       const messagesList = document.getElementById('search-results-list');
 
@@ -2139,7 +2141,7 @@
         targetTag = q.slice(4).trim();
       }
 
-      const matchedContacts = allChats.filter(c => {
+      const rawMatchedContacts = allChats.filter(c => {
         const tags = Array.isArray(c.tags) ? c.tags : [];
         const hasMatchingTag = tags.some(t => {
           const tLower = (t || '').toLowerCase();
@@ -2160,11 +2162,35 @@
         return name.includes(q) || push.includes(q) || saved.includes(q) || id.includes(q) || last.includes(q) || phone.includes(q) || phoneFmt.includes(q) || hasMatchingTag;
       });
 
+      // Deduplicar contactos que tengan tanto chat @lid como @c.us (priorizar teléfono normalizado)
+      const seenMatchedKeys = new Set();
+      const matchedContacts = rawMatchedContacts.filter(c => {
+        const isGroup = Boolean(c.is_group || (c.chat_id || '').endsWith('@g.us'));
+        const rawPhone = !isGroup ? (c.phone_number || ((c.canonical_id && (c.canonical_id.includes('@c.us') || c.canonical_id.includes('@s.whatsapp.net'))) ? c.canonical_id.split('@')[0] : '')) : '';
+        const phoneDigits = rawPhone ? String(rawPhone).replace(/\D/g, '') : '';
+        const dedupKey = isGroup
+          ? c.chat_id
+          : (phoneDigits ? `phone:${phoneDigits}` : (c.canonical_id || c.chat_id));
+        if (!dedupKey || seenMatchedKeys.has(dedupKey)) return false;
+        seenMatchedKeys.add(dedupKey);
+        return true;
+      });
+
+      const contactsHeader = contactsGroup ? contactsGroup.querySelector('.search-group-header') : null;
+      if (contactsHeader) {
+        contactsHeader.textContent = isTagOnlySearch
+          ? `🏷️ Contactos y Grupos con etiqueta "${targetTag || 'todas'}" (${matchedContacts.length})`
+          : '👤 Contactos y Grupos coincidentes';
+      }
+      if (messagesGroup) {
+        messagesGroup.style.display = isTagOnlySearch ? 'none' : 'block';
+      }
+
       if (contactsList) {
         contactsList.innerHTML = '';
         if (matchedContacts.length === 0) {
           contactsList.innerHTML = isTagOnlySearch
-            ? `<li style="padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center;">Ningún contacto tiene la etiqueta "${escapeHtml(targetTag)}"</li>`
+            ? `<li style="padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center;">Ningún contacto o grupo tiene la etiqueta "${escapeHtml(targetTag)}"</li>`
             : '<li style="padding: 10px 14px; font-size: 12px; color: var(--text-muted);">Sin contactos o grupos coincidentes</li>';
         } else {
           const limit = isTagOnlySearch ? 100 : 20;
@@ -2179,6 +2205,10 @@
               ? `<div class="chat-tags-row" style="margin-top: 3px;">${tags.slice(0, 3).map(t => `<span class="chat-tag-pill" onclick="event.stopPropagation(); filterByTag('${escapeHtml(t)}');" title="Filtrar por: ${escapeHtml(t)}">🏷️ ${escapeHtml(t)}</span>`).join('')}${tags.length > 3 ? `<span class="chat-tag-pill more" title="${escapeHtml(tags.slice(3).join(', '))}">+${tags.length - 3}</span>` : ''}</div>`
               : '';
             const pushTag = (!chat.is_saved && chat.push_name) ? ` <span class="chat-pushname-tag" title="Perfil WhatsApp: ~${escapeHtml(chat.push_name)}">~${escapeHtml(chat.push_name)}</span>` : '';
+            const isGroupChat = Boolean(chat.is_group || (chat.chat_id || '').endsWith('@g.us'));
+            const subLine = isTagOnlySearch
+              ? (isGroupChat ? 'Grupo' : (formatPhoneNumber(chat.phone_number) || chat.chat_id))
+              : (chat.last_msg || formatPhoneNumber(chat.phone_number) || chat.chat_id);
             li.onclick = () => {
               closeSearchAndRestoreChats(chat.chat_id);
               selectChat(chat);
@@ -2187,7 +2217,7 @@
               <div class="unified-contact-avatar" style="background: ${color}">${escapeHtml(initial)}</div>
               <div class="unified-contact-details">
                 <div class="unified-contact-name">${escapeHtml(title)}${pushTag}</div>
-                <div class="unified-contact-sub">${escapeHtml(chat.last_msg || formatPhoneNumber(chat.phone_number) || chat.chat_id)}</div>
+                <div class="unified-contact-sub">${escapeHtml(subLine)}</div>
                 ${tagsHtml}
               </div>
             `;
@@ -2199,9 +2229,7 @@
       // 2. Búsqueda en todo el historial con FTS5 (debounce 300ms)
       clearTimeout(searchDebounceTimer);
       if (isTagOnlySearch) {
-        if (messagesList) {
-          messagesList.innerHTML = `<li style="padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center;">🏷️ Filtrando contactos con etiqueta <b>${escapeHtml(targetTag || 'todas')}</b> (${matchedContacts.length} encontrados)</li>`;
-        }
+        if (messagesList) messagesList.innerHTML = '';
       } else {
         if (messagesList) {
           messagesList.innerHTML = '<li style="padding: 14px; font-size: 12px; color: var(--text-time); text-align: center;">Buscando en mensajes indexados (FTS5)...</li>';

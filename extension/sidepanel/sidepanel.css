@@ -1824,6 +1824,79 @@ select option,
   font-weight: 500;
 }
 
+.sp-tag-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sp-tag-picker-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.sp-tag-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 170px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.sp-tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.sp-tag-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(0, 168, 132, 0.16);
+}
+
+.sp-tag-option.assigned {
+  border-color: rgba(0, 168, 132, 0.45);
+  background: rgba(0, 168, 132, 0.12);
+  color: var(--accent);
+  cursor: default;
+  opacity: 0.85;
+}
+
+.sp-tag-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.sp-tag-create-btn {
+  align-self: flex-start;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px dashed var(--accent);
+  background: rgba(0, 168, 132, 0.12);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.sp-tag-create-btn:hover {
+  background: rgba(0, 168, 132, 0.22);
+}
+
 .sp-modal-actions {
   display: flex;
   justify-content: flex-end;
