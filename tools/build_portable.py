@@ -32,6 +32,8 @@ PYTHON_EMBED_URL = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-embed
 PYTHON_EMBED_ZIP_NAME = "python-3.12.7-embed-amd64.zip"
 # Hash SHA-256 oficial de Python 3.12.7 Embeddable (amd64) publicado por python.org (SEC-16)
 PYTHON_EMBED_SHA256 = "0d57bb6cb078b74d23dbfe91f77d6780d45bed328911609f1f7ee2ba1606bf44"
+GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+GET_PIP_NAME = "get-pip.py"
 
 
 def get_version() -> str:
@@ -126,23 +128,53 @@ def setup_embeddable_python(target_python_dir: str):
             f.writelines(new_lines)
 
 
+def download_get_pip(target_path: str):
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    if os.path.isfile(target_path):
+        print(f"[CACHE] Usando get-pip.py en caché: {target_path}")
+        return
+    print("[DESCARGA] Descargando get-pip.py desde bootstrap.pypa.io...")
+    req = urllib.request.Request(GET_PIP_URL, headers={"User-Agent": "WAckup-Builder/3.1.1"})
+    with urllib.request.urlopen(req, timeout=60) as resp, open(target_path, "wb") as out_f:
+        shutil.copyfileobj(resp, out_f)
+    print("[OK] get-pip.py descargado.")
+
+
 def install_dependencies(target_python_dir: str):
-    """Instala las dependencias de requirements.txt en Lib/site-packages."""
+    """Instala pip y las dependencias de requirements.txt usando el propio Python 3.12 embebido."""
     site_packages_dir = os.path.join(target_python_dir, "Lib", "site-packages")
     os.makedirs(site_packages_dir, exist_ok=True)
     req_file = os.path.join(ROOT_DIR, "requirements.txt")
+    target_python_exe = os.path.join(target_python_dir, "python.exe")
+
+    get_pip_path = os.path.join(CACHE_DIR, GET_PIP_NAME)
+    download_get_pip(get_pip_path)
+
+    print(f"[PIP] Instalando pip en {target_python_dir}...")
+    pip_bootstrap = subprocess.run(
+        [target_python_exe, get_pip_path, "--no-warn-script-location"],
+        capture_output=True,
+        text=True
+    )
+    if pip_bootstrap.returncode != 0:
+        print(f"[ERROR] Error instalando pip:\n{pip_bootstrap.stderr}")
+        raise RuntimeError("Fallo instalando pip en runtime embebido")
 
     print(f"[PIP] Instalando dependencias en {site_packages_dir}...")
     cmd = [
-        sys.executable, "-m", "pip", "install",
-        "--target", site_packages_dir,
-        "--no-user",
+        target_python_exe, "-m", "pip", "install",
+        "--no-warn-script-location",
         "-r", req_file
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(f"[ERROR] Error al instalar dependencias:\n{res.stderr}")
-        raise RuntimeError("Fallo instalando dependencias con pip --target")
+        raise RuntimeError("Fallo instalando dependencias con pip")
+
+    req_hash_path = os.path.join(target_python_dir, ".req_sha256")
+    with open(req_hash_path, "w", encoding="utf-8") as f:
+        f.write(calculate_sha256(req_file))
+
     print(f"[OK] Dependencias instaladas exitosamente.")
 
 
@@ -184,6 +216,13 @@ def copy_production_files(dist_wackup_dir: str):
                 dst_folder,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".DS_Store", "Thumbs.db")
             )
+
+    # Incluir script de bootstrap por si se regenera el runtime
+    bootstrap_src = os.path.join(ROOT_DIR, "tools", "bootstrap_runtime.ps1")
+    if os.path.isfile(bootstrap_src):
+        bootstrap_dst_dir = os.path.join(dist_wackup_dir, "tools")
+        os.makedirs(bootstrap_dst_dir, exist_ok=True)
+        shutil.copy2(bootstrap_src, os.path.join(bootstrap_dst_dir, "bootstrap_runtime.ps1"))
 
     # Asegurar que data/ esté completamente ausente o limpio
     assert not os.path.exists(os.path.join(dist_wackup_dir, "data")), "ERROR CRÍTICO: data/ se copió por error"
