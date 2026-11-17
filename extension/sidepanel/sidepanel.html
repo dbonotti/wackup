@@ -74,6 +74,33 @@
     </div>
   </div>
 
+  <!-- VISTA DE NUEVA CUENTA DETECTADA (CONFIRMACIÓN DE PERFIL) -->
+  <div id="view-account-prompt" class="backup-only-view" style="display: none;">
+    <div class="backup-card">
+      <div class="backup-icon">🆕</div>
+      <h3>Nueva cuenta detectada</h3>
+      <div id="prompt-account-label" class="account-pill">Cuenta de WhatsApp</div>
+      <p>Se detectó una cuenta de WhatsApp Web que aún no tiene un perfil de backup en WAckup. ¿Deseas crear un perfil de backup nuevo para esta cuenta?</p>
+      <div class="account-decision-actions">
+        <button type="button" id="btn-create-account-profile" class="btn-primary full-width">✅ Sí, crear perfil y comenzar copia</button>
+        <button type="button" id="btn-decline-account-profile" class="btn-secondary full-width">✕ No, no hacer copia de esta cuenta</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VISTA CUANDO EL USUARIO ELIGIÓ NO HACER COPIA DE ESTA CUENTA -->
+  <div id="view-account-declined" class="backup-only-view" style="display: none;">
+    <div class="backup-card">
+      <div class="backup-icon">⏸️</div>
+      <h3>No se está haciendo copia de esta cuenta</h3>
+      <div id="declined-account-label" class="account-pill">Cuenta de WhatsApp</div>
+      <p>Elegiste no respaldar esta cuenta de WhatsApp Web. Ningún mensaje ni contacto se está guardando localmente.</p>
+      <div class="account-decision-actions">
+        <button type="button" id="btn-start-account-backup" class="btn-primary full-width">▶️ Comenzar a realizar copia</button>
+      </div>
+    </div>
+  </div>
+
   <!-- VISTA EN CASO DE MODO SOLO RESPALDO -->
   <div id="view-backup-only" class="backup-only-view" style="display: none;">
     <div class="backup-card">

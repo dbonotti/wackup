@@ -1475,7 +1475,8 @@ class BackupServerHandler(BaseHTTPRequestHandler):
 
         account_id = _extract_aid(params) or _extract_aid(fallback_query_params)
         if account_id and account_id != config.DEFAULT_ACCOUNT_ID:
-            config.migrate_single_to_multi_account(account_id)
+            if config.account_exists(account_id):
+                config.migrate_single_to_multi_account(account_id)
         elif not account_id or account_id == config.DEFAULT_ACCOUNT_ID:
             accounts = config.list_accounts()
             real_accounts = [a for a in accounts if a["id"] != config.DEFAULT_ACCOUNT_ID and a.get("total_messages", 0) > 0]
@@ -1784,6 +1785,19 @@ class BackupServerHandler(BaseHTTPRequestHandler):
             self.send_json(200, status)
             return
 
+        elif url.path == "/api/accounts/status":
+            params = parse_qs(url.query)
+            raw_aid = (params.get("account_id", [None])[0] or "").strip()
+            acc_status = config.get_account_status(raw_aid)
+            self.send_json(200, {
+                "ok": True,
+                "account_id": raw_aid or config.DEFAULT_ACCOUNT_ID,
+                "status": acc_status,
+                "exists": config.account_exists(raw_aid),
+                "ignored": config.is_account_ignored(raw_aid),
+            })
+            return
+
         elif url.path == "/api/profile":
             params = parse_qs(url.query)
             acc_id, _, _ = self._resolve_account_params(params)
@@ -1916,10 +1930,28 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 if is_viewer_req:
                     req_cid = (params.get("client_id", [""])[0] or "").strip() or None
                     record_web_viewer_ping(req_cid)
+            raw_aid = (params.get("account_id", [None])[0] or "").strip()
+            acc_status = config.get_account_status(raw_aid) if raw_aid and raw_aid != config.DEFAULT_ACCOUNT_ID else "active"
+            if acc_status != "active":
+                self.send_json(200, {
+                    "ok": True,
+                    "account_id": raw_aid,
+                    "account_status": acc_status,
+                    "total_messages": 0,
+                    "total_chats": 0,
+                    "last_timestamp": 0,
+                    "extension_version": get_disk_extension_version(),
+                    "server_session_id": SERVER_SESSION_ID,
+                    "last_sync_epoch": _last_sync_epoch,
+                    "active_web_viewer": has_active_web_viewer()
+                })
+                return
+
             account_id, db_path, _ = self._resolve_account_params(params)
             include_ids = params.get("include_ids", ["0"])[0] == "1"
             status = db_manager.get_sync_status(db_path=db_path, include_ids=include_ids)
             status["account_id"] = account_id or config.DEFAULT_ACCOUNT_ID
+            status["account_status"] = "active"
             status["extension_version"] = get_disk_extension_version()
             status["server_session_id"] = SERVER_SESSION_ID
             status["last_sync_epoch"] = _last_sync_epoch
@@ -2795,6 +2827,46 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            elif url.path == "/api/accounts/decision":
+                payload = self._read_json_body(allow_empty=False)
+                if payload is None:
+                    return
+                raw_aid = str(payload.get("account_id") or "").strip()
+                aid = config.sanitize_account_id(raw_aid)
+                decision = str(payload.get("decision") or "").strip().lower()
+                if not raw_aid or not aid or aid == config.DEFAULT_ACCOUNT_ID:
+                    self.send_json(400, {"ok": False, "error": "account_id inválido"})
+                    return
+                if decision not in ("create", "decline"):
+                    self.send_json(400, {"ok": False, "error": "decision debe ser 'create' o 'decline'"})
+                    return
+
+                if decision == "create":
+                    acc_name = payload.get("name")
+                    acc_phone = payload.get("phone")
+                    config.set_account_ignored(aid, ignored=False)
+                    config.migrate_single_to_multi_account(aid, name=acc_name, phone=acc_phone)
+                    db_path = config.get_account_db(aid)
+                    db_manager.ensure_db_initialized(db_path=db_path)
+                    config.invalidate_accounts_cache()
+                    sse_hub.get_sse_hub().broadcast("account_status_updated", {
+                        "account_id": aid,
+                        "status": "active"
+                    })
+                    self.send_json(200, {"ok": True, "account_id": aid, "status": "active"})
+                    return
+                else:
+                    if config.account_exists(aid):
+                        self.send_json(200, {"ok": True, "account_id": aid, "status": "active"})
+                        return
+                    config.set_account_ignored(aid, ignored=True)
+                    sse_hub.get_sse_hub().broadcast("account_status_updated", {
+                        "account_id": aid,
+                        "status": "declined"
+                    })
+                    self.send_json(200, {"ok": True, "account_id": aid, "status": "declined"})
+                    return
+
             elif url.path == "/api/profile":
                 if not self.is_local_client():
                     self.send_json(403, {"ok": False, "error": "Solo disponible en el servidor principal"})
@@ -3265,7 +3337,17 @@ class BackupServerHandler(BaseHTTPRequestHandler):
                 account_name = payload.get("account_name")
                 account_phone = payload.get("account_phone")
 
-                if account_id:
+                if account_id and account_id != config.DEFAULT_ACCOUNT_ID:
+                    acc_status = config.get_account_status(account_id)
+                    if acc_status != "active":
+                        self.send_json(403, {
+                            "success": False,
+                            "requires_confirmation": True,
+                            "account_id": account_id,
+                            "account_status": acc_status,
+                            "error": "Perfil de backup no confirmado para esta cuenta"
+                        })
+                        return
                     config.migrate_single_to_multi_account(account_id, name=account_name, phone=account_phone)
 
                 db_path = config.get_account_db(account_id)

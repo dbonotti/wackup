@@ -123,7 +123,8 @@ body {
 /* Amarillo / Ámbar: Sincronizando o esperando conexión/chat */
 .status-dot.syncing,
 .status-dot.waiting,
-.status-dot.connecting {
+.status-dot.connecting,
+.status-dot.unconfirmed {
   background-color: #f59e0b;
   box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
   animation: pulse-dot 1.2s infinite;
@@ -134,6 +135,12 @@ body {
 .status-dot.offline {
   background-color: #ef4444;
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+/* Gris: Cuenta sin copia de seguridad */
+.status-dot.declined {
+  background-color: #64748b;
+  box-shadow: none;
 }
 
 @keyframes pulse-dot {
@@ -1518,6 +1525,22 @@ button:disabled,
 .backup-icon { font-size: 40px; margin-bottom: 12px; }
 .backup-card h3 { font-size: 15px; color: var(--accent); margin-bottom: 8px; }
 .backup-card p { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.4; }
+.account-pill {
+  display: inline-block;
+  margin: 4px auto 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.account-decision-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 /* Toast (docked en footer flex para no tapar mensajes de la lista) */
 .toast-popup {

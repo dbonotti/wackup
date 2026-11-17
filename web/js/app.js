@@ -382,19 +382,45 @@
     }
 
     let _toastHideTimer = null;
-    function showToast(message, duration = 3500) {
+    function showToast(message, optionsOrDuration = 3500) {
       const toast = document.getElementById('toast');
       if (!toast) return;
       if (_toastHideTimer) {
         clearTimeout(_toastHideTimer);
         _toastHideTimer = null;
       }
-      toast.textContent = message;
+      const opts = (typeof optionsOrDuration === 'object' && optionsOrDuration !== null)
+        ? optionsOrDuration
+        : { duration: optionsOrDuration };
+      const duration = Number(opts.duration) > 0 ? Number(opts.duration) : 3500;
+
+      toast.innerHTML = '';
+      const msgSpan = document.createElement('span');
+      msgSpan.textContent = message;
+      toast.appendChild(msgSpan);
+
+      if (opts.actionLabel && typeof opts.onAction === 'function') {
+        const actionBtn = document.createElement('button');
+        actionBtn.type = 'button';
+        actionBtn.className = 'toast-undo-btn';
+        actionBtn.textContent = opts.actionLabel;
+        actionBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (_toastHideTimer) {
+            clearTimeout(_toastHideTimer);
+            _toastHideTimer = null;
+          }
+          toast.style.display = 'none';
+          opts.onAction();
+        });
+        toast.appendChild(actionBtn);
+      }
+
       toast.style.display = 'block';
       _toastHideTimer = setTimeout(() => {
         toast.style.display = 'none';
         _toastHideTimer = null;
-      }, Number(duration) > 0 ? Number(duration) : 3500);
+      }, duration);
     }
 
     function updateProfileUIElements(profile, label) {
@@ -2022,7 +2048,7 @@
         if (chat.ticket_status === 'pending') {
           statusBadgesHtml += `<span class="chat-badge-pending" title="En espera del cliente">🟡 En espera</span>`;
         } else if (isChatUnanswered(chat)) {
-          statusBadgesHtml += `<span class="chat-badge-unanswered" title="Esperando respuesta del operador">🔴 Sin responder</span>`;
+          statusBadgesHtml += `<span class="chat-badge-unanswered-group"><span class="chat-badge-unanswered" title="Clic para elegir motivo de descarte">🔴 Sin responder ▾</span><button type="button" class="chat-badge-quick-dismiss" title="Descartar rápido (No requiere respuesta)">✓</button></span>`;
         }
         if (chat.support_priority == 2) {
           statusBadgesHtml += `<span class="chat-badge-priority-urgent" title="Prioridad Urgente">🔥</span>`;
@@ -2044,8 +2070,189 @@
             ${tagsHtml}
           </div>
         `;
+        const unansweredBadge = li.querySelector('.chat-badge-unanswered');
+        if (unansweredBadge) {
+          unansweredBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleChatUnansweredPopover(unansweredBadge, chat);
+          });
+        }
+        const quickDismissBtn = li.querySelector('.chat-badge-quick-dismiss');
+        if (quickDismissBtn) {
+          quickDismissBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeChatUnansweredPopover();
+            executeChatBadgeDismiss(chat, 'no_reply_needed', '✓ Descartado (No requiere respuesta)');
+          });
+        }
         list.appendChild(li);
       });
+    }
+
+    let _activeRadarPopover = null;
+    let _activeRadarPopoverBadge = null;
+
+    function closeChatUnansweredPopover() {
+      if (_activeRadarPopover) {
+        _activeRadarPopover.remove();
+        _activeRadarPopover = null;
+      }
+      if (_activeRadarPopoverBadge) {
+        _activeRadarPopoverBadge.classList.remove('menu-open');
+        _activeRadarPopoverBadge = null;
+      }
+    }
+
+    function canDismissViewerChat(chat) {
+      if (!chat || !isTeamMode()) return true;
+      const assigned = (chat.assigned_to || '').trim();
+      if (!assigned) return true;
+      const me = (myOperatorName || '').trim();
+      if (!me || me.toLowerCase() === 'operador') return false;
+      return assigned.toLowerCase() === me.toLowerCase();
+    }
+
+    async function executeChatBadgeDismiss(chat, reason, toastSummary) {
+      if (!chat || !chat.chat_id) return;
+      if (!canDismissViewerChat(chat)) {
+        showToast(`🔒 Asignado a ${chat.assigned_to} (solo su responsable puede descartarlo)`);
+        return;
+      }
+      try {
+        const res = await fetch('/api/radar/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: currentAccountId,
+            chat_id: chat.chat_id,
+            mode: 'unanswered',
+            reason: reason,
+            operator_name: myOperatorName || 'Operador'
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          showToast(data.error || 'No se pudo descartar el chat');
+          return;
+        }
+        await loadChats(true);
+        if (typeof currentWorkspaceView !== 'undefined' && currentWorkspaceView === 'crm-support') {
+          loadCrmBoard('support');
+        }
+
+        const prevState = data.prev_state || null;
+        const targetChatId = data.chat_id || chat.chat_id;
+        if (prevState) {
+          showToast(toastSummary || '✓ Chat descartado del Radar', {
+            duration: 5000,
+            actionLabel: 'Deshacer',
+            onAction: async () => {
+              try {
+                const undoRes = await fetch('/api/radar/undo', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    account_id: currentAccountId,
+                    chat_id: targetChatId,
+                    prev_state: prevState,
+                    operator_name: myOperatorName || 'Operador'
+                  })
+                });
+                const undoData = await undoRes.json();
+                if (!undoRes.ok || !undoData.ok) {
+                  showToast(undoData.error || 'No se pudo deshacer');
+                  return;
+                }
+                showToast('↩️ Acción deshecha');
+                await loadChats(true);
+                if (typeof currentWorkspaceView !== 'undefined' && currentWorkspaceView === 'crm-support') {
+                  loadCrmBoard('support');
+                }
+              } catch (undoErr) {
+                showToast('No se pudo deshacer');
+              }
+            }
+          });
+        } else {
+          showToast(toastSummary || '✓ Chat actualizado');
+        }
+      } catch (e) {
+        showToast('Error al descartar del Radar');
+      }
+    }
+
+    function toggleChatUnansweredPopover(badgeEl, chat) {
+      if (_activeRadarPopoverBadge === badgeEl && _activeRadarPopover) {
+        closeChatUnansweredPopover();
+        return;
+      }
+      closeChatUnansweredPopover();
+
+      if (!canDismissViewerChat(chat)) {
+        showToast(`🔒 Asignado a ${chat.assigned_to} (solo su responsable puede descartarlo)`);
+        return;
+      }
+
+      const pop = document.createElement('div');
+      pop.className = 'viewer-radar-popover';
+      pop.innerHTML = `
+        <div class="viewer-radar-popover-header">
+          <span>Descartar mensaje sin responder</span>
+          <button type="button" class="viewer-radar-popover-close" title="Cerrar">✕</button>
+        </div>
+        <div class="viewer-radar-popover-grid">
+          <button type="button" class="btn-viewer-radar-reason success" data-reason="no_reply_needed" data-toast="✓ Descartado (No requiere respuesta)">👍 No requiere resp.</button>
+          <button type="button" class="btn-viewer-radar-reason" data-reason="resolved_other_channel" data-toast="📞 Descartado (Atendido por otra vía)">📞 Otra vía</button>
+          <button type="button" class="btn-viewer-radar-reason" data-reason="ignore_personal" data-toast="🏠 Contacto excluido (Personal)">🏠 Personal / Ignorar</button>
+          <button type="button" class="btn-viewer-radar-reason danger" data-reason="ignore_spam" data-toast="🗑️ Contacto excluido (Spam)">🗑️ Spam / Equiv.</button>
+        </div>
+      `;
+
+      pop.addEventListener('click', (e) => e.stopPropagation());
+      const closeBtn = pop.querySelector('.viewer-radar-popover-close');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeChatUnansweredPopover();
+        });
+      }
+      pop.querySelectorAll('.btn-viewer-radar-reason').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const reason = btn.getAttribute('data-reason');
+          const toastMsg = btn.getAttribute('data-toast');
+          closeChatUnansweredPopover();
+          executeChatBadgeDismiss(chat, reason, toastMsg);
+        });
+      });
+
+      document.body.appendChild(pop);
+      const rect = badgeEl.getBoundingClientRect();
+      const popWidth = 248;
+      const popHeight = pop.offsetHeight || 120;
+      let left = rect.left;
+      if (left + popWidth > window.innerWidth - 10) {
+        left = Math.max(10, window.innerWidth - popWidth - 10);
+      }
+      let top = rect.bottom + 6;
+      if (top + popHeight > window.innerHeight - 10) {
+        top = Math.max(10, rect.top - popHeight - 6);
+      }
+      pop.style.left = `${Math.round(left)}px`;
+      pop.style.top = `${Math.round(top)}px`;
+
+      badgeEl.classList.add('menu-open');
+      _activeRadarPopover = pop;
+      _activeRadarPopoverBadge = badgeEl;
+    }
+
+    document.addEventListener('click', () => closeChatUnansweredPopover());
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeChatUnansweredPopover();
+    });
+    const chatListForPopover = document.getElementById('chatList');
+    if (chatListForPopover) {
+      chatListForPopover.addEventListener('scroll', () => closeChatUnansweredPopover(), { passive: true });
     }
 
     function filterByTag(tagName) {

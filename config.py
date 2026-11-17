@@ -125,6 +125,10 @@ def get_system_settings():
                             data["radar_ignored_tags"] = []
                         else:
                             data["radar_ignored_tags"] = [str(t).strip() for t in data["radar_ignored_tags"] if str(t).strip()]
+                        if "ignored_accounts" not in data or not isinstance(data.get("ignored_accounts"), list):
+                            data["ignored_accounts"] = []
+                        else:
+                            data["ignored_accounts"] = [sanitize_account_id(a) for a in data["ignored_accounts"] if a and sanitize_account_id(a) != DEFAULT_ACCOUNT_ID]
                         return data
             except Exception:
                 pass
@@ -139,7 +143,8 @@ def get_system_settings():
             "workspace_profile": DEFAULT_WORKSPACE_PROFILE,
             "radar_auto_hide_courtesy": True,
             "radar_max_age_days": 7,
-            "radar_ignored_tags": []
+            "radar_ignored_tags": [],
+            "ignored_accounts": []
         }
         try:
             with open(SYSTEM_SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -415,6 +420,68 @@ def ensure_data_dirs():
         os.makedirs(sub, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
+
+
+def account_exists(account_id):
+    """Indica si la cuenta ya tiene un perfil creado en disco (carpeta con account.json o DB)."""
+    if not account_id:
+        return False
+    aid = sanitize_account_id(account_id)
+    if not aid or aid == DEFAULT_ACCOUNT_ID:
+        return False
+    acc_dir = get_account_dir(aid)
+    if not os.path.isdir(acc_dir):
+        return False
+    return (
+        os.path.isfile(os.path.join(acc_dir, "account.json"))
+        or os.path.isfile(os.path.join(acc_dir, "whatsapp_backup.db"))
+    )
+
+
+def is_account_ignored(account_id):
+    """Indica si el usuario eligió explícitamente no respaldar esta cuenta."""
+    if not account_id:
+        return False
+    aid = sanitize_account_id(account_id)
+    if not aid or aid == DEFAULT_ACCOUNT_ID:
+        return False
+    ignored = get_system_settings().get("ignored_accounts", [])
+    return aid in ignored
+
+
+def set_account_ignored(account_id, ignored=True):
+    """Registra o remueve una cuenta en la lista de cuentas sin respaldo."""
+    if not account_id:
+        return False
+    aid = sanitize_account_id(account_id)
+    if not aid or aid == DEFAULT_ACCOUNT_ID:
+        return False
+    settings = get_system_settings()
+    current = list(settings.get("ignored_accounts", []))
+    changed = False
+    if ignored:
+        if aid not in current:
+            current.append(aid)
+            changed = True
+    else:
+        if aid in current:
+            current = [x for x in current if x != aid]
+            changed = True
+    if not changed:
+        return True
+    settings["ignored_accounts"] = current
+    return save_system_settings(settings)
+
+
+def get_account_status(account_id):
+    """Devuelve 'active', 'declined' o 'unconfirmed' para una cuenta de WhatsApp."""
+    if not account_id or sanitize_account_id(account_id) == DEFAULT_ACCOUNT_ID:
+        return "active"
+    if account_exists(account_id):
+        return "active"
+    if is_account_ignored(account_id):
+        return "declined"
+    return "unconfirmed"
 
 
 def save_account_metadata(account_id, name=None, phone=None, workspace_profile=None):

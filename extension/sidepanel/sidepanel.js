@@ -7,6 +7,7 @@
   let currentAccountId = "default";
   let currentAccountName = "";
   let currentAccountPhone = "";
+  let currentAccountStatus = "active"; // "active" | "unconfirmed" | "declined"
   let currentChatQuery = null;
   let currentChatId = null;
   let currentProfile = "full";
@@ -302,6 +303,138 @@
     }
   }
 
+  function formatAccountDisplayLabel() {
+    const cleanName = (currentAccountName || "").trim();
+    const phonePart = currentAccountPhone ? `+${currentAccountPhone}` : "";
+    if (cleanName && phonePart && !cleanName.includes(currentAccountPhone)) {
+      return `${cleanName} (${phonePart})`;
+    }
+    return cleanName || phonePart || (currentAccountId && currentAccountId !== "default" ? currentAccountId : "Cuenta de WhatsApp");
+  }
+
+  function applyAccountStatusUI() {
+    const viewPrompt = document.getElementById("view-account-prompt");
+    const viewDeclined = document.getElementById("view-account-declined");
+    const viewBackupOnly = document.getElementById("view-backup-only");
+    const viewCrm = document.getElementById("view-crm");
+    const promptLabel = document.getElementById("prompt-account-label");
+    const declinedLabel = document.getElementById("declined-account-label");
+    const labelText = formatAccountDisplayLabel();
+
+    if (promptLabel) promptLabel.textContent = labelText;
+    if (declinedLabel) declinedLabel.textContent = labelText;
+
+    if (currentAccountStatus === "unconfirmed") {
+      if (viewPrompt) viewPrompt.style.display = "block";
+      if (viewDeclined) viewDeclined.style.display = "none";
+      if (viewBackupOnly) viewBackupOnly.style.display = "none";
+      if (viewCrm) viewCrm.style.display = "none";
+      return;
+    }
+
+    if (currentAccountStatus === "declined") {
+      if (viewPrompt) viewPrompt.style.display = "none";
+      if (viewDeclined) viewDeclined.style.display = "block";
+      if (viewBackupOnly) viewBackupOnly.style.display = "none";
+      if (viewCrm) viewCrm.style.display = "none";
+      return;
+    }
+
+    if (viewPrompt) viewPrompt.style.display = "none";
+    if (viewDeclined) viewDeclined.style.display = "none";
+    applyProfileUI();
+  }
+
+  async function checkAccountStatus(accountId) {
+    if (!accountId || accountId === "default") {
+      currentAccountStatus = "active";
+      applyAccountStatusUI();
+      return "active";
+    }
+    try {
+      const data = await apiFetch(`/api/accounts/status?account_id=${encodeURIComponent(accountId)}`);
+      if (data && data.status) {
+        currentAccountStatus = data.status;
+      } else {
+        currentAccountStatus = "active";
+      }
+    } catch (e) {
+      console.warn("[WAckup] Error al verificar estado de cuenta:", e);
+      return currentAccountStatus;
+    }
+    applyAccountStatusUI();
+    if (currentAccountStatus === "active") {
+      await loadWorkspaceProfile();
+      await loadTemplates();
+      if (currentChatQuery) {
+        loadChatContext(currentChatQuery);
+      }
+      loadRadarData();
+    } else if (currentAccountStatus === "unconfirmed") {
+      updateHeaderStatus("unconfirmed", "Nueva cuenta detectada");
+    } else if (currentAccountStatus === "declined") {
+      updateHeaderStatus("declined", "Copia desactivada");
+    }
+    return currentAccountStatus;
+  }
+
+  async function submitAccountDecision(decision) {
+    if (!currentAccountId || currentAccountId === "default") return;
+    const btnCreate = document.getElementById("btn-create-account-profile");
+    const btnDecline = document.getElementById("btn-decline-account-profile");
+    const btnStart = document.getElementById("btn-start-account-backup");
+    [btnCreate, btnDecline, btnStart].forEach(b => { if (b) b.disabled = true; });
+
+    try {
+      const res = await apiFetch("/api/accounts/decision", {
+        method: "POST",
+        body: {
+          account_id: currentAccountId,
+          decision: decision,
+          name: currentAccountName || undefined,
+          phone: currentAccountPhone || undefined
+        }
+      });
+      if (res && res.ok) {
+        currentAccountStatus = res.status || (decision === "create" ? "active" : "declined");
+        applyAccountStatusUI();
+        if (currentAccountStatus === "active") {
+          updateHeaderStatus("syncing", "Iniciando copia...");
+          chrome.runtime.sendMessage({ action: "trigger_manual_sync", forceAll: false }, () => {
+            void chrome.runtime.lastError;
+          });
+          showToast("Perfil creado. Iniciando copia de seguridad...");
+          await loadWorkspaceProfile();
+          await loadTemplates();
+          loadChatContext(currentChatQuery || null);
+          loadRadarData();
+        } else {
+          updateHeaderStatus("declined", "Copia desactivada");
+          showToast("No se hará copia de seguridad de esta cuenta");
+        }
+      }
+    } catch (e) {
+      showToast("Error al guardar la decisión: " + (e.message || e));
+    } finally {
+      [btnCreate, btnDecline, btnStart].forEach(b => { if (b) b.disabled = false; });
+    }
+  }
+
+  function setupAccountDecisionButtons() {
+    const btnCreate = document.getElementById("btn-create-account-profile");
+    const btnDecline = document.getElementById("btn-decline-account-profile");
+    const btnStart = document.getElementById("btn-start-account-backup");
+    if (btnCreate) {
+      btnCreate.addEventListener("click", () => submitAccountDecision("create"));
+    }
+    if (btnDecline) {
+      btnDecline.addEventListener("click", () => submitAccountDecision("decline"));
+    }
+    if (btnStart) {
+      btnStart.addEventListener("click", () => submitAccountDecision("create"));
+    }
+  }
+
   function updateAccountUI(info) {
     if (!info) return;
     const prevId = currentAccountId;
@@ -315,11 +448,17 @@
     if (nameEl) nameEl.textContent = currentAccountName || (currentAccountPhone ? `+${currentAccountPhone}` : "Cuenta WhatsApp");
     if (phoneEl) phoneEl.textContent = currentAccountPhone ? `(+${currentAccountPhone})` : "";
 
+    const promptLabel = document.getElementById("prompt-account-label");
+    const declinedLabel = document.getElementById("declined-account-label");
+    const labelText = formatAccountDisplayLabel();
+    if (promptLabel) promptLabel.textContent = labelText;
+    if (declinedLabel) declinedLabel.textContent = labelText;
+
     // Actualizar tooltip del punto de estado con los datos de cuenta
     updateHeaderStatus(lastSyncState, lastSyncMessage, lastTotalSaved);
 
     if (info.id && (prevId === "default" || prevId !== info.id)) {
-      loadWorkspaceProfile();
+      checkAccountStatus(currentAccountId);
     }
   }
 
@@ -327,6 +466,7 @@
   // PERFIL DE ESPACIO DE TRABAJO (backup_only vs crm)
   // =========================================================================
   async function loadWorkspaceProfile() {
+    if (currentAccountStatus !== "active") return;
     try {
       const data = await apiFetch(`/api/profile?account_id=${encodeURIComponent(currentAccountId)}`);
       if (data && data.profile) {
@@ -349,6 +489,12 @@
       badge.textContent = profileLabels[currentProfile] || "CRM";
       badge.style.cursor = "default";
       badge.title = "Perfil activo (configurable desde el Panel de Control en el Visor Web)";
+    }
+
+    if (currentAccountStatus !== "active") {
+      if (viewBackupOnly) viewBackupOnly.style.display = "none";
+      if (viewCrm) viewCrm.style.display = "none";
+      return;
     }
 
     if (currentProfile === "backup_only") {
@@ -389,6 +535,7 @@
     if (noChatEl) noChatEl.style.display = "none";
     if (chatContentEl) chatContentEl.style.display = "flex";
     currentChatQuery = chatQuery;
+    if (currentAccountStatus !== "active") return;
 
     try {
       const data = await apiFetch(`/api/copilot/context?chat_id=${encodeURIComponent(chatQuery)}&account_id=${encodeURIComponent(currentAccountId)}`);
@@ -1007,6 +1154,18 @@
                 showToast(`Perfil actualizado: ${profileLabels[currentProfile] || currentProfile}`);
               }
             }
+          } else if (msg.event === "account_status_updated") {
+            if (msg.account_id && msg.account_id === currentAccountId && msg.status) {
+              const prevStatus = currentAccountStatus;
+              currentAccountStatus = msg.status;
+              applyAccountStatusUI();
+              if (currentAccountStatus === "active" && prevStatus !== "active") {
+                loadWorkspaceProfile();
+                loadTemplates();
+                loadChatContext(currentChatQuery || null);
+                loadRadarData();
+              }
+            }
           }
         } catch (err) {}
       };
@@ -1018,6 +1177,7 @@
       sseSource.addEventListener("sync_update", handleEvt);
       sseSource.addEventListener("handoff_alert", handleEvt);
       sseSource.addEventListener("profile_update", handleEvt);
+      sseSource.addEventListener("account_status_updated", handleEvt);
       sseSource.addEventListener("focus_viewer", () => {
         chrome.runtime.sendMessage({ action: "focus_viewer_tab" }, () => {
           void chrome.runtime.lastError;
@@ -1898,6 +2058,7 @@
   }
 
   async function loadRadarData(options = {}) {
+    if (currentAccountStatus !== "active") return;
     const radarPane = document.getElementById("tab-radar");
     const isRadarActive = radarPane && radarPane.classList.contains("active");
     const container = document.getElementById("radar-items-container");
@@ -3184,6 +3345,10 @@
         if (request.accountInfo) {
           updateAccountUI(request.accountInfo);
         }
+        if ((request.state === "unconfirmed" || request.state === "declined") && currentAccountStatus !== request.state) {
+          currentAccountStatus = request.state;
+          applyAccountStatusUI();
+        }
         sendResponse({ ok: true });
         return;
       }
@@ -3258,6 +3423,7 @@
     setupRadarIgnoredBanner();
     setupAssignFilterButtons();
     setupConnectionConfig();
+    setupAccountDecisionButtons();
     setupMessageListener();
     startPresenceHeartbeat();
     applyTeamModeUI();

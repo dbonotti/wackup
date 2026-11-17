@@ -1057,6 +1057,7 @@
     }
 
     let accountInfo = getActiveAccountInfo();
+    const initialAccountId = accountInfo.id;
     if (lastDetectedAccountId && lastDetectedAccountId !== accountInfo.id) {
       console.log(`[WAckup] Cambio de cuenta WhatsApp Web detectado: ${lastDetectedAccountId} -> ${accountInfo.id}. Reiniciando caché de IDs.`);
       knownMessageKeys = null;
@@ -1072,6 +1073,14 @@
       try {
         const needIds = knownMessageKeys === null ? "&include_ids=1" : "";
         const statusData = await backendFetch(`/api/sync/status?account_id=${encodeURIComponent(accountInfo.id)}${needIds}`);
+        if (statusData && statusData.account_status && statusData.account_status !== "active") {
+          isSyncing = false;
+          notifyStatus(
+            statusData.account_status,
+            statusData.account_status === "declined" ? "Copia desactivada" : "Nueva cuenta detectada"
+          );
+          return;
+        }
         lastTimestamp = statusData.last_timestamp || 0;
 
         // Sincronización Multi-Puesto Inteligente: si otra PC acaba de sincronizar hace < 8s, espaciar
@@ -1123,6 +1132,18 @@
             accountInfo.phone = cleanNum;
             accountInfo.id = cleanNum;
           }
+        }
+      }
+
+      if (accountInfo.id && accountInfo.id !== initialAccountId) {
+        const refinedStatus = await backendFetch(`/api/sync/status?account_id=${encodeURIComponent(accountInfo.id)}`);
+        if (refinedStatus && refinedStatus.account_status && refinedStatus.account_status !== "active") {
+          isSyncing = false;
+          notifyStatus(
+            refinedStatus.account_status,
+            refinedStatus.account_status === "declined" ? "Copia desactivada" : "Nueva cuenta detectada"
+          );
+          return;
         }
       }
 

@@ -114,6 +114,12 @@ function updateBadge(status, text) {
     if (status === "syncing") {
       chrome.action.setBadgeText({ text: "SYNC" });
       chrome.action.setBadgeBackgroundColor({ color: "#2563eb" }); // Azul
+    } else if (status === "unconfirmed") {
+      chrome.action.setBadgeText({ text: "NEW" });
+      chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" }); // Ámbar
+    } else if (status === "declined") {
+      chrome.action.setBadgeText({ text: "OFF" });
+      chrome.action.setBadgeBackgroundColor({ color: "#64748b" }); // Gris
     } else if (status === "error" || status === "offline") {
       chrome.action.setBadgeText({ text: "OFF" });
       chrome.action.setBadgeBackgroundColor({ color: "#dc2626" }); // Rojo
@@ -136,6 +142,8 @@ const ALLOWED_ENDPOINTS = [
   { method: "GET", pattern: /^\/api\/sync\/status(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/sync\/?$/ },
   { method: "GET", pattern: /^\/api\/accounts(\?.*)?$/ },
+  { method: "GET", pattern: /^\/api\/accounts\/status(\?.*)?$/ },
+  { method: "POST", pattern: /^\/api\/accounts\/decision\/?$/ },
   { method: "GET", pattern: /^\/api\/profile(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/profile(\?.*)?$/ },
   { method: "POST", pattern: /^\/api\/profile\/cycle(\?.*)?$/ },
@@ -277,6 +285,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.state === "syncing") {
       updateBadge("syncing");
+    } else if (request.state === "unconfirmed" || request.state === "declined") {
+      updateBadge(request.state);
     } else if (request.state === "error") {
       updateBadge("error");
     } else if (request.state === "synced" || request.state === "ready") {
